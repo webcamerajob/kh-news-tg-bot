@@ -8,10 +8,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔧 Установка зависимостей и утилит
+    - name: 🔄 Получение репозитория
+      uses: actions/checkout@v4
+      with:
+        path: .
+
+    - name: 🔧 Установка зависимостей
       run: |
-        run: |
-        python3 poster.py
         sudo apt-get update
         sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
         pip3 install requests beautifulsoup4 Pillow python-telegram-bot
@@ -22,24 +25,26 @@ jobs:
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Подключение VPN и DNS фиксация
+    - name: 🔐 Подключение VPN и DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
         echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
 
     - name: 🧠 Запуск парсера (main.py)
+      working-directory: .
       run: |
-        echo "→ Запускаем main.py под VPN..."
-        python3 main.py || echo "⚠️ Ошибка при выполнении парсера"
+        echo "→ Запуск main.py..."
+        python3 main.py || echo "⚠️ main.py завершился с ошибкой"
 
     - name: 🛑 Отключение VPN
       if: always()
       run: |
-        echo "→ Отключаем WireGuard..."
+        echo "→ Отключение WireGuard..."
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
 
     - name: 📤 Запуск постера (poster.py)
+      working-directory: .
       run: |
-        echo "→ Запускаем poster.py после отключения VPN..."
-        python3 poster.py || echo "⚠️ Ошибка при выполнении постера"
+        echo "→ Запуск poster.py..."
+        python3 poster.py || echo "⚠️ poster.py завершился с ошибкой"
