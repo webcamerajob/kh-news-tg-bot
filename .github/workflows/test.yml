@@ -1,4 +1,4 @@
-name: WireGuard VPN Connectivity Test
+name: VPN + Cloudflare Bypass
 
 on:
   workflow_dispatch:
@@ -7,45 +7,57 @@ env:
   TARGET_URL: https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national
 
 jobs:
-  vpn-test:
+  vpn-bypass:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔍 Проверка базового подключения
+    - name: Проверка базового подключения
       run: |
         curl -s --connect-timeout 5 https://google.com -I \
           || { echo "Нет интернета"; exit 1; }
 
-    - name: 📦 Установка WireGuard и утилит
+    - name: Установка WireGuard и утилит
       run: |
         sudo apt-get update
-        sudo apt-get install -y wireguard-tools resolvconf dnsutils curl
+        sudo apt-get install -y wireguard-tools resolvconf dnsutils curl python3-pip
 
-    - name: 📁 Запись конфига WireGuard
+    - name: Запись конфига WireGuard
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Поднятие VPN и фиксация DNS
+    - name: Поднятие VPN и фиксация DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
         echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
 
-    - name: 🌐 Тест Google через VPN
+    - name: Тест Google через VPN
       run: |
-        echo "→ Testing https://www.google.com over VPN…"
-        curl -v --connect-timeout 5 https://www.google.com -o /dev/null \
+        curl -s --connect-timeout 5 https://google.com -I \
           || echo "⚠️ Google недоступен через VPN"
 
-    - name: 🔗 Тест целевого URL через VPN
+    - name: Установка cloudscraper
       run: |
-        echo "→ Testing $TARGET_URL over VPN…"
-        curl -v --connect-timeout 10 "$TARGET_URL" -o /dev/null \
-          || echo "⚠️ Целевой URL недоступен через VPN"
+        pip3 install cloudscraper
 
-    - name: 🛑 Отключение VPN
+    - name: Запрос к TARGET_URL через cloudscraper
+      run: |
+        python3 - << 'EOF'
+        import cloudscraper, os, sys
+        url = os.getenv('TARGET_URL')
+        scraper = cloudscraper.create_scraper()
+        resp = scraper.get(url, timeout=15)
+        print(f"Status: {resp.status_code}")
+        if resp.status_code == 200:
+            print("Body:", resp.text[:200], "…")
+        else:
+            print("Error body:", resp.text[:200], "…")
+        sys.exit(0 if resp.status_code == 200 else 1)
+        EOF
+
+    - name: Отключение VPN
       if: always()
       run: |
         sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже отключён"
