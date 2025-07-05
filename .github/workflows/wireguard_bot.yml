@@ -20,44 +20,55 @@ jobs:
         with:
           python-version: "3.10"  # или другой нужный вам
           
-      # 1. Установка WireGuard
+      # 2. Установка WireGuard
       - name: Install WireGuard
         run: sudo apt-get update && sudo apt-get install -y wireguard resolvconf
-          
-       # 2. Устанавливаем зависимости
+        
+      # 3. Устанавливаем зависимости
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 3. Настройка конфига с Split-Tunneling
+      # 4. Создание корректного конфига
       - name: Setup WireGuard config
         run: |
           sudo mkdir -p /etc/wireguard
-          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
-          # Добавляем исключения для GitHub
-          echo "PostUp = ip route add 140.82.112.0/20 dev eth0" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
-          echo "PostUp = ip route add 185.199.108.0/22 dev eth0" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          cat <<EOF | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          [Interface]
+          PrivateKey = ${{ secrets.WG_PRIVATE_KEY }}
+          Address = 10.66.66.2/32
+          DNS = 1.1.1.1
+          PostUp = ip route add 140.82.112.0/20 dev eth0
+          PostUp = ip route add 185.199.108.0/22 dev eth0
+          
+          [Peer]
+          PublicKey = ${{ secrets.WG_PUBLIC_KEY }}
+          AllowedIPs = 0.0.0.0/0
+          Endpoint = ${{ secrets.WG_ENDPOINT }}
+          PersistentKeepalive = 25
+          EOF
           sudo chmod 600 /etc/wireguard/wg0.conf
-
-       # 4. Подключение VPN
+          
+       # 5. Подключение VPN
       - name: Connect WireGuard
         run: |
           sudo wg-quick up wg0
-          sleep 3  # Ждём инициализации
-          curl -4 ifconfig.me  # Проверка IP
+          sleep 5
+          sudo wg show
+          curl --interface wg0 ifconfig.me
 
-       # 5. Запускаем парсер (если нужен)
+       # 6. Запускаем парсер (если нужен)
       - name: Run Parser
         run: python main.py  # или другой скрипт
 
-       # 6. Отключение VPN
+       # 7. Отключение VPN
       - name: Disconnect WireGuard
         if: always()
         run: sudo wg-quick down wg0 || true
         
 
-      # 7. Запуск бота
+      # 78 Запуск бота
       - name: Run Bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
