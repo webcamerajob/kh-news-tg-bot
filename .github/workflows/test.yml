@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Проверка базового подключения к интернету
+    - name: Проверка подключения
       run: |
         curl --connect-timeout 5 https://www.google.com || {
-          echo "Нет доступа к интернету — возможен сбой runner'а"
+          echo "Нет интернета"
           exit 1
         }
 
@@ -19,30 +19,24 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y wireguard-tools
-        which wg-quick || {
-          echo "Ошибка: wg-quick не установлен"
-          exit 1
-        }
 
-    - name: Сборка WireGuard конфига
+    - name: Сборка конфигурации в локальной директории
       run: |
-        mkdir -p /etc/wireguard
-        echo "${{ secrets.WG_CONFIG }}" > /etc/wireguard/wg0.conf
-        sudo chmod 600 /etc/wireguard/wg0.conf
+        mkdir -p $HOME/wg
+        echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
+        chmod 600 $HOME/wg/wg0.conf
 
-    - name: Запуск WireGuard
+    - name: Подключение VPN с указанием пути
       run: |
+        export WG_CONFIG_DIR="$HOME/wg"
         sudo wg-quick up wg0
-        echo "VPN активен. Публичный IP:"
         curl https://ipinfo.io/ip
 
-    - name: Действия под VPN
-      run: |
-        echo "Ваши команды здесь:"
-        # Например:
-        curl https://example.com/api/secure-data
+    - name: Ваши действия
+      run: echo "Тут можно выполнять команды под VPN"
 
-    - name: Отключение WireGuard
+    - name: Отключение VPN
       if: always()
       run: |
-        sudo wg-quick down wg0 || echo "Не удалось отключить VPN — возможно, уже завершён"
+        export WG_CONFIG_DIR="$HOME/wg"
+        sudo wg-quick down wg0 || echo "VPN уже завершён"
