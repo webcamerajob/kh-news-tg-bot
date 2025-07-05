@@ -1,62 +1,51 @@
-name: WireGuard VPN + CF Bypass
+name: WireGuard VPN Connectivity Test
 
 on:
   workflow_dispatch:
 
+env:
+  TARGET_URL: https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national
+
 jobs:
-  vpn-bypass:
+  vpn-test:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔍 Проверка интернета
+    - name: 🔍 Проверка базового подключения
       run: |
-        curl -s --connect-timeout 5 https://google.com \
-          || { echo "Нет доступа к интернету"; exit 1; }
+        curl -s --connect-timeout 5 https://google.com -I \
+          || { echo "Нет интернета"; exit 1; }
 
-    - name: 📦 Установка пакетов
+    - name: 📦 Установка WireGuard и утилит
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          wireguard-tools \
-          resolvconf \
-          dnsutils \
-          curl
+        sudo apt-get install -y wireguard-tools resolvconf dnsutils curl
 
-    - name: 📁 Подготовка WireGuard конфига
+    - name: 📁 Запись конфига WireGuard
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Подключение VPN и настройка DNS
+    - name: 🔐 Поднятие VPN и фиксация DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-        echo "VPN активен. Текущий IP: $(curl -s https://ipinfo.io/ip)"
+        echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
 
-    - name: 🛰 Получение IP через Cloudflare DNS
-      id: resolve
+    - name: 🌐 Тест Google через VPN
       run: |
-        DOMAIN="xn----ctbkymw5a2cwa.com"
-        # получаем первый A-запись через 1.1.1.1
-        IP=$(dig +short $DOMAIN @1.1.1.1 | head -n1)
-        if [ -z "$IP" ]; then
-          echo "Не удалось резолвить $DOMAIN" >&2
-          exit 1
-        fi
-        echo "DOMAIN=$DOMAIN" >> $GITHUB_ENV
-        echo "DOMAIN_IP=$IP" >> $GITHUB_ENV
-        echo "$DOMAIN → $IP"
+        echo "→ Testing https://www.google.com over VPN…"
+        curl -v --connect-timeout 5 https://www.google.com -o /dev/null \
+          || echo "⚠️ Google недоступен через VPN"
 
-    - name: ⚔️ Действия под VPN с обходом DNS
+    - name: 🔗 Тест целевого URL через VPN
       run: |
-        # curl напрямую на полученный IP, подменяя Host-заголовок
-        curl -s -A "Mozilla/5.0" \
-          --resolve "${DOMAIN}:443:${DOMAIN_IP}" \
-          -L "https://${DOMAIN}" \
-          || echo "Запрос не прошёл"
+        echo "→ Testing $TARGET_URL over VPN…"
+        curl -v --connect-timeout 10 "$TARGET_URL" -o /dev/null \
+          || echo "⚠️ Целевой URL недоступен через VPN"
 
     - name: 🛑 Отключение VPN
       if: always()
       run: |
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже отключён"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже отключён"
