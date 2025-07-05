@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Проверка подключения
+    - name: Проверка интернета
       run: |
         curl --connect-timeout 5 https://www.google.com || {
           echo "Нет интернета"
@@ -20,23 +20,23 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y wireguard-tools
 
-    - name: Сборка конфигурации в локальной директории
+    - name: Создание локального конфига
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: Подключение VPN с указанием пути
+    - name: Подключение VPN напрямую по пути
       run: |
-        export WG_CONFIG_DIR="$HOME/wg"
-        sudo wg-quick up wg0
+        sudo wg-quick up $HOME/wg/wg0.conf
+        echo "IP под VPN:"
         curl https://ipinfo.io/ip
 
-    - name: Ваши действия
-      run: echo "Тут можно выполнять команды под VPN"
+    - name: Действия под VPN
+      run: |
+        echo "Тут ваши команды — бот, API, скрипты"
 
     - name: Отключение VPN
       if: always()
       run: |
-        export WG_CONFIG_DIR="$HOME/wg"
-        sudo wg-quick down wg0 || echo "VPN уже завершён"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже завершён"
