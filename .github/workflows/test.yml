@@ -11,7 +11,7 @@ jobs:
     - name: 🔧 Установка зависимостей и утилит
       run: |
         run: |
-        python3 kh-news-tg-bot/poster.py
+        python3 poster.py
         sudo apt-get update
         sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
         pip3 install requests beautifulsoup4 Pillow python-telegram-bot
