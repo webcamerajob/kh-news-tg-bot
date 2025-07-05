@@ -30,11 +30,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-       # 3. Создание конфига
+      # 3. Настройка конфига с Split-Tunneling
       - name: Setup WireGuard config
         run: |
           sudo mkdir -p /etc/wireguard
           echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          # Добавляем исключения для GitHub
+          echo "PostUp = ip route add 140.82.112.0/20 dev eth0" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "PostUp = ip route add 185.199.108.0/22 dev eth0" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
           sudo chmod 600 /etc/wireguard/wg0.conf
 
        # 4. Подключение VPN
