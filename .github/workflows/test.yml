@@ -1,5 +1,4 @@
 name: VPN Bot Deployment
-
 on:
   workflow_dispatch: {}
   schedule:
