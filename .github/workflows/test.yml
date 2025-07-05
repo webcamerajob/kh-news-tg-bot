@@ -36,7 +36,7 @@ jobs:
     - name: ⚙️ Выполнение действий через VPN
       run: |
         echo "Добавьте сюда команды, например:"
-        # curl -X POST https://example.com/api --data '...'
+         curl -X POST https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national --data '...'
         # python3 bot.py --proxy-vpn-mode
 
     - name: 🛑 Отключение VPN
