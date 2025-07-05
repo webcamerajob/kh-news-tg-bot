@@ -1,4 +1,4 @@
-name: VPN Parser & Poster
+name: VPN Parser & Poster with Dependency Cache
 
 on:
   workflow_dispatch:
@@ -8,46 +8,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🧪 Проверка кеша установки
-      id: setup_check
-      run: |
-        if [ -f "$HOME/.env_ready" ]; then
-          echo "install_needed=false" >> $GITHUB_OUTPUT
-        else
-          echo "install_needed=true" >> $GITHUB_OUTPUT
+    - name: 🛠️ Кэш Python-пакетов
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
-    - name: 🛠️ Установка зависимостей (однократно)
-      if: steps.setup_check.outputs.install_needed == 'true'
+    - name: 🧰 Установка зависимостей (однократно при изменении requirements.txt)
       run: |
         sudo apt-get update
         sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
-        pip3 install -U requests beautifulsoup4
-        echo "done" > $HOME/.env_ready
+        pip3 install -r requirements.txt
 
-    - name: 📁 Подготовка VPN-конфига
+    - name: 📁 Подготовка WireGuard конфига
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Подключение WireGuard и DNS фиксация
+    - name: 🔐 Подключение WireGuard и фиксация DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
-        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-        echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
+        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+        echo "VPN активен. Текущий IP: $(curl -s https://ipinfo.io/ip)"
 
-    - name: 🧠 Запуск парсера (main.py) под VPN
+    - name: 🧠 Запуск парсера (main.py)
       run: |
-        echo "→ Запускаем парсер main.py через VPN…"
-        python3 main.py || echo "Парсер завершился с ошибкой"
+        echo "→ Запуск main.py через VPN…"
+        python3 main.py || echo "⚠️ Парсер завершился с ошибкой"
 
     - name: 🛑 Отключение WireGuard
       if: always()
       run: |
         echo "→ Отключаем VPN…"
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже отключён"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже был отключён"
 
     - name: 📤 Запуск постера (poster.py)
       run: |
-        echo "→ Запускаем постер poster.py…"
-        python3 poster.py || echo "Постер завершился с ошибкой"
+        echo "→ Запуск poster.py после VPN…"
+        python3 poster.py || echo "⚠️ Постер завершился с ошибкой"
