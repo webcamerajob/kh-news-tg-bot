@@ -12,7 +12,87 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Setup WireGuard
+        run: |name: VPN Bot Deployment
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Install WireGuard
+      - name: Install WireGuard
         run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools resolvconf
+          sudo modprobe wireguard
+
+      # 3. Configure VPN using WG_CONFIG secret
+      - name: Setup WireGuard config
+        run: |
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          
+          # Validate config syntax
+          if ! sudo wg-quick strip wg0 | sudo wg setconf wg0 /dev/stdin; then
+            echo "Invalid WireGuard configuration:"
+            sudo cat /etc/wireguard/wg0.conf
+            exit 1
+          fi
+          echo "WireGuard config is valid"
+
+      # 4. Connect to VPN with verification
+      - name: Connect to VPN
+        run: |
+          echo "Starting VPN connection..."
+          sudo wg-quick up wg0 || {
+            echo "VPN connection failed"
+            sudo wg show
+            exit 1
+          }
+          
+          # Wait for connection
+          sleep 5
+          
+          # Verify connection
+          echo "VPN status:"
+          sudo wg show
+          
+          echo "Testing VPN connectivity..."
+          if ! ping -c 4 -I wg0 8.8.8.8; then
+            echo "VPN ping test failed"
+            exit 1
+          fi
+          
+          VPN_IP=$(curl --interface wg0 --max-time 10 -s ifconfig.me)
+          if [ -z "$VPN_IP" ]; then
+            echo "Failed to get external IP through VPN"
+            exit 1
+          fi
+          echo "Successfully connected via VPN. External IP: $VPN_IP"
+
+      # 5. Run main application
+      - name: Run Telegram Bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: python bot.py
+
+      # 6. Disconnect VPN (always run)
+      - name: Disconnect VPN
+        if: always()
+        run: |
+          echo "Disconnecting VPN..."
+          sudo wg-quick down wg0 || true
+          echo "VPN disconnected"
           sudo apt-get update
           sudo apt-get install -y wireguard-tools
 
