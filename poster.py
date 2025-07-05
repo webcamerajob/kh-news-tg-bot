@@ -32,8 +32,8 @@ except ImportError:
 
 # ====== Настройки Telegram & путей ======
 
-TELEGRAM_TOKEN   = "7615702046:AAFJYUoOoJFkNFBlrpMfnoMeKr2ohZXzmeQ"
-TELEGRAM_CHANNEL = "@cambodiacriminal"
+TELEGRAM_TOKEN   = ""
+TELEGRAM_CHANNEL = ""
 CATALOG_PATH     = Path(__file__).parent / "articles" / "catalog.json"
 
 MAX_MEDIA_CAPTION = 1024
