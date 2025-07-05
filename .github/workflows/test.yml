@@ -1,0 +1,29 @@
+- name: Setup WireGuard
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y wireguard-tools resolvconf
+
+    # Создание конфига с проверкой
+    sudo mkdir -p /etc/wireguard
+    cat <<EOF | sudo tee /etc/wireguard/wg0.conf >/dev/null
+    [Interface]
+    PrivateKey = ${{ secrets.WG_PRIVATE_KEY }}
+    Address = 10.66.66.2/32
+    DNS = 1.1.1.1
+
+    [Peer]
+    PublicKey = ${{ secrets.WG_PUBLIC_KEY }}
+    AllowedIPs = 0.0.0.0/0
+    Endpoint = ${{ secrets.WG_ENDPOINT }}
+    PersistentKeepalive = 25
+    EOF
+
+    # Двойная проверка конфига
+    sudo wg-quick strip wg0 | sudo wg setconf wg0 /dev/stdin
+    sudo chmod 600 /etc/wireguard/wg0.conf
+
+    # Тестовое подключение
+    timeout 20 sudo wg-quick up wg0
+    sudo wg show
+    curl --interface wg0 ifconfig.me
+    sudo wg-quick down wg0
