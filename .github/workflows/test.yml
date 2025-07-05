@@ -1,4 +1,4 @@
-name: VPN + Cloudflare Bypass
+name: WireGuard VPN + CF-Protected API Fetch
 
 on:
   workflow_dispatch:
@@ -7,57 +7,77 @@ env:
   TARGET_URL: https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national
 
 jobs:
-  vpn-bypass:
+  vpn-and-fetch:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Проверка базового подключения
+    - name: 🔍 Проверка базового подключения
       run: |
-        curl -s --connect-timeout 5 https://google.com -I \
-          || { echo "Нет интернета"; exit 1; }
+        echo "→ Проверяем Google до VPN…"
+        curl -v --connect-timeout 5 https://www.google.com -o /dev/null \
+          || { echo "Нет доступа к интернету"; exit 1; }
 
-    - name: Установка WireGuard и утилит
+    - name: 📦 Установка WireGuard и утилит
       run: |
         sudo apt-get update
-        sudo apt-get install -y wireguard-tools resolvconf dnsutils curl python3-pip
+        sudo apt-get install -y wireguard-tools resolvconf dnsutils curl
 
-    - name: Запись конфига WireGuard
+    - name: 🔐 Подготовка WireGuard конфига
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: Поднятие VPN и фиксация DNS
+    - name: 🚀 Поднятие VPN и фиксация DNS
       run: |
+        echo "→ Поднимаем VPN…"
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
         echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
 
-    - name: Тест Google через VPN
+    - name: 🌐 Тест Google через VPN
       run: |
-        curl -s --connect-timeout 5 https://google.com -I \
+        echo "→ Проверяем Google через VPN…"
+        curl -v --connect-timeout 5 https://www.google.com -o /dev/null \
           || echo "⚠️ Google недоступен через VPN"
 
-    - name: Установка cloudscraper
-      run: |
-        pip3 install cloudscraper
+    - name: 🧩 Setup Node.js & Playwright
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
 
-    - name: Запрос к TARGET_URL через cloudscraper
+    - name: 📥 Установка Playwright
       run: |
-        python3 - << 'EOF'
-        import cloudscraper, os, sys
-        url = os.getenv('TARGET_URL')
-        scraper = cloudscraper.create_scraper()
-        resp = scraper.get(url, timeout=15)
-        print(f"Status: {resp.status_code}")
-        if resp.status_code == 200:
-            print("Body:", resp.text[:200], "…")
-        else:
-            print("Error body:", resp.text[:200], "…")
-        sys.exit(0 if resp.status_code == 200 else 1)
+        npm init -y
+        npm install playwright
+        npx playwright install --with-deps chromium
+
+    - name: 🕵️‍♂️ Fetch CF-Protected API via Headless Chromium
+      env:
+        TARGET_URL: ${{ env.TARGET_URL }}
+      run: |
+        node << 'EOF'
+        const { chromium } = require('playwright');
+        (async () => {
+          console.log(`→ Открываю ${process.env.TARGET_URL} в headless Chromium…`);
+          const browser = await chromium.launch({ args: ['--no-sandbox'] });
+          const page = await browser.newPage();
+          const response = await page.goto(process.env.TARGET_URL, { waitUntil: 'networkidle' });
+          const status = response.status();
+          const body = await response.text();
+          console.log(`Status: ${status}`);
+          if (status === 200) {
+            console.log('Body snippet:', body.slice(0, 200), '…');
+          } else {
+            console.log('Error body snippet:', body.slice(0, 200), '…');
+            process.exit(1);
+          }
+          await browser.close();
+        })();
         EOF
 
-    - name: Отключение VPN
+    - name: 🛑 Отключение VPN
       if: always()
       run: |
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже отключён"
+        echo "→ Отключаем VPN…"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже отключён"
