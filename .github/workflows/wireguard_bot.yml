@@ -1,0 +1,56 @@
+name: Telegram Bot + WireGuard
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # Каждые 6 часов
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+    
+      # 1. Загружаем код из репозитория
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Устанавливаем Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"  # или другой нужный вам
+          
+      # 1. Установка WireGuard
+      - name: Install WireGuard
+        run: sudo apt-get update && sudo apt-get install -y wireguard resolvconf
+          
+       # 2. Устанавливаем зависимости
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+       # 3. Создание конфига
+      - name: Setup WireGuard config
+        run: |
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+
+       # 4. Подключение VPN
+      - name: Connect WireGuard
+        run: |
+          sudo wg-quick up wg0
+          sleep 3  # Ждём инициализации
+          curl -4 ifconfig.me  # Проверка IP
+
+      # 5. Запускаем парсер (если нужен)
+      - name: Run Parser
+        run: python parser.py  # или другой скрипт
+
+      # 6. Запуск бота
+      - name: Run Bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: python poster.py
