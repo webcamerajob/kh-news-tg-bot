@@ -1,14 +1,14 @@
-name: WireGuard VPN Workflow
+name: WireGuard with CF Bypass
 
 on:
   workflow_dispatch:
 
 jobs:
-  use-wireguard:
+  bypass-vpn:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔍 Проверка базового подключения к интернету
+    - name: 🔍 Проверка интернета
       run: |
         curl --connect-timeout 5 https://www.google.com || {
           echo "Нет интернета, остановка процесса."
@@ -20,24 +20,32 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y wireguard-tools
 
-    - name: 📁 Сборка локального WireGuard конфига
+    - name: 📁 Конфигурация WireGuard
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Подключение VPN и настройка DNS
+    - name: 🔐 Подключение VPN и DNS фиксация
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-        echo "Публичный IP под VPN:"
+        echo "VPN активен. IP:"
         curl -s https://ipinfo.io/ip
 
-    - name: ⚙️ Выполнение действий через VPN
+    - name: 🛡️ Cloudflare Bypass Curl
       run: |
-        echo "Добавьте сюда команды, например:"
-         curl -X POST https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national --data '...'
-        # python3 bot.py --proxy-vpn-mode
+        echo "⚠️ CF Bypass curl с User-Agent и IP fallback:"
+        
+        curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+          -H "Referer: https://www.google.com/" \
+          --connect-timeout 10 \
+          -L https://your-cloudflare-domain.com || echo "WAF всё ещё блокирует 😑"
+
+    - name: ⚙️ Альтернативный обход по IP
+      run: |
+        echo "💡 Прямой доступ по IP, без DNS:"
+        curl http://X.X.X.X || echo "Не удалось — IP заблокирован или нестабилен"
 
     - name: 🛑 Отключение VPN
       if: always()
