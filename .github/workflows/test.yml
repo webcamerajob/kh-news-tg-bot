@@ -1,44 +1,53 @@
-name: Simple WireGuard Fetch with Logging
+name: VPN Parser & Poster
 
 on:
   workflow_dispatch:
 
 jobs:
-  fetch-via-vpn:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Установка WireGuard и утилит
+    - name: 🧪 Проверка кеша установки
+      id: setup_check
+      run: |
+        if [ -f "$HOME/.env_ready" ]; then
+          echo "install_needed=false" >> $GITHUB_OUTPUT
+        else
+          echo "install_needed=true" >> $GITHUB_OUTPUT
+
+    - name: 🛠️ Установка зависимостей (однократно)
+      if: steps.setup_check.outputs.install_needed == 'true'
       run: |
         sudo apt-get update
-        sudo apt-get install -y wireguard-tools resolvconf curl
+        sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
+        pip3 install -U requests beautifulsoup4
+        echo "done" > $HOME/.env_ready
 
-    - name: Подготовка WireGuard конфига
+    - name: 📁 Подготовка VPN-конфига
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: Поднятие VPN и фиксация DNS
+    - name: 🔐 Подключение WireGuard и DNS фиксация
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
+        echo "VPN IP: $(curl -s https://ipinfo.io/ip)"
 
-    - name: Запрос целевого URL через VPN с логированием
+    - name: 🧠 Запуск парсера (main.py) под VPN
       run: |
-        TARGET="https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug=national"
-        echo "→ Попытка открыть сайт: $TARGET"
-        RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" --connect-timeout 10 "$TARGET")
-        echo "$RESPONSE"
-        HTTP_STATUS=$(echo "$RESPONSE" | awk -F'HTTP_STATUS:' '/HTTP_STATUS/ {print $2}')
-        if [ "$HTTP_STATUS" -eq 200 ]; then
-          echo "✅ Успешно открыто через VPN (HTTP $HTTP_STATUS)"
-        else
-          echo "❌ Не удалось открыть через VPN (HTTP $HTTP_STATUS)"
-          exit 1
-        fi
+        echo "→ Запускаем парсер main.py через VPN…"
+        python3 main.py || echo "Парсер завершился с ошибкой"
 
-    - name: Отключение VPN
+    - name: 🛑 Отключение WireGuard
       if: always()
       run: |
+        echo "→ Отключаем VPN…"
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже отключён"
+
+    - name: 📤 Запуск постера (poster.py)
+      run: |
+        echo "→ Запускаем постер poster.py…"
+        python3 poster.py || echo "Постер завершился с ошибкой"
