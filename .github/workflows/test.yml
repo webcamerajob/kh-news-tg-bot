@@ -1,53 +1,44 @@
-name: WireGuard with CF Bypass
+name: WireGuard VPN Quick Job
 
 on:
   workflow_dispatch:
 
 jobs:
-  bypass-vpn:
+  wg-vpn:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🔍 Проверка интернета
+    - name: 🔍 Проверка подключения
       run: |
-        curl --connect-timeout 5 https://www.google.com || {
-          echo "Нет интернета, остановка процесса."
+        curl -s --connect-timeout 5 https://google.com || {
+          echo "Нет интернета"
           exit 1
         }
 
     - name: 📦 Установка WireGuard
       run: |
         sudo apt-get update
-        sudo apt-get install -y wireguard-tools
+        sudo apt-get install -y wireguard-tools resolvconf nftables
 
-    - name: 📁 Конфигурация WireGuard
+    - name: 📁 Конфигурация VPN
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: 🔐 Подключение VPN и DNS фиксация
+    - name: 🔐 Подключение VPN + DNS Fix
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
-        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-        echo "VPN активен. IP:"
-        curl -s https://ipinfo.io/ip
+        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+        echo "IP под VPN:"
+        curl -s -A "Mozilla/5.0" https://ipinfo.io/ip || echo "Cloudflare может блокировать"
 
-    - name: 🛡️ Cloudflare Bypass Curl
+    - name: ⚙️ Действия под VPN
       run: |
-        echo "⚠️ CF Bypass curl с User-Agent и IP fallback:"
-        
-        curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-          -H "Referer: https://www.google.com/" \
-          --connect-timeout 10 \
-          -L https://your-cloudflare-domain.com || echo "WAF всё ещё блокирует 😑"
-
-    - name: ⚙️ Альтернативный обход по IP
-      run: |
-        echo "💡 Прямой доступ по IP, без DNS:"
-        curl http://X.X.X.X || echo "Не удалось — IP заблокирован или нестабилен"
+        echo "🚀 Сюда вставь команды, например:"
+        curl -A "Mozilla/5.0" -L https://твоя-цель.com/api
 
     - name: 🛑 Отключение VPN
       if: always()
       run: |
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже был завершён"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже завершён"
