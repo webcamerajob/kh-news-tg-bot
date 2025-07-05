@@ -47,11 +47,17 @@ jobs:
           sleep 3  # Ждём инициализации
           curl -4 ifconfig.me  # Проверка IP
 
-      # 5. Запускаем парсер (если нужен)
+       # 5. Запускаем парсер (если нужен)
       - name: Run Parser
-        run: python parser.py  # или другой скрипт
+        run: python main.py  # или другой скрипт
 
-      # 6. Запуск бота
+       # 6. Отключение VPN
+      - name: Disconnect WireGuard
+        if: always()
+        run: sudo wg-quick down wg0 || true
+        
+
+      # 7. Запуск бота
       - name: Run Bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
