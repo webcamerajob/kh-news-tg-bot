@@ -30,25 +30,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 4. Создание корректного конфига
+      # 4. Создание конфига с правильным форматированием
       - name: Setup WireGuard config
         run: |
           sudo mkdir -p /etc/wireguard
-          cat <<EOF | sudo tee /etc/wireguard/wg0.conf >/dev/null
-          [Interface]
-          PrivateKey = ${{ secrets.WG_PRIVATE_KEY }}
-          Address = 10.66.66.2/32
-          DNS = 1.1.1.1
-          PostUp = ip route add 140.82.112.0/20 dev eth0
-          PostUp = ip route add 185.199.108.0/22 dev eth0
-          
-          [Peer]
-          PublicKey = ${{ secrets.WG_PUBLIC_KEY }}
-          AllowedIPs = 0.0.0.0/0
-          Endpoint = ${{ secrets.WG_ENDPOINT }}
-          PersistentKeepalive = 25
-          EOF
+          echo "[Interface]" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          echo "PrivateKey = ${{ secrets.WG_PRIVATE_KEY }}" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "Address = 10.66.66.2/32" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "DNS = 1.1.1.1" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "[Peer]" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "PublicKey = ${{ secrets.WG_PUBLIC_KEY }}" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "AllowedIPs = 0.0.0.0/0" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "Endpoint = ${{ secrets.WG_ENDPOINT }}" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
+          echo "PersistentKeepalive = 25" | sudo tee -a /etc/wireguard/wg0.conf >/dev/null
           sudo chmod 600 /etc/wireguard/wg0.conf
+
+      # 3. Проверка конфига перед использованием
+      - name: Validate config
+        run: |
+          sudo cat /etc/wireguard/wg0.conf
+          sudo wg-quick --dry-run up wg0
           
        # 5. Подключение VPN
       - name: Connect WireGuard
