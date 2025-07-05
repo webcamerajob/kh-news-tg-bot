@@ -1,42 +1,45 @@
-name: WireGuard VPN Job
+name: WireGuard VPN Workflow
 
 on:
   workflow_dispatch:
 
 jobs:
-  wireguard-vpn:
+  use-wireguard:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Проверка интернета
+    - name: 🔍 Проверка базового подключения к интернету
       run: |
         curl --connect-timeout 5 https://www.google.com || {
-          echo "Нет интернета"
+          echo "Нет интернета, остановка процесса."
           exit 1
         }
 
-    - name: Установка WireGuard
+    - name: 📦 Установка WireGuard
       run: |
         sudo apt-get update
         sudo apt-get install -y wireguard-tools
 
-    - name: Создание локального конфига
+    - name: 📁 Сборка локального WireGuard конфига
       run: |
         mkdir -p $HOME/wg
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
 
-    - name: Подключение VPN напрямую по пути
+    - name: 🔐 Подключение VPN и настройка DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
-        echo "IP под VPN:"
-        curl https://ipinfo.io/ip
+        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
+        echo "Публичный IP под VPN:"
+        curl -s https://ipinfo.io/ip
 
-    - name: Действия под VPN
+    - name: ⚙️ Выполнение действий через VPN
       run: |
-        echo "Тут ваши команды — бот, API, скрипты"
+        echo "Добавьте сюда команды, например:"
+        # curl -X POST https://example.com/api --data '...'
+        # python3 bot.py --proxy-vpn-mode
 
-    - name: Отключение VPN
+    - name: 🛑 Отключение VPN
       if: always()
       run: |
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "VPN уже завершён"
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже был завершён"
