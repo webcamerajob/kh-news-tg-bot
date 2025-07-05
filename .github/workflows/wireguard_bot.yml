@@ -30,17 +30,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 3. Активация VPN
-      - name: Connect WireGuard
-        uses: mirror-action/wireguard@v1
-        with:
-          config: ${{ secrets.WG_CONFIG }}
-
-      # 4. Проверка подключения
-      - name: Verify VPN
+       # 3. Создание конфига
+      - name: Setup WireGuard config
         run: |
-          curl -4 ifconfig.me
-          ping -c 4 google.com
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+
+       # 4. Подключение VPN
+      - name: Connect WireGuard
+        run: |
+          sudo wg-quick up wg0
+          sleep 3  # Ждём инициализации
+          curl -4 ifconfig.me  # Проверка IP
 
       # 5. Запускаем парсер (если нужен)
       - name: Run Parser
