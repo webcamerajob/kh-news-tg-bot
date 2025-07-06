@@ -297,7 +297,7 @@ async def send_article(bot: Bot, article: dict) -> bool:
                         parse_mode=ParseMode.HTML if idx == 0 else None
                     ))
                 await safe_call(bot.send_media_group,
-                                chat_id=,
+                                chat_id=channel_id,
                                 media=media)
             logging.info("✅ media_group отправлен: %s", art_id)
         else:
