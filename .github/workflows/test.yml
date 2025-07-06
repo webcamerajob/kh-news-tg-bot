@@ -44,7 +44,10 @@ jobs:
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
 
     - name: 📤 Запуск постера (poster.py)
-      working-directory: .
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
       run: |
-        echo "→ Запуск poster.py..."
-        python3 poster.py || echo "⚠️ poster.py завершился с ошибкой"
+        python3 poster.py || echo "⚠️ Ошибка при выполнении poster.py"
+
+
