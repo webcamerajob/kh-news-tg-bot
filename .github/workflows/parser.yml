@@ -64,10 +64,10 @@ jobs:
           echo "upload=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: 📦 Загрузка артефакта статей
-      if: steps.check_articles.outputs.upload == 'true'
+    - name: 📦 Сохранение артефакта с фиксированным именем
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: parsed-content-${{ github.run_id }}
+        name: parsed-content
         path: articles/
 
