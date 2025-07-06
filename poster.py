@@ -42,7 +42,7 @@ if not bot_token or not channel_id:
 # отправка сообщений:
 # bot.send_message(chat_id=channel_id, text="...")
 
-CATALOG_PATH     = Path(__file__).parent / "articles" / "catalog.json"
+CATALOG_PATH = Path(__file__).parent / "articles" / "catalog.json"
 
 MAX_MEDIA_CAPTION = 1024
 MAX_TEXT_CHUNK    = 4096
