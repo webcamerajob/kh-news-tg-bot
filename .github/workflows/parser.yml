@@ -17,16 +17,7 @@ jobs:
     - name: 🔧 Установка зависимостей
         sudo apt-get update
         sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
-      
-    - name: 📦 Кеш pip
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements-*.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-        
-      run: pip3 install -r requirements-parser.txt
+        pip3 install -r requirements-parser.txt
 
     - name: 📁 Подготовка WireGuard-конфига
       run: |
