@@ -32,8 +32,16 @@ except ImportError:
 
 # ====== Настройки Telegram & путей ======
 
-TELEGRAM_TOKEN   = ""
-TELEGRAM_CHANNEL = ""
+import os
+bot_token = os.getenv("TELEGRAM_TOKEN")
+channel_id = os.getenv("TELEGRAM_CHANNEL")
+
+if not bot_token or not channel_id:
+    raise RuntimeError("🚫 TG_BOT_TOKEN или TG_CHANNEL_ID не передан!")
+
+# отправка сообщений:
+# bot.send_message(chat_id=channel_id, text="...")
+
 CATALOG_PATH     = Path(__file__).parent / "articles" / "catalog.json"
 
 MAX_MEDIA_CAPTION = 1024
