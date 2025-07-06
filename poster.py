@@ -344,7 +344,7 @@ async def send_article(bot: Bot, article: dict) -> bool:
 
 async def main():
     try:
-        bot = Bot(token=TELEGRAM_TOKEN)
+        bot = Bot(token=bot_token)
     except Exception as e:
         logging.error("🚫 Bot init error: %s", e)
         return
