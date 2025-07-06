@@ -303,7 +303,7 @@ async def send_article(bot: Bot, article: dict) -> bool:
         else:
             # без картинок — отправляем первую часть как сообщение
             await safe_call(bot.send_message,
-                            chat_id=,
+                            chat_id=channel_id,
                             text=parts[0],
                             parse_mode=ParseMode.HTML)
             logging.info("✅ Caption-текст отправлен: %s", art_id)
