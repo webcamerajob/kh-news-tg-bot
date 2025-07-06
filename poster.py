@@ -42,7 +42,22 @@ if not bot_token or not channel_id:
 # отправка сообщений:
 # bot.send_message(chat_id=channel_id, text="...")
 
-CATALOG_PATH = Path(__file__).parent / "articles" / "catalog.json"
+import json
+import sys
+from pathlib import Path
+
+# 📁 Надёжный путь к файлу
+CATALOG_PATH = (Path(__file__).parent / "articles" / "catalog.json").resolve()
+
+# 🛡️ Защита: если файла нет или он пуст
+if not CATALOG_PATH.exists():
+    print(f"🛑 catalog.json не найден: {CATALOG_PATH}")
+    sys.exit(0)
+
+catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+if not catalog:
+    print("⚠️ catalog.json пуст — нечего постить.")
+    sys.exit(0)
 
 MAX_MEDIA_CAPTION = 1024
 MAX_TEXT_CHUNK    = 4096
