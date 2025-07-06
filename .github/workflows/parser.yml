@@ -48,14 +48,21 @@ jobs:
         echo "→ Отключение WireGuard..."
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
         
-    - name: 📁 Проверка содержимого
+    - name: 📁 Проверка наличия данных для артефакта
+      id: check_articles
       run: |
-        echo "🔍 Содержимое articles/:"
-        ls -la articles/ || echo "❌ Папка отсутствует"
-        
-    - name: 📦 Сохранение статей и изображений
-      if: always()
+        if [ -d "articles" ] && [ "$(ls -A articles)" ]; then
+          echo "🎯 Найдена непустая папка articles/"
+          echo "upload=true" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Папка articles/ отсутствует или пуста"
+          echo "upload=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 📦 Загрузка артефакта статей
+      if: steps.check_articles.outputs.upload == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: parsed-content-${{ github.run_id }}
         path: articles/
+
