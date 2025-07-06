@@ -17,7 +17,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
-        pip3 install requests beautifulsoup4 Pillow python-telegram-bot
+        pip3 install requests beautifulsoup4 Pillow python-telegram-bot deep_translator
 
     - name: 📁 Подготовка WireGuard-конфига
       run: |
