@@ -297,13 +297,13 @@ async def send_article(bot: Bot, article: dict) -> bool:
                         parse_mode=ParseMode.HTML if idx == 0 else None
                     ))
                 await safe_call(bot.send_media_group,
-                                chat_id=TELEGRAM_CHANNEL,
+                                chat_id=,
                                 media=media)
             logging.info("✅ media_group отправлен: %s", art_id)
         else:
             # без картинок — отправляем первую часть как сообщение
             await safe_call(bot.send_message,
-                            chat_id=TELEGRAM_CHANNEL,
+                            chat_id=,
                             text=parts[0],
                             parse_mode=ParseMode.HTML)
             logging.info("✅ Caption-текст отправлен: %s", art_id)
@@ -312,7 +312,7 @@ async def send_article(bot: Bot, article: dict) -> bool:
         # 2) отправляем оставшиеся части
         for idx, frag in enumerate(text_rest, start=1):
             await safe_call(bot.send_message,
-                            chat_id=TELEGRAM_CHANNEL,
+                            chat_id=,
                             text=frag,
                             parse_mode=ParseMode.HTML)
             logging.debug("➡️ Часть %d/%d отправлена: %s", idx, len(text_rest), art_id)
