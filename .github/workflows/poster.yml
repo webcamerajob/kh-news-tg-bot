@@ -31,6 +31,13 @@ jobs:
       with:
         name: parsed-content
         path: articles/
+
+    - name: 📁 Проверка catalog.json
+      run: |
+        if [ ! -f "articles/catalog.json" ]; then
+          echo "⚠️ catalog.json отсутствует — нечего постить"
+          exit 0
+        fi
         
     - name: 📤 Запуск постера
       env:
