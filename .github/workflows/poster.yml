@@ -1,0 +1,36 @@
+name: Постер каждые 30 минут (5:00–18:00)
+
+on:
+  schedule:
+    - cron: '0,30 22-23 * * *'   # 05:00–06:00 ICT
+    - cron: '0,30 0-10 * * *'    # 06:00–18:00 ICT
+    
+  workflow_dispatch:
+
+jobs:
+  run-poster:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 🔄 Получение репозитория
+      uses: actions/checkout@v4
+
+    - name: 🔧 Установка зависимостей
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        pip3 install -r requirements.txt
+
+    - name: 📤 Запуск постера
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      run: |
+        python3 poster.py || echo "⚠️ Ошибка при выполнении poster.py"
+
+    - name: 📝 Сохранение каталога после постинга
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: catalog-after-posting-${{ github.run_id }}
+        path: articles/catalog.json
