@@ -189,3 +189,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    # В конце main.py:
+    print("✅ main.py завершён")
+
