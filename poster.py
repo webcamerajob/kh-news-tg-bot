@@ -312,7 +312,7 @@ async def send_article(bot: Bot, article: dict) -> bool:
         # 2) отправляем оставшиеся части
         for idx, frag in enumerate(text_rest, start=1):
             await safe_call(bot.send_message,
-                            chat_id=,
+                            chat_id=channel_id,
                             text=frag,
                             parse_mode=ParseMode.HTML)
             logging.debug("➡️ Часть %d/%d отправлена: %s", idx, len(text_rest), art_id)
