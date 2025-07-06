@@ -29,7 +29,7 @@ jobs:
     - name: 📥 Загрузка артефакта каталога
       uses: actions/download-artifact@v4
       with:
-        name: parsed-content-${{ github.run_id }}
+        name: parsed-content
         path: articles/
         
     - name: 📤 Запуск постера
