@@ -37,6 +37,15 @@ jobs:
         echo "→ Запуск main.py..."
         python3 main.py || echo "⚠️ main.py завершился с ошибкой"
 
+    - name: 🔎 Проверка наличия catalog.json
+      run: |
+        if [ ! -f articles/catalog.json ]; then
+          echo "❌ catalog.json не создан — прерываем постер"
+          exit 1
+        else
+          echo "✅ catalog.json найден"
+        fi
+
     - name: 🛑 Отключение VPN
       if: always()
       run: |
