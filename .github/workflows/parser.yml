@@ -1,0 +1,51 @@
+name: Парсер с VPN (5:00–18:00 каждый 30 мин)
+
+on:
+  schedule:
+    - cron: '0,30 22-23 * * *'   # 05–06 по Индокитаю (UTC+7)
+    - cron: '0,30 0-10 * * *'    # 06–18 по Индокитаю
+  workflow_dispatch:
+
+jobs:
+  run-parser:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 🔄 Получение репозитория
+      uses: actions/checkout@v4
+
+    - name: 🔧 Установка зависимостей
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
+        pip3 install requests beautifulsoup4 Pillow deep_translator
+
+    - name: 📁 Подготовка WireGuard-конфига
+      run: |
+        mkdir -p $HOME/wg
+        echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
+        chmod 600 $HOME/wg/wg0.conf
+
+    - name: 🔐 Подключение VPN и DNS
+      run: |
+        sudo wg-quick up $HOME/wg/wg0.conf
+        echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+        echo "🌐 VPN IP: $(curl -s https://ipinfo.io/ip)"
+
+    - name: 🧠 Запуск парсера
+      run: |
+        echo "→ Запуск main.py..."
+        python3 main.py || echo "⚠️ main.py завершился с ошибкой"
+
+    - name: 🛑 Отключение VPN
+      if: always()
+      run: |
+        echo "→ Отключение WireGuard..."
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
+
+    - name: 📦 Сохранение статей и изображений
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: parsed-content-${{ github.run_id }}
+        path: articles/
