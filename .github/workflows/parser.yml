@@ -47,7 +47,12 @@ jobs:
       run: |
         echo "→ Отключение WireGuard..."
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
-
+        
+    - name: 📁 Проверка содержимого
+      run: |
+        echo "🔍 Содержимое articles/:"
+        ls -la articles/ || echo "❌ Папка отсутствует"
+        
     - name: 📦 Сохранение статей и изображений
       if: always()
       uses: actions/upload-artifact@v4
