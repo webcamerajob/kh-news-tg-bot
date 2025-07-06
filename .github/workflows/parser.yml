@@ -13,6 +13,10 @@ jobs:
     steps:
     - name: 🔄 Получение репозитория
       uses: actions/checkout@v4
+          
+    - name: 🔧 Установка зависимостей
+        sudo apt-get update
+        sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
       
     - name: 📦 Кеш pip
       uses: actions/cache@v3
@@ -21,8 +25,7 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements-*.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-          
-    - name: 🔧 Установка зависимостей
+        
       run: pip3 install -r requirements-parser.txt
 
     - name: 📁 Подготовка WireGuard-конфига
@@ -53,21 +56,20 @@ jobs:
         echo "→ Отключение WireGuard..."
         sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
         
-    - name: 📁 Проверка наличия данных для артефакта
-      id: check_articles
+    - name: 📁 Проверка catalog.json
+      id: check_catalog
       run: |
-        if [ -d "articles" ] && [ "$(ls -A articles)" ]; then
-          echo "🎯 Найдена непустая папка articles/"
+        if [ -f "articles/catalog.json" ]; then
+          echo "✅ catalog.json найден"
           echo "upload=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ Папка articles/ отсутствует или пуста"
+          echo "⚠️ catalog.json не найден"
           echo "upload=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: 📦 Сохранение артефакта с фиксированным именем
-      if: success()
+    - name: 📦 Сохранение артефакта
+      if: steps.check_catalog.outputs.upload == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: parsed-content
         path: articles/
-
