@@ -26,8 +26,12 @@ jobs:
     - name: 🔧 Установка зависимостей
       run: pip3 install -r requirements-poster.txt
 
-
-
+    - name: 📥 Загрузка артефакта каталога
+      uses: actions/download-artifact@v4
+      with:
+        name: parsed-content-${{ github.run_id }}
+        path: articles/
+        
     - name: 📤 Запуск постера
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
