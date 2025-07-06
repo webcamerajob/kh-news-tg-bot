@@ -15,10 +15,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: 🔧 Установка зависимостей
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y wireguard-tools resolvconf curl python3-pip
-        pip3 install requests beautifulsoup4 Pillow deep_translator
+      run: pip3 install -r requirements-parser.txt
 
     - name: 📁 Подготовка WireGuard-конфига
       run: |
