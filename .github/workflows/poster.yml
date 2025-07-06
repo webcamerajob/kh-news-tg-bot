@@ -1,9 +1,10 @@
-name: Постер каждые 30 минут (5:00–18:00)
+name: Постер
 
 on:
-  schedule:
-    - cron: '0,30 22-23 * * *'   # 05:00–06:00 ICT
-    - cron: '0,30 0-10 * * *'    # 06:00–18:00 ICT
+  workflow_run:
+    workflows: ["Парсер"]
+    types:
+      - complete
     
   workflow_dispatch:
 
