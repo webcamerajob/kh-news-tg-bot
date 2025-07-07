@@ -4,6 +4,7 @@ import json
 import argparse
 import asyncio
 import logging
+from pathlib import Path
 from io import BytesIO
 
 import httpx
