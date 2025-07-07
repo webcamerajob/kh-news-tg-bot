@@ -46,7 +46,9 @@ def apply_watermark(image_path: str, watermark_path: str = "watermark.png") -> b
     new_size = (int(mark.width * ratio), int(mark.height * ratio))
     mark = mark.resize(new_size, resample=resample_filter)
 
-    pos = ((base.width - mark.width) // 2, (base.height - mark.height) // 2)
+    # позиционируем в правый верхний угол (без отступа)
+    pos = (base.width - mark.width, 0)
+    
     base.paste(mark, pos, mark)
 
     buf = BytesIO()
