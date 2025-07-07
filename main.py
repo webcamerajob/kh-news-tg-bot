@@ -205,7 +205,7 @@ def main():
         m = parse_and_save(post)
         catalog.append(m)
 
-        # Сохраняем итоговый каталог
+    # Сохраняем итоговый каталог
     catalog_path = OUTPUT_FOLDER / "catalog.json"
     catalog_path.write_text(
         json.dumps(catalog, ensure_ascii=False, indent=2),
@@ -219,7 +219,7 @@ def main():
     else:
         logging.warning("⚠️ Catalog is empty — poster not triggered")
 
-print("✅ main.py завершён")
+    print("✅ main.py завершён")
 
     
 if __name__ == "__main__":
