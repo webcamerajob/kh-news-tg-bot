@@ -1,14 +1,15 @@
 import logging
-import httpx
 import json
 from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime
 import time
 import os
+import httpx
+from httpx import HTTPStatusError, Timeout
 
 # глобальный таймаут для всех httpx.get/post
-DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0)
+DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0, pool=None)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +63,7 @@ IMG_FILTER_CONFIG = {
 
 def fetch_category_id(slug="national") -> int:
     url = f"{BASE_URL}/categories?slug={slug}"
-    #r = httpx.get(url, headers=HEADERS, timeout=30)
+    r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
 
     r.raise_for_status()
     data = r.json()
@@ -74,7 +75,7 @@ def fetch_posts(cat_id, per_page=PER_PAGE, retries=3, backoff=5):
     url = f"{BASE_URL}/posts?categories={cat_id}&per_page={per_page}&_embed"
     for i in range(retries):
         try:
-            #r = httpx.get(url, headers=HEADERS, timeout=30)
+            r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
 
             r.raise_for_status()
             return r.json()
@@ -85,7 +86,7 @@ def fetch_posts(cat_id, per_page=PER_PAGE, retries=3, backoff=5):
     return []
 
 def save_image(url, folder: Path):
-    #r = httpx.get(url, headers=HEADERS, timeout=30)
+    r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
     
     r.raise_for_status()
     fn = url.split("/")[-1].split("?")[0]
@@ -179,7 +180,7 @@ def parse_and_save(post):
         links = post.get("_links",{})
         if "wp:featuredmedia" in links:
             href = links["wp:featuredmedia"][0]["href"]
-            r = httpx.get(href, headers=HEADERS, timeout=10); r.raise_for_status()
+            r = httpx.get(href, headers=HEADERS, timeout=DEFAULT_TIMEOUT); r.raise_for_status()
             src = r.json().get("source_url","")
             if src and any(x in src for x in IMG_FILTER_CONFIG["src_must_contain"]) \
                    and src.lower().endswith(tuple(IMG_FILTER_CONFIG["allowed_extensions"])):
