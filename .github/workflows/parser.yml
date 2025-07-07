@@ -42,12 +42,6 @@ jobs:
         echo "→ Запуск main.py..."
         python3 main.py || echo "⚠️ main.py завершился с ошибкой"
 
-    - name: 🛑 Отключение VPN
-      if: always()
-      run: |
-        echo "→ Отключение WireGuard..."
-        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
-        
     - name: 📁 Проверка catalog.json
       id: check_catalog
       run: |
@@ -58,6 +52,12 @@ jobs:
           echo "⚠️ catalog.json не найден"
           echo "upload=false" >> $GITHUB_OUTPUT
         fi
+
+    - name: 🛑 Отключение VPN
+      if: always()
+      run: |
+        echo "→ Отключение WireGuard..."
+        sudo wg-quick down $HOME/wg/wg0.conf || echo "WireGuard уже выключен"
 
     - name: 📦 Сохранение артефакта
       if: steps.check_catalog.outputs.upload == 'true'
