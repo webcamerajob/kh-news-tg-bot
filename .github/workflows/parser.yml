@@ -1,10 +1,8 @@
 name: Парсер
 
 on:
-  schedule:
-    - cron: '0,30 22-23 * * *'   # 05–06 по Индокитаю (UTC+7)
-    - cron: '0,30 0-10 * * *'    # 06–18 по Индокитаю
-  workflow_dispatch:
+  repository_dispatch:
+    types: [start-poster]
 
 jobs:
   run-parser:
