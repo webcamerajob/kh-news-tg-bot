@@ -188,6 +188,10 @@ def parse_and_save(post):
     except: pass
 
     meta["images"] = images
+    # для совместимости с poster.py: первый путь кладём в image_path
+    if images:
+        meta["image_path"] = images[0]
+
 
     # 6) Пишем meta.json, **с флагом** из старого файла
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
