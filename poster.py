@@ -10,6 +10,7 @@ from pathlib import Path
 from io import BytesIO
 
 import httpx
+from httpx import HTTPStatusError
 from PIL import Image
 
 # таймауты, ретраи, пауза
