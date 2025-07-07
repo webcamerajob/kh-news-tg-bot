@@ -13,6 +13,7 @@ from PIL import Image
 TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # секунд
+DEFAULT_POST_DELAY = 60.0   # пауза в секундах по умолчанию
 
 # Путь к файлу каталога
 CATALOG_PATH = "articles/catalog.json"
