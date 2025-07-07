@@ -5,7 +5,12 @@ on:
     - cron: '0,30 22-23 * * *'   # 05–06 по Индокитаю (UTC+7)
     - cron: '0,30 0-10 * * *'    # 06–18 по Индокитаю
   workflow_dispatch:
-  
+
+# 🔐 Права для GITHUB_TOKEN
+permissions:
+  contents: read      # доступ к коду
+  actions: write      # для repository_dispatch
+
 jobs:
   run-parser:
     runs-on: ubuntu-latest
