@@ -66,9 +66,6 @@ async def safe_send_photo(client: httpx.AsyncClient, token: str,
     return False
 
 async def main(limit: int | None):
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
-    
         # 1) Читаем задержку из ENV, иначе берём DEFAULT_POST_DELAY
     delay = float(os.getenv("POST_DELAY", DEFAULT_POST_DELAY))
 
@@ -109,8 +106,8 @@ async def main(limit: int | None):
             art["posted"] = True
             sent += 1
             logging.info(f"✅ Отправлено ID={art.get('id')}")
-
-        logging.info(f"⏳ Ждём {delay}s перед следующим")
+        
+        logging.info(f"⏳ Sleeping for {delay}s before next post")
         await asyncio.sleep(delay)
 
     await client.aclose()
