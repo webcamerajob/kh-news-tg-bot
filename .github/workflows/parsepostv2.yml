@@ -1,4 +1,4 @@
-name: Parse and Post
+name: Parse and Post 2
 
 on:
   schedule:
