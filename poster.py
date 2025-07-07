@@ -66,17 +66,23 @@ async def safe_send_photo(client: httpx.AsyncClient, token: str,
     return False
 
 async def main(limit: int | None):
-        # 1) Читаем задержку из ENV, иначе берём DEFAULT_POST_DELAY
+    # 0) Логирование (достаточно один раз)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+
+    # 1) Читаем задержку из ENV, иначе DEFAULT_POST_DELAY
     delay = float(os.getenv("POST_DELAY", DEFAULT_POST_DELAY))
 
-    token = os.getenv("TELEGRAM_TOKEN")
+    # 2) Telegram-параметры
+    token   = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
-    delay = float(os.getenv("POST_DELAY", "300"))
-
     if not token or not chat_id:
-        logging.error("❌ TELEGRAM_TOKEN или TELEGRAM_CHANNEL не заданы в переменных окружения")
+        logging.error("❌ TELEGRAM_TOKEN или TELEGRAM_CHANNEL не заданы")
         return
 
+    # 3) Загружаем каталог
     catalog = load_catalog()
     if not catalog:
         logging.info("✅ Нечего отправлять")
@@ -85,38 +91,45 @@ async def main(limit: int | None):
     client = httpx.AsyncClient(timeout=TIMEOUT)
     sent = 0
 
+    # 4) Основной цикл — обязательно внутри for!
     for art in catalog:
         if art.get("posted"):
             continue
+
         if limit is not None and sent >= limit:
             logging.info(f"🔔 Достигнут лимит {limit}, выходим")
             break
 
-    imgs = art.get("images", [])
-    if not imgs:
-        logging.error(f"❌ Нет изображений для статьи ID={art.get('id')}")
-        continue
-   img_path = imgs[0]
-    if not os.path.isfile(img_path):
-        logging.error(f"❌ Файл изображения не найден: {img_path}")
-        continue
+        # берём первый путь из списка images
+        imgs = art.get("images", [])
+        if not imgs:
+            logging.error(f"❌ Нет изображений для статьи ID={art.get('id')}")
+            continue
 
+        img_path = imgs[0]
+        if not os.path.isfile(img_path):
+            logging.error(f"❌ Файл изображения не найден: {img_path}")
+            continue
+
+        # 5) Водяной знак и отправка
         photo = apply_watermark(img_path)
         caption = art.get("text", "")
         logging.info(f"▶️ Отправляем статью ID={art.get('id')}")
-
         ok = await safe_send_photo(client, token, chat_id, photo, caption)
         if ok:
             art["posted"] = True
             sent += 1
             logging.info(f"✅ Отправлено ID={art.get('id')}")
-        
-        logging.info(f"⏳ Sleeping for {delay}s before next post")
+
+        # 6) Пауза
+        logging.info(f"⏳ Ждём {delay}s перед следующей")
         await asyncio.sleep(delay)
 
+    # 7) Завершение
     await client.aclose()
     save_catalog(catalog)
     logging.info(f"📢 Завершено: отправлено {sent} статей")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
