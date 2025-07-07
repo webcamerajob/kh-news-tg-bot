@@ -36,6 +36,16 @@ def apply_watermark(image_path: str, watermark_path: str = "watermark.png") -> b
     ratio = base.width * 0.3 / mark.width
     mark = mark.resize((int(mark.width * ratio), int(mark.height * ratio)), Image.ANTIALIAS)
 
+        # выбираем фильтр ресэмплинга
+    try:
+        resample_filter = Image.Resampling.LANCZOS
+    except AttributeError:
+        resample_filter = Image.LANCZOS
+
+    ratio = base.width * 0.3 / mark.width
+    new_size = (int(mark.width * ratio), int(mark.height * ratio))
+    mark = mark.resize(new_size, resample=resample_filter)
+
     pos = ((base.width - mark.width) // 2, (base.height - mark.height) // 2)
     base.paste(mark, pos, mark)
 
