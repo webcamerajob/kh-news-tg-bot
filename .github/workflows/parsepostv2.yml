@@ -1,0 +1,163 @@
+name: Parse and Post
+
+on:
+  schedule:
+    - cron: '0,30 22-23 * * *'   # 05–06 Indo‐China (UTC+7)
+    - cron: '0,30 0-10 * * *'    # 06–18 Indo‐China
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parse-and-post-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse:
+    name: 🔍 Parse Articles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WG_CONFIG:      ${{ secrets.WG_CONFIG }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+
+    steps:
+      - name: 🔄 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Cache parser pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-parser-${{ hashFiles('requirements-parser.txt') }}
+
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: 💾 Install parser dependencies
+        run: pip3 install -r requirements-parser.txt
+
+      - name: 🛠 Ensure articles/ exists
+        run: mkdir -p articles
+
+      - name: 🔐 Setup WireGuard & DNS
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            wireguard-tools resolvconf curl jq
+          mkdir -p $HOME/wg
+          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+
+      - name: 🧠 Run parser
+        run: python3 main.py
+
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
+
+      - name: ✅ Validate catalog.json
+        run: |
+          if [ ! -f "articles/catalog.json" ]; then
+            echo "❌ catalog.json not found"
+            exit 1
+          fi
+          if ! jq empty articles/catalog.json; then
+            echo "❌ catalog.json is invalid JSON"
+            exit 1
+          fi
+
+      - name: 📦 Upload parsed-content
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsed-content
+          path: articles
+
+      - name: 🚨 Notify parse failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
+            -d text="🚨 Parsing job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
+
+  post:
+    name: 📤 Publish Articles
+    needs: parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+
+    steps:
+      - name: 🔄 Sparse checkout poster & assets
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            poster.py
+            watermark.png
+
+      - name: 📦 Cache poster pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-poster-${{ hashFiles('requirements-poster.txt') }}
+
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: 💾 Install poster dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip3 install -r requirements-poster.txt
+
+      - name: 📥 Download parsed-content
+        uses: actions/download-artifact@v4
+        with:
+          name: parsed-content
+          path: articles
+
+      - name: 🐞 Debug articles content
+        run: |
+          echo "→ Contents of articles/:"
+          ls -R articles
+
+      - name: 🔧 Install jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
+
+      - name: 📁 Validate catalog.json
+        run: |
+          if [ ! -f "articles/catalog.json" ]; then
+            echo "⚠️ catalog.json not found — skipping post"
+            exit 0
+          fi
+          if ! jq empty articles/catalog.json; then
+            echo "❌ Invalid JSON in catalog.json"
+            exit 1
+          fi
+
+      - name: 📤 Run poster
+        run: |
+          set -e
+          python3 poster.py
+
+      - name: 📝 Upload catalog-after-posting
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-after-posting-${{ github.run_id }}
+          path: articles/catalog.json
+
+      - name: 🚨 Notify post failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
+            -d text="🚨 Post job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
