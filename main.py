@@ -194,7 +194,7 @@ def parse_and_save(post):
 
 def main():
     logging.info("🚀 Start parsing")
-    OUTPUT_FOLDER.mkdir(exist_ok=True)
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
     cid   = fetch_category_id("national")
     posts = fetch_posts(cid)
     catalog = []
@@ -209,6 +209,7 @@ def main():
         json.dumps(catalog, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+    logging.info(f"📁 catalog.json saved: {catalog_path.resolve()} — {len(catalog)} articles")
     logging.info(f"🏁 Parsed {len(catalog)} articles.")
     
     # В конце main.py:
