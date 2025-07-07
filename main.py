@@ -205,19 +205,19 @@ def main():
         m = parse_and_save(post)
         catalog.append(m)
 
-    # Сохраняем итоговый каталог
-catalog_path = OUTPUT_FOLDER / "catalog.json"
-catalog_path.write_text(
-    json.dumps(catalog, ensure_ascii=False, indent=2),
-    encoding="utf-8"
-)
-logging.info(f"📁 catalog.json saved: {catalog_path.resolve()} — {len(catalog)} articles")
+        # Сохраняем итоговый каталог
+    catalog_path = OUTPUT_FOLDER / "catalog.json"
+    catalog_path.write_text(
+        json.dumps(catalog, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    logging.info(f"📁 catalog.json saved: {catalog_path.resolve()} — {len(catalog)} articles")
 
-# 🚀 Запускаем постер, если есть статьи
-if catalog:
-    trigger_poster()
-else:
-    logging.warning("⚠️ Catalog is empty — poster not triggered")
+    # 🚀 Запускаем постер, если есть статьи
+    if catalog:
+        trigger_poster()
+    else:
+        logging.warning("⚠️ Catalog is empty — poster not triggered")
 
 print("✅ main.py завершён")
 
