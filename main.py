@@ -6,6 +6,24 @@ from pathlib import Path
 from datetime import datetime
 import time
 
+GITHUB_REPO = "webcamerajob/kh-news-tg-bot"  # замените на свой
+TOKEN = os.environ.get("GH_TOKEN")
+URL = f"https://api.github.com/repos/{GITHUB_REPO}/dispatches"
+
+def trigger_poster():
+    response = httpx.post(
+        URL,
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Accept": "application/vnd.github+json"
+        },
+        json={"event_type": "start-poster"}
+    )
+    if response.status_code == 204:
+        print("🚀 Постер запущен через repository_dispatch")
+    else:
+        print(f"❌ Ошибка запуска: {response.text}")
+        
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
