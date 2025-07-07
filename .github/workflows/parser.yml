@@ -34,11 +34,6 @@ jobs:
         echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
         chmod 600 $HOME/wg/wg0.conf
         
-    - name: 📦 Установка WireGuard
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y wireguard-tools
-        
     - name: 🔐 Подключение VPN и DNS
       run: |
         sudo wg-quick up $HOME/wg/wg0.conf
