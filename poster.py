@@ -81,9 +81,17 @@ async def safe_send_photo(client: httpx.AsyncClient,
             return True
         except httpx.ReadTimeout:
             logging.warning(f"⏱ ReadTimeout {attempt}/{MAX_RETRIES}, retry через {RETRY_DELAY}s")
-        except httpx.HTTPError as e:
-            logging.error(f"❌ HTTP error on attempt {attempt}: {e}")
-            break
+#        except httpx.HTTPError as e:
+#            logging.error(f"❌ HTTP error on attempt {attempt}: {e}")
+#            break
+
+        except httpx.HTTPStatusError as e:
+            # ▶ здесь ловим статусные ошибки и печатаем тело ответа
+            body = e.response.text
+            logging.error(
+                f"❌ Telegram returned {e.response.status_code} on attempt {attempt}: {body}"
+            )
+            return False
         await asyncio.sleep(RETRY_DELAY)
 
     logging.error("☠️ Не удалось отправить фото после всех попыток")
