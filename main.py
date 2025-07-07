@@ -205,15 +205,17 @@ def main():
         catalog.append(m)
 
     # Сохраняем итоговый каталог
-    (OUTPUT_FOLDER/"catalog.json").write_text(
+    (OUTPUT_FOLDER / "catalog.json").write_text(
         json.dumps(catalog, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
     logging.info(f"🏁 Parsed {len(catalog)} articles.")
-
+    
+    # В конце main.py:
+    print("✅ main.py завершён")
+    
 if __name__ == "__main__":
     main()
 
-    # В конце main.py:
-    print("✅ main.py завершён")
+
 
