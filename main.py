@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 from datetime import datetime
 import time
+import os
 
 logging.basicConfig(
     level=logging.INFO,
