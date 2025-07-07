@@ -53,15 +53,20 @@ jobs:
     - name: 📁 Проверка catalog.json
       id: check_catalog
       run: |
-        sleep 2 # ⏳ если нужно подождать чуть-чуть
-        if [ -f "articles/catalog.json" ]; then
-          echo "✅ catalog.json найден"
-          echo "upload=true" >> $GITHUB_OUTPUT
-        else
+        for i in 1 2; do
+          if [ -f "articles/catalog.json" ]; then
+            echo "✅ catalog.json найден"
+            echo "upload=true" >> $GITHUB_OUTPUT
+         else
+            echo "⚠️ catalog.json не найден"
+            echo "upload=false" >> $GITHUB_OUTPUT
+         fi
+        done
+        if [ ! -f "articles/catalog.json" ]; then
           echo "⚠️ catalog.json не найден"
           echo "upload=false" >> $GITHUB_OUTPUT
         fi
-
+        
     - name: 🛑 Отключение VPN
       if: always()
       run: |
