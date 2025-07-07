@@ -382,3 +382,9 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+    parser = argparse.ArgumentParser(...)
+    parser.add_argument("--limit", "-n", type=int, default=None, help="Макс. число статей")
+    args = parser.parse_args()
+    asyncio.run(main(limit=args.limit))
+
