@@ -9,6 +9,9 @@ on:
 jobs:
   run-parser:
     runs-on: ubuntu-latest
+    
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}    # ← вот здесь
 
     steps:
     - name: 🔄 Получение репозитория
