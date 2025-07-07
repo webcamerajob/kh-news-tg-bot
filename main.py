@@ -216,8 +216,6 @@ def main():
     # 🚀 Запускаем постер, если есть статьи
     if catalog:
         trigger_poster()
-        response = httpx.post(…)
-        logging.info(f"→ dispatch status: {response.status_code}, body: {response.text}")
     else:
         logging.warning("⚠️ Catalog is empty — poster not triggered")
 
