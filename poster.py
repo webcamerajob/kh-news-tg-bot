@@ -4,6 +4,7 @@ import json
 import argparse
 import asyncio
 import logging
+import re
 from pathlib import Path
 from io import BytesIO
 
@@ -18,6 +19,13 @@ DEFAULT_POST_DELAY = 60.0   # пауза в секундах по умолчан
 
 # Путь к файлу каталога
 CATALOG_PATH = "articles/catalog.json"
+
+def escape_markdown(text: str) -> str:
+    """
+    ▶ Экранирует спецсимволы для MarkdownV2
+    """
+    markdown_chars = r'\_*[]()~`>#+-=|{}.!'
+    return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
 
 def load_catalog() -> list[dict]:
     if not os.path.isfile(CATALOG_PATH):
