@@ -33,9 +33,6 @@ def apply_watermark(image_path: str, watermark_path: str = "watermark.png") -> b
     base = Image.open(image_path).convert("RGBA")
     mark = Image.open(watermark_path).convert("RGBA")
 
-    ratio = base.width * 0.3 / mark.width
-    mark = mark.resize((int(mark.width * ratio), int(mark.height * ratio)), Image.ANTIALIAS)
-
         # выбираем фильтр ресэмплинга
     try:
         resample_filter = Image.Resampling.LANCZOS
