@@ -7,6 +7,9 @@ from datetime import datetime
 import time
 import os
 
+# глобальный таймаут для всех httpx.get/post
+DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -60,11 +63,6 @@ IMG_FILTER_CONFIG = {
 def fetch_category_id(slug="national") -> int:
     url = f"{BASE_URL}/categories?slug={slug}"
     #r = httpx.get(url, headers=HEADERS, timeout=30)
-    
-    from httpx import Timeout
-
-    DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0, pool=None)
-    r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
 
     r.raise_for_status()
     data = r.json()
@@ -78,11 +76,6 @@ def fetch_posts(cat_id, per_page=PER_PAGE, retries=3, backoff=5):
         try:
             #r = httpx.get(url, headers=HEADERS, timeout=30)
 
-            from httpx import Timeout
-
-    DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0, pool=None)
-    r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
-
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -93,12 +86,7 @@ def fetch_posts(cat_id, per_page=PER_PAGE, retries=3, backoff=5):
 
 def save_image(url, folder: Path):
     #r = httpx.get(url, headers=HEADERS, timeout=30)
-
-    from httpx import Timeout
-
-    DEFAULT_TIMEOUT = Timeout(connect=10.0, read=60.0, write=5.0, pool=None)
-    r = httpx.get(url, headers=HEADERS, timeout=DEFAULT_TIMEOUT)
-
+    
     r.raise_for_status()
     fn = url.split("/")[-1].split("?")[0]
     path = folder / fn
