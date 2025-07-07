@@ -92,10 +92,14 @@ async def main(limit: int | None):
             logging.info(f"🔔 Достигнут лимит {limit}, выходим")
             break
 
-        img_path = art.get("image_path")
-        if not img_path or not os.path.isfile(img_path):
-            logging.error(f"❌ Файл изображения не найден: {img_path}")
-            continue
+    imgs = art.get("images", [])
+    if not imgs:
+        logging.error(f"❌ Нет изображений для статьи ID={art.get('id')}")
+        continue
+   img_path = imgs[0]
+    if not os.path.isfile(img_path):
+        logging.error(f"❌ Файл изображения не найден: {img_path}")
+        continue
 
         photo = apply_watermark(img_path)
         caption = art.get("text", "")
