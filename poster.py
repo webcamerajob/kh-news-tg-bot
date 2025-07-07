@@ -113,7 +113,9 @@ async def main(limit: int | None):
 
         # 5) Водяной знак и отправка
         photo = apply_watermark(img_path)
-        caption = art.get("text", "")
+        text_path = art.get("text_file")
+        caption = Path(text_path).read_text(encoding="utf-8") if text_path else ""
+
         logging.info(f"▶️ Отправляем статью ID={art.get('id')}")
         ok = await safe_send_photo(client, token, chat_id, photo, caption)
         if ok:
