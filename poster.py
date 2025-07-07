@@ -68,6 +68,9 @@ async def safe_send_photo(client: httpx.AsyncClient, token: str,
 async def main(limit: int | None):
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s")
+    
+        # 1) Читаем задержку из ENV, иначе берём DEFAULT_POST_DELAY
+    delay = float(os.getenv("POST_DELAY", DEFAULT_POST_DELAY))
 
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
