@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["Парсер"]
     types:
-      - complete
+      - completed
     
   workflow_dispatch:
 
