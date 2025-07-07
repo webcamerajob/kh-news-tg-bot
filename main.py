@@ -212,15 +212,6 @@ def main():
         encoding="utf-8"
     )
     logging.info(f"📁 catalog.json saved: {catalog_path.resolve()} — {len(catalog)} articles")
-
-    # 🚀 Запускаем постер, если есть статьи
-    if catalog:
-        trigger_poster()
-    else:
-        logging.warning("⚠️ Catalog is empty — poster not triggered")
-
-    print("✅ main.py завершён")
-
     
 if __name__ == "__main__":
     main()
