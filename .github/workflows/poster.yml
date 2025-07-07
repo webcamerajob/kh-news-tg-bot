@@ -1,12 +1,8 @@
 name: Постер
 
 on:
-  workflow_run:
-    workflows: ["Парсер"]
-    types:
-      - completed
-    
-  workflow_dispatch:
+  repository_dispatch:
+    types: [start-poster]
 
 jobs:
   run-poster:
