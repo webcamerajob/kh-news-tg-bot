@@ -6,11 +6,21 @@ from pathlib import Path
 from datetime import datetime
 import time
 
-GITHUB_REPO = "webcamerajob/kh-news-tg-bot"  # замените на свой
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
+GITHUB_REPO = "webcamerajob/kh-news-tg-bot"
 TOKEN = os.environ.get("GH_TOKEN")
 URL = f"https://api.github.com/repos/{GITHUB_REPO}/dispatches"
 
 def trigger_poster():
+    if not TOKEN:
+        logging.warning("❌ GH_TOKEN не найден в переменных окружения")
+        return
+
     response = httpx.post(
         URL,
         headers={
@@ -20,15 +30,11 @@ def trigger_poster():
         json={"event_type": "start-poster"}
     )
     if response.status_code == 204:
-        print("🚀 Постер запущен через repository_dispatch")
+        logging.info("🚀 Постер запущен через repository_dispatch")
     else:
-        print(f"❌ Ошибка запуска: {response.text}")
+        logging.error(f"❌ Ошибка запуска: {response.text}")
         
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+
 
 BASE_URL      = "https://www.khmertimeskh.com/wp-json/wp/v2"
 OUTPUT_FOLDER = Path("articles")
