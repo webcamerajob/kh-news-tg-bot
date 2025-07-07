@@ -42,6 +42,11 @@ jobs:
         echo "→ Запуск main.py..."
         python3 main.py || echo "⚠️ main.py завершился с ошибкой"
 
+    - name: 🔍 Проверка содержимого articles/
+      run: |
+        ls -la articles/
+        cat articles/catalog.json || echo "⚠️ catalog.json пуст или не существует"
+        
     - name: 📁 Проверка catalog.json
       id: check_catalog
       run: |
