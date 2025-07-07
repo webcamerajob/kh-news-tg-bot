@@ -71,7 +71,13 @@ async def safe_send_photo(client: httpx.AsyncClient,
                           photo_bytes: bytes,
                           caption: str) -> bool:    
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"}
+    escaped = escape_markdown(caption)
+    data = {
+        "chat_id": chat_id,
+        "caption": escaped,
+        "parse_mode": "MarkdownV2"
+    }
+#    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"}
     files = {"photo": ("img.png", photo_bytes, "image/png")}
 
     for attempt in range(1, MAX_RETRIES + 1):
