@@ -9,6 +9,7 @@ from pathlib import Path
 from io import BytesIO
 
 import httpx
+from httpx import HTTPStatusError
 from PIL import Image
 
 # 1) Константы таймаутов и retry
@@ -61,9 +62,14 @@ def apply_watermark(image_path: str, watermark_path: str = "watermark.png") -> b
     base.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
 
-async def safe_send_photo(client: httpx.AsyncClient, token: str,
-                          chat_id: str, photo_bytes: bytes,
-                          caption: str) -> bool:
+# async def safe_send_photo(client: httpx.AsyncClient, token: str,
+#                          chat_id: str, photo_bytes: bytes,
+#                          caption: str) -> bool:
+async def safe_send_photo(client: httpx.AsyncClient,
+                          token: str,
+                          chat_id: str,
+                          photo_bytes: bytes,
+                          caption: str) -> bool:    
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"}
     files = {"photo": ("img.png", photo_bytes, "image/png")}
