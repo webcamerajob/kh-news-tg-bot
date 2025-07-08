@@ -16,6 +16,16 @@ from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
+import re
+# списком — все фразы/слова, которые нужно вырезать
+bad_patterns = [
+    r"синопсис\s*:\s*",    # «Синопсис :» и варианты
+    r"\(video inside\)",   # «(video inside)»
+    r"\bkhmer news\b"      # слово «khmer news»
+]
+# единое регулярное выражение с флагом IGNORECASE
+bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
+
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -213,14 +223,13 @@ def parse_and_save(
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
-        # Задайте ваш список «плохих» слов
-    bad_words = {"Synopsis: ", "(video inside)", "khmer news"}
-
-    # Проверим, есть ли такое слово в тексте (регистр не важен)
-    lowered = raw_text.lower()
-    if any(bw in lowered for bw in bad_words):
-        logging.info("Skipping ID=%s: contains banned words", aid)
-        return None
+        # ── Вырезаем все запрещённые слова/фразы ─────────────────────────────
+    # bad_re объявлен вверху модуля
+    raw_text = bad_re.sub("", raw_text)
+    # опционально: убираем лишние пробелы и пустые строки
+    raw_text = re.sub(r"[ \t]+", " ", raw_text)
+    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+    # ─────────────────────────────────────────────────────────────────────
 
     # Parallel image downloading with lazy-loading support
     img_dir = art_dir / "images"
