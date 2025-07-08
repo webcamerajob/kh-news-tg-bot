@@ -54,8 +54,8 @@ jobs:
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
-      - name: 🧠 Run parser --lang ru
-        run: python3 main.py
+      - name: 🧠 Run parser
+        run: python3 main.py --lang ru
 
       - name: 🛑 Teardown WireGuard
         if: always()
