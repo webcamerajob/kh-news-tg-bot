@@ -1,6 +1,0 @@
-httpx
-beautifulsoup4
-python-telegram-bot
-Pillow
-deep-translator
-deep-translator>=1.11.1
