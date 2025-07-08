@@ -14,19 +14,19 @@ from httpx import HTTPStatusError, ReadTimeout, Timeout
 from PIL import Image
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Logging configuration (only once)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-# HTTP retry parameters
-TIMEOUT       = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+# HTTP retry parameters for Telegram
+HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 60.0
-CATALOG_PATH  = Path("articles/catalog.json")
+
+CATALOG_PATH = Path("articles/catalog.json")
 
 
 def escape_markdown(text: str) -> str:
@@ -45,23 +45,15 @@ def chunk_text(
     """
     Делит text на чанки длиной <= size.
     Сохраняет двойные переводы строк как разделители параграфов.
-    Опция preserve_formatting:
-      - True: оставляет одиночные переводы строк внутри параграфов
-      - False: заменяет одиночные переводы строк на пробелы
     """
-    # Нормализуем переводы строк
     norm = text.replace('\r\n', '\n')
-    # Сплитим по пустой строке
     paras = [p for p in norm.split('\n\n') if p.strip()]
     if not preserve_formatting:
         paras = [re.sub(r'\n+', ' ', p) for p in paras]
 
-    chunks: List[str] = []
-    curr = ""
-
-    def _split_long_paragraph(p: str) -> List[str]:
-        parts: List[str] = []
-        sub = ""
+    chunks, curr = [], ""
+    def _split_long(p: str) -> List[str]:
+        parts, sub = [], ""
         for w in p.split(" "):
             if len(sub) + len(w) + 1 > size:
                 parts.append(sub)
@@ -77,7 +69,7 @@ def chunk_text(
             if curr:
                 chunks.append(curr)
                 curr = ""
-            chunks.extend(_split_long_paragraph(p))
+            chunks.extend(_split_long(p))
         else:
             if not curr:
                 curr = p
@@ -123,17 +115,22 @@ async def _post_with_retry(
     """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = await client.request(method, url, data=data, files=files, timeout=TIMEOUT)
+            resp = await client.request(
+                method, url, data=data, files=files, timeout=HTTPX_TIMEOUT
+            )
             resp.raise_for_status()
             return True
+
         except ReadTimeout:
             logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
+
         except HTTPStatusError as e:
             code = e.response.status_code
             if 400 <= code < 500:
                 logging.error("❌ %s %s: %s", method, code, e.response.text)
                 return False
             logging.warning("⚠️ %s %s, retrying %s/%s", method, code, attempt, MAX_RETRIES)
+
         await asyncio.sleep(RETRY_DELAY)
 
     logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
@@ -198,18 +195,27 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
 
 
-def save_catalog(catalog: List[Dict[str, Any]]) -> None:
+def save_catalog_atomic(catalog: List[Dict[str, Any]]) -> None:
     """
-    Сохраняет обновлённый каталог в JSON.
+    Сохраняет обновлённый каталог в JSON атомарно.
     """
-    CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
+    OUTPUT_DIR = CATALOG_PATH.parent
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CATALOG_PATH.with_suffix(".json.tmp")
+    text = json.dumps(catalog, ensure_ascii=False, indent=2)
+    # write to temp file
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    # atomic replace
+    os.replace(tmp, CATALOG_PATH)
 
 
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
     """
-    Проверяет наличие обязательных полей и возвращает
-    (title, text_file, image_paths) или None при ошибке.
+    Проверяет обязательные поля и возвращает
+    (first_para, text_file, image_paths) или None.
     """
     title = art.get("title")
     txt = art.get("text_file")
@@ -226,7 +232,14 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
         logging.error("No valid images for article %s", art.get("id"))
         return None
 
-    return title, Path(txt), valid_imgs
+    # читаем первый параграф для caption
+    raw = Path(txt).read_text(encoding="utf-8")
+    paras = [p for p in raw.split("\n\n") if p.strip()]
+    first_para = paras[0] if paras else ""
+    # обрезаем до 100 символов
+    caption = first_para if len(first_para) <= 100 else first_para[:99] + "…"
+
+    return caption, Path(txt), valid_imgs
 
 
 async def main(limit: Optional[int]):
@@ -238,7 +251,7 @@ async def main(limit: Optional[int]):
 
     delay   = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
     catalog = load_catalog()
-    client  = httpx.AsyncClient(timeout=TIMEOUT)
+    client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent    = 0
 
     for art in catalog:
@@ -250,20 +263,18 @@ async def main(limit: Optional[int]):
         validated = validate_article(art)
         if not validated:
             continue
-        title, text_path, images = validated
+        caption, text_path, images = validated
 
-        # prepare caption (<=1024 chars)
-        title_cap = f"*{escape_markdown(title)}*"
-        if len(title_cap) > 1024:
-            title_cap = title_cap[:1023] + "…"
-
-        # send media group
-        if not await send_media_group(client, token, chat_id, images, title_cap):
+        # send media group with first paragraph as caption
+        if not await send_media_group(client, token, chat_id, images, caption):
             continue
 
-        # send body chunks (preserve single newlines)
+        # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw, size=4096, preserve_formatting=True)
+        # удаляем первый параграф из отправки (он уже в caption)
+        if chunks:
+            chunks = chunks[1:]
         for part in chunks:
             await send_message(client, token, chat_id, part)
 
@@ -273,13 +284,18 @@ async def main(limit: Optional[int]):
         await asyncio.sleep(delay)
 
     await client.aclose()
-    save_catalog(catalog)
+    save_catalog_atomic(catalog)
     logging.info("📢 Done: sent %d articles", sent)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
-    parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="максимальное число статей для отправки")
+    parser = argparse.ArgumentParser(
+        description="Poster: публикует статьи пакетами"
+    )
+    parser.add_argument(
+        "-n", "--limit", type=int, default=None,
+        help="максимальное число статей для отправки"
+    )
     args = parser.parse_args()
     asyncio.run(main(limit=args.limit))
+```
