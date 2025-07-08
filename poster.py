@@ -232,12 +232,12 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
         logging.error("No valid images for article %s", art.get("id"))
         return None
 
-    # читаем первый параграф для caption
-    raw = Path(txt).read_text(encoding="utf-8")
-    paras = [p for p in raw.split("\n\n") if p.strip()]
-    first_para = paras[0] if paras else ""
-    # обрезаем до 100 символов
-    caption = first_para if len(first_para) <= 100 else first_para[:99] + "…"
+    # используем только заголовок статьи в качестве подписи
+    # экранируем MarkdownV2 и обрезаем до 100 символов
+    from .poster import escape_markdown  # или если функция в том же файле, просто вызов
+    raw_title = title.strip()
+    short = raw_title if len(raw_title) <= 100 else raw_title[:99] + "…"
+    caption = escape_markdown(short)
 
     return caption, Path(txt), valid_imgs
 
