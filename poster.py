@@ -5,149 +5,281 @@ import argparse
 import asyncio
 import logging
 import re
-from typing import List
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from io import BytesIO
 
 import httpx
-from httpx import HTTPStatusError
+from httpx import HTTPStatusError, ReadTimeout, Timeout
 from PIL import Image
 
-# таймауты, ретраи, пауза
-TIMEOUT       = httpx.Timeout(10.0, read=60.0, write=10.0, pool=5.0)
+# ──────────────────────────────────────────────────────────────────────────────
+# Logging configuration (only once)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# HTTP retry parameters
+TIMEOUT       = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
-RETRY_DELAY   = 5
+RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 60.0
-CATALOG_PATH  = "articles/catalog.json"
+CATALOG_PATH  = Path("articles/catalog.json")
+
 
 def escape_markdown(text: str) -> str:
+    """
+    Экранирует спецсимволы для MarkdownV2.
+    """
     markdown_chars = r'\_*[]()~`>#+-=|{}.!'
     return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
 
-def chunk_text(text: str, size: int = 4096) -> List[str]:
-    words = text.split(" ")
-    chunks, curr = [], ""
-    for w in words:
-        if len(curr) + len(w) + 1 > size:
-            chunks.append(curr); curr = w
+
+def chunk_text(
+    text: str,
+    size: int = 4096,
+    preserve_formatting: bool = True
+) -> List[str]:
+    """
+    Делит text на чанки длиной <= size.
+    Сохраняет двойные переводы строк как разделители параграфов.
+    Опция preserve_formatting:
+      - True: оставляет одиночные переводы строк внутри параграфов
+      - False: заменяет одиночные переводы строк на пробелы
+    """
+    # Нормализуем переводы строк
+    norm = text.replace('\r\n', '\n')
+    # Сплитим по пустой строке
+    paras = [p for p in norm.split('\n\n') if p.strip()]
+    if not preserve_formatting:
+        paras = [re.sub(r'\n+', ' ', p) for p in paras]
+
+    chunks: List[str] = []
+    curr = ""
+
+    def _split_long_paragraph(p: str) -> List[str]:
+        parts: List[str] = []
+        sub = ""
+        for w in p.split(" "):
+            if len(sub) + len(w) + 1 > size:
+                parts.append(sub)
+                sub = w
+            else:
+                sub = (sub + " " + w).lstrip()
+        if sub:
+            parts.append(sub)
+        return parts
+
+    for p in paras:
+        if len(p) > size:
+            if curr:
+                chunks.append(curr)
+                curr = ""
+            chunks.extend(_split_long_paragraph(p))
         else:
-            curr = (curr + " " + w).lstrip()
-    if curr: chunks.append(curr)
+            if not curr:
+                curr = p
+            elif len(curr) + 2 + len(p) <= size:
+                curr += "\n\n" + p
+            else:
+                chunks.append(curr)
+                curr = p
+
+    if curr:
+        chunks.append(curr)
     return chunks
 
-def apply_watermark(img_path: str) -> bytes:
+
+def apply_watermark(img_path: Path, scale: float = 0.45) -> bytes:
+    """
+    Накладывает watermark.png (45% ширины) в правый верхний угол изображения.
+    """
     base = Image.open(img_path).convert("RGBA")
-    mark = Image.open("watermark.png").convert("RGBA")
+    wm = Image.open("watermark.png").convert("RGBA")
     try:
         filt = Image.Resampling.LANCZOS
     except AttributeError:
         filt = Image.LANCZOS
-    ratio = base.width * 0.3 / mark.width
-    mark = mark.resize((int(mark.width*ratio), int(mark.height*ratio)), resample=filt)
-    base.paste(mark, (base.width-mark.width,0), mark)
-    buf = BytesIO(); base.convert("RGB").save(buf, "PNG")
+    ratio = base.width * scale / wm.width
+    wm = wm.resize((int(wm.width * ratio), int(wm.height * ratio)), resample=filt)
+    base.paste(wm, (base.width - wm.width, 0), wm)
+    buf = BytesIO()
+    base.convert("RGB").save(buf, "PNG")
     return buf.getvalue()
 
-async def safe_send_photo(
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    data: Dict[str, Any],
+    files: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Общая логика HTTP POST с retry.
+    4xx — без retry, 5xx и таймауты — retry.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = await client.request(method, url, data=data, files=files, timeout=TIMEOUT)
+            resp.raise_for_status()
+            return True
+        except ReadTimeout:
+            logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
+        except HTTPStatusError as e:
+            code = e.response.status_code
+            if 400 <= code < 500:
+                logging.error("❌ %s %s: %s", method, code, e.response.text)
+                return False
+            logging.warning("⚠️ %s %s, retrying %s/%s", method, code, attempt, MAX_RETRIES)
+        await asyncio.sleep(RETRY_DELAY)
+
+    logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
+    return False
+
+
+async def send_media_group(
     client: httpx.AsyncClient,
     token: str,
     chat_id: str,
-    photo: bytes,
+    images: List[Path],
     caption: str
 ) -> bool:
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    data = {
-        "chat_id": chat_id,
-        "caption": escape_markdown(caption),
-        "parse_mode": "MarkdownV2"
-    }
-    files = {"photo": ("img.png", photo, "image/png")}
+    """
+    Отправляет несколько фото как альбом. Подпись даётся первому фото.
+    """
+    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+    media, files = [], {}
+    for idx, img in enumerate(images):
+        key = f"photo{idx}"
+        img_bytes = apply_watermark(img)
+        files[key] = (img.name, img_bytes, "image/png")
+        item = {"type": "photo", "media": f"attach://{key}"}
+        if idx == 0:
+            item["caption"] = escape_markdown(caption)
+            item["parse_mode"] = "MarkdownV2"
+        media.append(item)
 
-    for i in range(1, MAX_RETRIES+1):
-        try:
-            resp = await client.post(url, data=data, files=files, timeout=TIMEOUT)
-            resp.raise_for_status()
-            return True
-        except httpx.ReadTimeout:
-            logging.warning(f"⏱ Timeout {i}/{MAX_RETRIES}, retry in {RETRY_DELAY}s")
-        except httpx.HTTPStatusError as e:
-            logging.error(f"❌ {e.response.status_code}: {e.response.text}")
-            return False
-        await asyncio.sleep(RETRY_DELAY)
-    return False
+    data = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
+    return await _post_with_retry(client, "POST", url, data, files)
 
-async def safe_send_message(
+
+async def send_message(
     client: httpx.AsyncClient,
     token: str,
     chat_id: str,
     text: str
 ) -> bool:
+    """
+    Отправляет текстовое сообщение.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {
         "chat_id": chat_id,
         "text": escape_markdown(text),
         "parse_mode": "MarkdownV2"
     }
-    for i in range(1, MAX_RETRIES+1):
-        try:
-            resp = await client.post(url, data=data, timeout=TIMEOUT)
-            resp.raise_for_status()
-            return True
-        except httpx.ReadTimeout:
-            logging.warning(f"⏱ Timeout {i}/{MAX_RETRIES}, retry in {RETRY_DELAY}s")
-        except httpx.HTTPStatusError as e:
-            logging.error(f"❌ {e.response.status_code}: {e.response.text}")
-            return False
-        await asyncio.sleep(RETRY_DELAY)
-    return False
+    return await _post_with_retry(client, "POST", url, data, None)
 
-def load_catalog() -> List[dict]:
-    return json.loads(Path(CATALOG_PATH).read_text()) if Path(CATALOG_PATH).exists() else []
 
-def save_catalog(c: List[dict]) -> None:
-    Path(CATALOG_PATH).write_text(json.dumps(c, ensure_ascii=False, indent=2))
+def load_catalog() -> List[Dict[str, Any]]:
+    """
+    Загружает и возвращает список артиклей из JSON.
+    """
+    if not CATALOG_PATH.is_file():
+        logging.error("catalog.json not found at %s", CATALOG_PATH)
+        return []
+    try:
+        return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        logging.error("JSON decode error: %s", e)
+        return []
 
-async def main(limit: int | None):
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
 
+def save_catalog(catalog: List[Dict[str, Any]]) -> None:
+    """
+    Сохраняет обновлённый каталог в JSON.
+    """
+    CATALOG_PATH.write_text(json.dumps(catalog, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+
+
+def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
+    """
+    Проверяет наличие обязательных полей и возвращает
+    (title, text_file, image_paths) или None при ошибке.
+    """
+    title = art.get("title")
+    txt = art.get("text_file")
+    imgs = art.get("images", [])
+
+    if not title or not isinstance(title, str):
+        logging.error("Missing or invalid title in article %s", art.get("id"))
+        return None
+    if not txt or not Path(txt).is_file():
+        logging.error("Missing or invalid text_file in article %s", art.get("id"))
+        return None
+    valid_imgs = [Path(p) for p in imgs if Path(p).is_file()]
+    if not valid_imgs:
+        logging.error("No valid images for article %s", art.get("id"))
+        return None
+
+    return title, Path(txt), valid_imgs
+
+
+async def main(limit: Optional[int]):
     token   = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
+    if not token or not chat_id:
+        logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
+        return
+
     delay   = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
     catalog = load_catalog()
     client  = httpx.AsyncClient(timeout=TIMEOUT)
     sent    = 0
 
     for art in catalog:
-        if art.get("posted"): continue
-        if limit and sent >= limit: break
+        if art.get("posted"):
+            continue
+        if limit and sent >= limit:
+            break
 
-        imgs = art.get("images", [])
-        if not imgs: continue
+        validated = validate_article(art)
+        if not validated:
+            continue
+        title, text_path, images = validated
 
-        # формируем подпись: заголовок жирным + первый чанк текста
-        raw = Path(art["text_file"]).read_text(encoding="utf-8")
-        title = f"*{escape_markdown(art['title'])}*"
-        chunks = chunk_text(raw)
-        first_cap = title + ("\n\n" + chunks[0] if chunks else "")
-        
-        photo = apply_watermark(imgs[0])
-        logging.info(f"▶️ Отправляем ID={art['id']}")
-        if await safe_send_photo(client, token, chat_id, photo, first_cap):
-            art["posted"] = True; sent += 1
-            # остальные чанки как сообщения
-            for part in chunks[1:]:
-                await safe_send_message(client, token, chat_id, part)
+        # prepare caption (<=1024 chars)
+        title_cap = f"*{escape_markdown(title)}*"
+        if len(title_cap) > 1024:
+            title_cap = title_cap[:1023] + "…"
 
-        logging.info(f"⏳ Sleep {delay}s")
+        # send media group
+        if not await send_media_group(client, token, chat_id, images, title_cap):
+            continue
+
+        # send body chunks (preserve single newlines)
+        raw = text_path.read_text(encoding="utf-8")
+        chunks = chunk_text(raw, size=4096, preserve_formatting=True)
+        for part in chunks:
+            await send_message(client, token, chat_id, part)
+
+        art["posted"] = True
+        sent += 1
+        logging.info("✅ Posted ID=%s", art.get("id"))
         await asyncio.sleep(delay)
 
     await client.aclose()
     save_catalog(catalog)
-    logging.info(f"📢 Done: {sent} sent")
+    logging.info("📢 Done: sent %d articles", sent)
+
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("-n","--limit",type=int,default=None)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
+    parser.add_argument("-n", "--limit", type=int, default=None,
+                        help="максимальное число статей для отправки")
+    args = parser.parse_args()
     asyncio.run(main(limit=args.limit))
