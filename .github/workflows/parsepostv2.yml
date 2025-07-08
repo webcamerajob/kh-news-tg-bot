@@ -100,6 +100,8 @@ jobs:
           fetch-depth: 1
           sparse-checkout: |
             poster.py
+            requirements-poster.txt
+            watermark.png
 
       - name: 📦 Cache poster pip
         uses: actions/cache@v3
