@@ -15,6 +15,11 @@ from httpx import Timeout, HTTPStatusError, ReadTimeout, TransportError
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
+import cloudscraper
+
+# создаём скрапер, который умеет «решать» Cloudflare
+SCRAPER = cloudscraper.create_scraper()
+
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +39,7 @@ def fetch_category_id(slug: str = "national") -> int:
     url = f"https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = httpx.get(url, timeout=TIMEOUT)
+            resp = SCRAPER.get(url, timeout=TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             if not data:
@@ -56,7 +61,7 @@ def fetch_posts(cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
     )
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = httpx.get(url, timeout=TIMEOUT)
+            resp = SCRAPER.get(url, timeout=TIMEOUT)
             resp.raise_for_status()
             return resp.json()
         except (ReadTimeout, TransportError):
@@ -75,7 +80,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
     dest = folder / fn
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = httpx.get(src_url, timeout=TIMEOUT)
+            resp = SCRAPER.get(src_url, timeout=TIMEOUT)
             resp.raise_for_status()
             dest.write_bytes(resp.content)
             return str(dest)
