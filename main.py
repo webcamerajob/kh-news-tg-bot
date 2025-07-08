@@ -35,13 +35,16 @@ OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 
 
+SCRAPER = cloudscraper.create_scraper()
+
 def fetch_category_id(slug: str = "national") -> int:
+
     url = f"https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = SCRAPER.get(url, timeout=TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
+            r = SCRAPER.get(url, timeout=TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
             if not data:
                 raise RuntimeError(f"Category “{slug}” not found")
             return data[0]["id"]
@@ -53,8 +56,10 @@ def fetch_category_id(slug: str = "national") -> int:
         time.sleep(RETRY_DELAY)
     raise RuntimeError("Failed fetching category id")
 
+SCRAPER = cloudscraper.create_scraper()
 
 def fetch_posts(cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
+
     url = (
         f"https://www.khmertimeskh.com/wp-json/wp/v2"
         f"/posts?categories={cat_id}&per_page={per_page}&_embed"
@@ -74,15 +79,19 @@ def fetch_posts(cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
     return []
 
 
+SCRAPER = cloudscraper.create_scraper()
+
 def save_image(src_url: str, folder: Path) -> Optional[str]:
+
     folder.mkdir(parents=True, exist_ok=True)
     fn = src_url.split("/")[-1].split("?")[0]
     dest = folder / fn
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = SCRAPER.get(src_url, timeout=TIMEOUT)
-            resp.raise_for_status()
-            dest.write_bytes(resp.content)
+            r = SCRAPER.get(src_url, timeout=TIMEOUT)
+            r.raise_for_status()
+            dest.write_bytes(r.content)
             return str(dest)
         except (ReadTimeout, TransportError):
             logging.warning("Timeout saving image %s (attempt %s/%s)", fn, attempt, MAX_RETRIES)
