@@ -196,6 +196,14 @@ def parse_and_save(
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
+        # Задайте ваш список «плохих» слов
+    bad_words = {"Synopsis: ", "(video inside)", "khmer news"}
+
+    # Проверим, есть ли такое слово в тексте (регистр не важен)
+    lowered = raw_text.lower()
+    if any(bw in lowered for bw in bad_words):
+        logging.info("Skipping ID=%s: contains banned words", aid)
+        return None
 
     # Parallel image downloading with lazy-loading support
     img_dir = art_dir / "images"
