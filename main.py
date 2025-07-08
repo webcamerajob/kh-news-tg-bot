@@ -277,10 +277,15 @@ def parse_and_save(
         if old.get("hash") != h or old.get("translated_to") != translate_to:
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
+                    # применяем фильтр ко всем параграфам перед переводом
+                    clean_paras = [bad_re.sub("", p) for p in paras]
+
+                    # переводим уже очищенные абзацы
                     trans = [
-                        GoogleTranslator(source="auto", target=translate_to).translate(p)
-                        for p in paras
+                         GoogleTranslator(source="auto", target=translate_to).translate(p)
+                         for p in clean_paras
                     ]
+
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     txt_t.write_text("\n\n".join(trans), encoding="utf-8")
                     meta.update({
