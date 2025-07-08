@@ -144,7 +144,7 @@ jobs:
       - name: 📤 Run poster (batch)
         run: |
           set -e
-          python3 poster.py --limit ${{ env.BATCH_LIMIT }}
+          python3 poster.py --limit ${{ env.BATCH_LIMIT }}  --lang ru
 
       - name: 📝 Upload catalog-after-posting
         uses: actions/upload-artifact@v4
