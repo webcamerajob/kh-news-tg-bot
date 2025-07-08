@@ -215,7 +215,7 @@ def save_catalog_atomic(catalog: List[Dict[str, Any]]) -> None:
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
     """
     Проверяет обязательные поля и возвращает
-    (first_para, text_file, image_paths) или None.
+    (caption, text_file, image_paths) или None.
     """
     title = art.get("title")
     txt = art.get("text_file")
