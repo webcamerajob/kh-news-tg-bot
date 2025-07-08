@@ -19,6 +19,8 @@ import cloudscraper
 
 # создаём скрапер, который умеет «решать» Cloudflare
 SCRAPER = cloudscraper.create_scraper()
+# кортеж: (connect_timeout, read_timeout)
+SCRAPER_TIMEOUT = (10.0, 60.0)
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -42,7 +44,7 @@ def fetch_category_id(slug: str = "national") -> int:
     url = f"https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = SCRAPER.get(url, timeout=TIMEOUT)
+            r = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
             data = r.json()
             if not data:
