@@ -34,6 +34,20 @@ OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 # ──────────────────────────────────────────────────────────────────────────────
 
+def extract_img_url(img_tag):
+    """
+    Возвращает первый валидный URL картинки из тега <img>,
+    проверяя атрибуты data-src, srcset и src.
+    """
+    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
+        val = img_tag.get(attr)
+        if not val:
+            continue
+        # если это srcset или data-srcset, берём первую пару URL
+        parts = val.split()
+        if parts:
+            return parts[0]
+    return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
@@ -183,13 +197,28 @@ def parse_and_save(
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
 
-    # загружаем картинки параллельно
-    img_dir = art_dir / "images"; images = []
-    srcs = [img.get("src") for img in soup.find_all("img") if img.get("src")]
+    # Parallel image downloading with lazy-loading support
+    img_dir = art_dir / "images"
+    images: List[str] = []
+
+    srcs = []
+    for img in soup.find_all("img"):
+        url = extract_img_url(img)
+        if url:
+            srcs.append(url)
+
     with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
         for fut in as_completed(futures):
             if path := fut.result():
+                images.append(path)
+
+    # если после этого нет images, попробуем media embedded из API
+    if not images and "_embedded" in post:
+        media = post["_embedded"].get("wp:featuredmedia")
+        if media and media[0].get("source_url"):
+            path = save_image(media[0]["source_url"], img_dir)
+            if path:
                 images.append(path)
 
     if not images:
