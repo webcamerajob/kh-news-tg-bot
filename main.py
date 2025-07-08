@@ -267,4 +267,12 @@ if __name__ == "__main__":
     parser.add_argument("-l", "--lang", type=str, default="",
                         help="Translate content to this language code (e.g. 'ru')")
     args = parser.parse_args()
-    main(limit=args.limit, translate_to=args.lang)
+
+    try:
+        # основной запуск
+        main(limit=args.limit, translate_to=args.lang)
+    except Exception:
+        # выводим полную трассировку и возвращаем код 1
+        logging.exception("Unhandled exception in main:")
+        exit(1)
+
