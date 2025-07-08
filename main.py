@@ -6,21 +6,15 @@ import logging
 import re
 import hashlib
 import time
-from typing import Any, Dict, List, Optional, Tuple
-from pathlib import Path
-from io import BytesIO
 
-import httpx
-from httpx import Timeout, HTTPStatusError, ReadTimeout, TransportError
-from deep_translator import GoogleTranslator
-from bs4 import BeautifulSoup
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cloudscraper
-
-# создаём скрапер, который умеет «решать» Cloudflare
-SCRAPER = cloudscraper.create_scraper()
-# кортеж: (connect_timeout, read_timeout)
-SCRAPER_TIMEOUT = (10.0, 60.0)
+from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
+from deep_translator import GoogleTranslator
+from bs4 import BeautifulSoup
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -29,79 +23,89 @@ logging.basicConfig(
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-TIMEOUT      = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES  = 3
-RETRY_DELAY  = 5.0
+# cloudscraper для обхода Cloudflare
+SCRAPER = cloudscraper.create_scraper()
+SCRAPER_TIMEOUT = (10.0, 60.0)    # (connect_timeout, read_timeout) в секундах
+
+MAX_RETRIES = 3
+BASE_DELAY  = 2.0                 # базовый интервал для backoff (сек)
 
 OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
+# ──────────────────────────────────────────────────────────────────────────────
 
 
-SCRAPER = cloudscraper.create_scraper()
-
-def fetch_category_id(slug: str = "national") -> int:
-
-    url = f"https://www.khmertimeskh.com/wp-json/wp/v2/categories?slug={slug}"
+def fetch_category_id(base_url: str, slug: str) -> int:
+    endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
+            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
             data = r.json()
             if not data:
-                raise RuntimeError(f"Category “{slug}” not found")
+                raise RuntimeError(f"Category '{slug}' not found")
             return data[0]["id"]
-        except (ReadTimeout, TransportError):
-            logging.warning("Timeout fetching category (attempt %s/%s)", attempt, MAX_RETRIES)
-        except HTTPStatusError as e:
-            logging.error("HTTP %s fetching category: %s", e.response.status_code, e.response.text)
+
+        except (ReqTimeout, RequestException) as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(
+                "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
+                attempt, MAX_RETRIES, e, delay
+            )
+            time.sleep(delay)
+
+        except json.JSONDecodeError as e:
+            logging.error("JSON decode error for categories: %s", e)
             break
-        time.sleep(RETRY_DELAY)
+
     raise RuntimeError("Failed fetching category id")
 
-SCRAPER = cloudscraper.create_scraper()
 
-def fetch_posts(cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-
-    url = (
-        f"https://www.khmertimeskh.com/wp-json/wp/v2"
-        f"/posts?categories={cat_id}&per_page={per_page}&_embed"
-    )
+def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
+    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = SCRAPER.get(url, timeout=TIMEOUT)
-            resp.raise_for_status()
-            return resp.json()
-        except (ReadTimeout, TransportError):
-            logging.warning("Timeout fetching posts (attempt %s/%s)", attempt, MAX_RETRIES)
-        except HTTPStatusError as e:
-            logging.error("HTTP %s fetching posts: %s", e.response.status_code, e.response.text)
+            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+
+        except (ReqTimeout, RequestException) as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(
+                "Timeout fetching posts (try %s/%s): %s; retry in %.1fs",
+                attempt, MAX_RETRIES, e, delay
+            )
+            time.sleep(delay)
+
+        except json.JSONDecodeError as e:
+            logging.error("JSON decode error for posts: %s", e)
             break
-        time.sleep(RETRY_DELAY)
+
     logging.error("Giving up fetching posts")
     return []
 
 
-SCRAPER = cloudscraper.create_scraper()
-
 def save_image(src_url: str, folder: Path) -> Optional[str]:
-
     folder.mkdir(parents=True, exist_ok=True)
-    fn = src_url.split("/")[-1].split("?")[0]
+    fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
     dest = folder / fn
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = SCRAPER.get(src_url, timeout=TIMEOUT)
+            r = SCRAPER.get(src_url, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
             dest.write_bytes(r.content)
             return str(dest)
-        except (ReadTimeout, TransportError):
-            logging.warning("Timeout saving image %s (attempt %s/%s)", fn, attempt, MAX_RETRIES)
-        except HTTPStatusError as e:
-            logging.error("HTTP %s saving image %s", e.response.status_code, fn)
-            break
-        time.sleep(RETRY_DELAY)
-    logging.error("Failed saving image %s", fn)
+
+        except (ReqTimeout, RequestException) as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(
+                "Timeout saving image %s (try %s/%s): %s; retry in %.1fs",
+                fn, attempt, MAX_RETRIES, e, delay
+            )
+            time.sleep(delay)
+
+    logging.error("Failed saving image %s after %s attempts", fn, MAX_RETRIES)
     return None
 
 
@@ -129,17 +133,16 @@ def chunk_text(
     preserve_formatting: bool = True
 ) -> List[str]:
     norm = text.replace('\r\n', '\n')
-    paras = [p for p in norm.split("\n\n") if p.strip()]
+    paras = [p for p in norm.split('\n\n') if p.strip()]
     if not preserve_formatting:
         paras = [re.sub(r'\n+', ' ', p) for p in paras]
 
     chunks, curr = [], ""
-    def split_long(p: str) -> List[str]:
+    def _split_long(p: str) -> List[str]:
         parts, sub = [], ""
         for w in p.split(" "):
             if len(sub) + len(w) + 1 > size:
-                parts.append(sub)
-                sub = w
+                parts.append(sub); sub = w
             else:
                 sub = (sub + " " + w).lstrip()
         if sub:
@@ -149,130 +152,125 @@ def chunk_text(
     for p in paras:
         if len(p) > size:
             if curr:
-                chunks.append(curr)
-                curr = ""
-            chunks.extend(split_long(p))
+                chunks.append(curr); curr = ""
+            chunks.extend(_split_long(p))
         else:
             if not curr:
                 curr = p
             elif len(curr) + 2 + len(p) <= size:
                 curr += "\n\n" + p
             else:
-                chunks.append(curr)
-                curr = p
+                chunks.append(curr); curr = p
 
     if curr:
         chunks.append(curr)
     return chunks
 
 
-def parse_and_save(post: Dict[str, Any], translate_to: str) -> Dict[str, Any]:
+def parse_and_save(
+    post: Dict[str, Any],
+    translate_to: str,
+    base_url: str
+) -> Optional[Dict[str, Any]]:
     aid, slug = post["id"], post["slug"]
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
 
-    meta_path = art_dir / "meta.json"
-    old_meta = {}
-    if meta_path.exists():
-        old_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    title = BeautifulSoup(post["title"]["rendered"], "html.parser")\
+            .get_text(strip=True)
 
-    meta: Dict[str, Any] = {
-        "id": aid,
-        "slug": slug,
-        "date": post.get("date"),
-        "link": post.get("link"),
-        "title": BeautifulSoup(post["title"]["rendered"], "html.parser")
-                 .get_text(strip=True),
-        "posted": old_meta.get("posted", False)
-    }
-
-    # extract paragraphs
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
-    raw = "\n\n".join(paras)
-    hash_raw = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    raw_text = "\n\n".join(paras)
 
-    translated = False
+    # загружаем картинки параллельно
+    img_dir = art_dir / "images"; images = []
+    srcs = [img.get("src") for img in soup.find_all("img") if img.get("src")]
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
+        for fut in as_completed(futures):
+            if path := fut.result():
+                images.append(path)
+
+    if not images:
+        logging.warning("No images for ID=%s; skipping", aid)
+        return None
+
+    meta = {
+        "id": aid, "slug": slug,
+        "date": post.get("date"), "link": post.get("link"),
+        "title": title,
+        "text_file": str(art_dir / "content.txt"),
+        "images": images, "posted": False
+    }
+    (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
+
+    # перевод
     if translate_to:
-        if old_meta.get("hash") == hash_raw and old_meta.get("translated_to") == translate_to:
-            translated = True
-            paras = json.loads(old_meta.get("translated_paras", "[]"))
-            logging.info("Using cached translation %s for ID=%s", translate_to, aid)
-        else:
-            for attempt in range(1, MAX_RETRIES+1):
+        h = hashlib.sha256(raw_text.encode()).hexdigest()
+        old = {}
+        if (art_dir / "meta.json").exists():
+            old = json.loads((art_dir / "meta.json").read_text(encoding="utf-8"))
+        if old.get("hash") != h or old.get("translated_to") != translate_to:
+            for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    paras = [
+                    trans = [
                         GoogleTranslator(source="auto", target=translate_to).translate(p)
                         for p in paras
                     ]
-                    translated = True
+                    txt_t = art_dir / f"content.{translate_to}.txt"
+                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
+                    meta.update({
+                        "translated_to": translate_to,
+                        "hash": h,
+                        "translated_paras": trans,
+                        "translated_file": str(txt_t),
+                        "text_file": str(txt_t)
+                    })
                     break
                 except Exception as e:
-                    logging.warning("Translate attempt %s failed: %s", attempt, e)
-                    time.sleep(2)
+                    delay = BASE_DELAY * 2 ** (attempt - 1)
+                    logging.warning("Translate try %s failed: %s; retry in %.1fs", attempt, e, delay)
+                    time.sleep(delay)
+        else:
+            logging.info("Using cached translation %s for ID=%s", translate_to, aid)
 
-    txt_orig = art_dir / "content.txt"
-    txt_orig.write_text(raw, encoding="utf-8")
-    meta["text_file"] = str(txt_orig)
+    with open(art_dir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    if translated:
-        meta["translated_to"] = translate_to
-        meta["hash"] = hash_raw
-        meta["translated_paras"] = json.dumps(paras, ensure_ascii=False)
-        out = art_dir / f"content.{translate_to}.txt"
-        out.write_text("\n\n".join(paras), encoding="utf-8")
-        meta["translated_file"] = str(out)
-        meta["text_file"] = str(out)
-    else:
-        meta["translated_to"] = False
-        meta["hash"] = hash_raw
-
-    # download images
-    img_dir = art_dir / "images"
-    images = []
-    for img in soup.find_all("img"):
-        src = img.get("src")
-        if not src:
-            continue
-        path = save_image(src, img_dir)
-        if path:
-            images.append(path)
-    meta["images"] = images
-
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
-                         encoding="utf-8")
     return meta
 
 
-def main(limit: Optional[int], translate_to: str):
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    cid = fetch_category_id("national")
-    posts = fetch_posts(cid)
+def main():
+    parser = argparse.ArgumentParser(description="Parser with translation")
+    parser.add_argument("--base-url", type=str,
+                        default="https://www.khmertimeskh.com",
+                        help="WP site base URL")
+    parser.add_argument("--slug", type=str, default="national",
+                        help="Category slug")
+    parser.add_argument("-n", "--limit", type=int, default=None,
+                        help="Max posts to parse")
+    parser.add_argument("-l", "--lang", type=str, default="",
+                        help="Translate to language code")
+    args = parser.parse_args()
 
-    catalog: List[Dict[str, Any]] = []
-    subset = posts if limit is None else posts[:limit]
-    for post in subset:
-        meta = parse_and_save(post, translate_to)
-        catalog.append(meta)
-        logging.info("Parsed and saved ID=%s", meta["id"])
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cid   = fetch_category_id(args.base_url, args.slug)
+    posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
+
+    catalog = load_catalog()
+    for post in posts[: args.limit or len(posts)]:
+        if meta := parse_and_save(post, args.lang, args.base_url):
+            catalog.append(meta)
+            logging.info("Saved ID=%s", meta["id"])
 
     save_catalog(catalog)
-    logging.info("Catalog saved: %s (%d articles)", CATALOG_PATH, len(catalog))
+    logging.info("Done: %d articles in catalog", len(catalog))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Parser with translation")
-    parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="Max number of posts to parse")
-    parser.add_argument("-l", "--lang", type=str, default="",
-                        help="Translate content to this language code (e.g. 'ru')")
-    args = parser.parse_args()
-
     try:
-        # основной запуск
-        main(limit=args.limit, translate_to=args.lang)
+        main()
     except Exception:
-        # выводим полную трассировку и возвращаем код 1
         logging.exception("Unhandled exception in main:")
         exit(1)
-
