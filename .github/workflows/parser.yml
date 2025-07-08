@@ -40,6 +40,11 @@ jobs:
         echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
         echo "🌐 VPN IP: $(curl -s https://ipinfo.io/ip)"
 
+    - name: 💾 Install parser dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip3 install -r requirements-parser.txt deep-translator cloudscraper
+
     - name: 🧠 Запуск парсера
       run: |
         echo "→ Запуск main.py..."
