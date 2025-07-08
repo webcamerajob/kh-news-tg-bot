@@ -252,4 +252,3 @@ if __name__ == "__main__":
                         help="Translate content to this language code (e.g. 'ru')")
     args = parser.parse_args()
     main(limit=args.limit, translate_to=args.lang)
-```
