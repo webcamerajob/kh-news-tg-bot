@@ -272,11 +272,17 @@ async def main(limit: Optional[int]):
         # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw, size=4096, preserve_formatting=True)
-        # удаляем первый параграф из отправки (он уже в caption)
-        if chunks:
-            chunks = chunks[1:]
-        for part in chunks:
+
+        # Если чанков несколько — убираем первый (он в caption),
+        # иначе — шлём единственный
+        if len(chunks) > 1:
+            body_chunks = chunks[1:]
+        else:
+            body_chunks = chunks
+
+        for part in body_chunks:
             await send_message(client, token, chat_id, part)
+
 
         art["posted"] = True
         sent += 1
