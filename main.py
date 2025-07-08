@@ -190,8 +190,25 @@ def parse_and_save(
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
 
-    title = BeautifulSoup(post["title"]["rendered"], "html.parser")\
-            .get_text(strip=True)
+    # извлекаем оригинальный заголовок
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser")\
+                 .get_text(strip=True)
+    title = orig_title
+
+    # переводим заголовок, если задан язык
+    if translate_to:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                title = GoogleTranslator(source="auto", target=translate_to)\
+                        .translate(orig_title)
+                break
+            except Exception as e:
+                delay = BASE_DELAY * 2 ** (attempt - 1)
+                logging.warning(
+                    "Translate title attempt %s failed: %s; retry in %.1fs",
+                    attempt, e, delay
+                )
+                time.sleep(delay)
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
