@@ -19,9 +19,9 @@ from bs4 import BeautifulSoup
 import re
 # списком — все фразы/слова, которые нужно вырезать
 bad_patterns = [
-    r"синопсис\s*:\s*",    # «Синопсис :» и варианты
+    r"synopsis\s*:\s*",    # «Synopsis»
     r"\(video inside\)",   # «(video inside)»
-    r"\bkhmer news\b"      # слово «khmer times»
+    r"\bkhmer  times\b"      # слово «khmer times»
 ]
 # единое регулярное выражение с флагом IGNORECASE
 bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
