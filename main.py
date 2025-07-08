@@ -21,7 +21,7 @@ import re
 bad_patterns = [
     r"синопсис\s*:\s*",    # «Синопсис :» и варианты
     r"\(video inside\)",   # «(video inside)»
-    r"\bkhmer news\b"      # слово «khmer news»
+    r"\bkhmer news\b"      # слово «khmer times»
 ]
 # единое регулярное выражение с флагом IGNORECASE
 bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
