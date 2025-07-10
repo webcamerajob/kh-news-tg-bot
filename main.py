@@ -6,8 +6,7 @@ import logging
 import re
 import hashlib
 import time
-import fcntl  # ADDED: для блокировки файла
-
+import fcntl
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,46 +16,46 @@ from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
-# списком — все фразы/слова, которые нужно вырезать
+# Фильтры для удаления нежелательных фраз
 bad_patterns = [
-    r"synopsis\s*:\s*",    # «Synopsis»
-    r"\(video inside\)",   # «(video inside)»
-    r"\bkhmer times\b"      # слово «khmer times»
+    r"synopsis\s*:\s*",
+    r"\(video inside\)",
+    r"\bkhmer times\b"
 ]
-# единое регулярное выражение с флагом IGNORECASE
 bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
 
-# ──────────────────────────────────────────────────────────────────────────────
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
-# ──────────────────────────────────────────────────────────────────────────────
 
-# cloudscraper для обхода Cloudflare
+# Настройки скрапера
 SCRAPER = cloudscraper.create_scraper()
-SCRAPER_TIMEOUT = (10.0, 60.0)    # (connect_timeout, read_timeout) в секундах
-
+SCRAPER_TIMEOUT = (10.0, 60.0)
 MAX_RETRIES = 3
-BASE_DELAY  = 2.0                 # базовый интервал для backoff (сек)
+BASE_DELAY = 2.0
 
-OUTPUT_DIR   = Path("articles")
+# Пути
+OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-# ──────────────────────────────────────────────────────────────────────────────
+
+def clean_text(text: str) -> str:
+    """Удаляет экранирование символов в тексте"""
+    return re.sub(r'\\([-_*`[\]()~>#+=|{}.!])', r'\1', text)
 
 def extract_img_url(img_tag):
-    """Аналогично исходной версии"""
+    """Извлекает URL изображения из тега"""
     for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
-        if not val:
-            continue
-        parts = val.split()
-        if parts:
-            return parts[0]
+        if val and val.strip():
+            parts = val.split()
+            if parts:
+                return parts[0]
     return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
-    """Аналогично исходной версии"""
+    """Получает ID категории по slug"""
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -79,7 +78,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    """Аналогично исходной версии"""
+    """Получает статьи из категории"""
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -100,7 +99,7 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str
     return []
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
-    """Аналогично исходной версии"""
+    """Сохраняет изображение на диск"""
     folder.mkdir(parents=True, exist_ok=True)
     fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
     dest = folder / fn
@@ -121,14 +120,13 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
     return None
 
 def load_catalog() -> List[Dict[str, Any]]:
-    """CHANGED: Добавлена блокировка файла и валидация данных"""
+    """Загружает каталог статей"""
     if not CATALOG_PATH.exists():
         return []
     try:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_SH)  # Блокировка для чтения
+            fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
-            # Фильтруем некорректные записи
             return [item for item in data if isinstance(item, dict) and "id" in item]
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logging.error("Catalog JSON decode error: %s", e)
@@ -138,58 +136,22 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
-    """CHANGED: Добавлена блокировка файла"""
+    """Сохраняет каталог статей"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)  # Эксклюзивная блокировка
+            fcntl.flock(f, fcntl.LOCK_EX)
             json.dump(catalog, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
 
-def chunk_text(text: str, size: int = 4096, preserve_formatting: bool = True) -> List[str]:
-    """Аналогично исходной версии"""
-    norm = text.replace('\r\n', '\n')
-    paras = [p for p in norm.split('\n\n') if p.strip()]
-    if not preserve_formatting:
-        paras = [re.sub(r'\n+', ' ', p) for p in paras]
-
-    chunks, curr = [], ""
-    def _split_long(p: str) -> List[str]:
-        parts, sub = [], ""
-        for w in p.split(" "):
-            if len(sub) + len(w) + 1 > size:
-                parts.append(sub); sub = w
-            else:
-                sub = (sub + " " + w).lstrip()
-        if sub:
-            parts.append(sub)
-        return parts
-
-    for p in paras:
-        if len(p) > size:
-            if curr:
-                chunks.append(curr); curr = ""
-            chunks.extend(_split_long(p))
-        else:
-            if not curr:
-                curr = p
-            elif len(curr) + 2 + len(p) <= size:
-                curr += "\n\n" + p
-            else:
-                chunks.append(curr); curr = p
-
-    if curr:
-        chunks.append(curr)
-    return chunks
-
 def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
-    """CHANGED: Добавлена проверка hash существующего контента"""
+    """Обрабатывает и сохраняет статью"""
     aid, slug = post["id"], post["slug"]
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
 
-    # Проверяем существующую статью
+    # Проверка существующей статьи
     meta_path = art_dir / "meta.json"
     if meta_path.exists():
         try:
@@ -201,21 +163,17 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}")
 
-    # Обработка заголовка с исправлением экранированных символов
+    # Обработка заголовка с удалением экранирования
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    # Удаляем экранирование для дефиса и других символов
-    orig_title = re.sub(r'\\([-`*_{}()$%&])', r'\1', orig_title)
-    # Дополнительно убираем лишние пробелы вокруг дефиса
-    orig_title = re.sub(r'\s*-\s*', '-', orig_title)
-    title = orig_title
+    clean_title = clean_text(orig_title)
+    title = clean_title
 
+    # Перевод заголовка
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
-                # Обрабатываем перевод аналогичным образом
-                title = re.sub(r'\\([-`*_{}()$%&])', r'\1', title)
-                title = re.sub(r'\s*-\s*', '-', title)
+                translated = GoogleTranslator(source="auto", target=translate_to).translate(clean_title)
+                title = clean_text(translated)
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
@@ -225,6 +183,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 )
                 time.sleep(delay)
 
+    # Обработка контента
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
@@ -232,14 +191,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = re.sub(r"[ \t]+", " ", raw_text)
     raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
 
+    # Сохранение изображений
     img_dir = art_dir / "images"
-    images: List[str] = []
-    srcs = []
-
-    for img in soup.find_all("img"):
-        url = extract_img_url(img)
-        if url:
-            srcs.append(url)
+    images = []
+    srcs = [url for img in soup.find_all("img") if (url := extract_img_url(img))]
 
     with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
@@ -258,16 +213,23 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         logging.warning("No images for ID=%s; skipping", aid)
         return None
 
+    # Формирование метаданных
     meta = {
-        "id": aid, "slug": slug,
-        "date": post.get("date"), "link": post.get("link"),
+        "id": aid,
+        "slug": slug,
+        "date": post.get("date"),
+        "link": post.get("link"),
         "title": title,
+        "original_title": orig_title,
         "text_file": str(art_dir / "content.txt"),
-        "images": images, "posted": False,
-        "hash": hashlib.sha256(raw_text.encode()).hexdigest()  # ADDED: hash контента
+        "images": images,
+        "posted": False,
+        "hash": hashlib.sha256(raw_text.encode()).hexdigest()
     }
+
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
 
+    # Обработка перевода
     if translate_to:
         h = meta["hash"]
         old = {}
@@ -290,8 +252,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                     meta.update({
                         "translated_to": translate_to,
                         "translated_paras": trans,
-                        "translated_file": str(txt_t),
-                        "text_file": str(txt_t)
+                        "translated_file": str(txt_t)
                     })
                     break
                 except Exception as e:
@@ -307,7 +268,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     return meta
 
 def main():
-    """CHANGED: Полностью переработанная логика обработки"""
+    """Основная функция"""
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
                        default="https://www.khmertimeskh.com",
