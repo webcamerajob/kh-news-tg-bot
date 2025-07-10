@@ -28,13 +28,12 @@ DEFAULT_DELAY = 5.0
 
 CATALOG_PATH = Path("articles/catalog.json")
 
+
 def escape_markdown(text: str) -> str:
     """
-    Экранирует спецсимволы для MarkdownV2,
-    при этом тире '-' оставляем нетронутым.
+    Экранирует спецсимволы для MarkdownV2.
     """
-    # убрали '-' из набора
-    markdown_chars = r'\_*[]()~`>#+=|{}.!'
+    markdown_chars = r'\_*[]()~`>#+-=|{}.!'
     return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
 
 
