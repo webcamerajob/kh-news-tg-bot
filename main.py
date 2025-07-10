@@ -16,7 +16,7 @@ from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
-# Фильтры для удаления нежелательных фраз
+# Настройки
 bad_patterns = [
     r"synopsis\s*:\s*",
     r"\(video inside\)",
@@ -24,28 +24,25 @@ bad_patterns = [
 ]
 bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Настройки скрапера
 SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)
 MAX_RETRIES = 3
 BASE_DELAY = 2.0
 
-# Пути
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 
-def clean_text(text: str) -> str:
-    """Удаляет экранирование символов в тексте"""
+def clean_escapes(text: str) -> str:
+    """Удаляет экранирование символов, включая \-"""
     return re.sub(r'\\([-_*`[\]()~>#+=|{}.!])', r'\1', text)
 
 def extract_img_url(img_tag):
-    """Извлекает URL изображения из тега"""
+    """Извлекает URL изображения"""
     for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
         if val and val.strip():
@@ -55,7 +52,7 @@ def extract_img_url(img_tag):
     return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
-    """Получает ID категории по slug"""
+    """Получает ID категории"""
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -67,13 +64,10 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             return data[0]["id"]
         except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
-                attempt, MAX_RETRIES, e, delay
-            )
+            logging.warning(f"Timeout fetching category (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
         except json.JSONDecodeError as e:
-            logging.error("JSON decode error for categories: %s", e)
+            logging.error(f"JSON decode error for categories: {e}")
             break
     raise RuntimeError("Failed fetching category id")
 
@@ -87,19 +81,16 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str
             return r.json()
         except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout fetching posts (try %s/%s): %s; retry in %.1fs",
-                attempt, MAX_RETRIES, e, delay
-            )
+            logging.warning(f"Timeout fetching posts (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
         except json.JSONDecodeError as e:
-            logging.error("JSON decode error for posts: %s", e)
+            logging.error(f"JSON decode error for posts: {e}")
             break
     logging.error("Giving up fetching posts")
     return []
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
-    """Сохраняет изображение на диск"""
+    """Сохраняет изображение"""
     folder.mkdir(parents=True, exist_ok=True)
     fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
     dest = folder / fn
@@ -111,12 +102,9 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
             return str(dest)
         except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout saving image %s (try %s/%s): %s; retry in %.1fs",
-                fn, attempt, MAX_RETRIES, e, delay
-            )
+            logging.warning(f"Timeout saving image {fn} (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
-    logging.error("Failed saving image %s after %s attempts", fn, MAX_RETRIES)
+    logging.error(f"Failed saving image {fn} after {MAX_RETRIES} attempts")
     return None
 
 def load_catalog() -> List[Dict[str, Any]]:
@@ -129,21 +117,32 @@ def load_catalog() -> List[Dict[str, Any]]:
             data = json.load(f)
             return [item for item in data if isinstance(item, dict) and "id" in item]
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        logging.error("Catalog JSON decode error: %s", e)
+        logging.error(f"Catalog JSON decode error: {e}")
         return []
     except IOError as e:
-        logging.error("Catalog read error: %s", e)
+        logging.error(f"Catalog read error: {e}")
         return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
-    """Сохраняет каталог статей"""
+    """Сохраняет каталог"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             json.dump(catalog, f, ensure_ascii=False, indent=2)
     except IOError as e:
-        logging.error("Failed to save catalog: %s", e)
+        logging.error(f"Failed to save catalog: {e}")
+
+def translate_text(text: str, target_lang: str, max_retries: int = 3) -> str:
+    """Переводит текст с обработкой ошибок"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return GoogleTranslator(source="auto", target=target_lang).translate(text)
+        except Exception as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(f"Translate attempt {attempt}/{max_retries} failed: {e}; retry in {delay:.1f}s")
+            time.sleep(delay)
+    return text  # Возвращаем оригинал если перевод не удался
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
     """Обрабатывает и сохраняет статью"""
@@ -163,25 +162,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}")
 
-    # Обработка заголовка с удалением экранирования
+    # Обработка заголовка
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    clean_title = clean_text(orig_title)
+    clean_title = clean_escapes(orig_title)
     title = clean_title
 
     # Перевод заголовка
     if translate_to:
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                translated = GoogleTranslator(source="auto", target=translate_to).translate(clean_title)
-                title = clean_text(translated)
-                break
-            except Exception as e:
-                delay = BASE_DELAY * 2 ** (attempt - 1)
-                logging.warning(
-                    "Translate title attempt %s failed: %s; retry in %.1fs",
-                    attempt, e, delay
-                )
-                time.sleep(delay)
+        title = translate_text(clean_title, translate_to)
+        title = clean_escapes(title)
 
     # Обработка контента
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
@@ -190,6 +179,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = bad_re.sub("", raw_text)
     raw_text = re.sub(r"[ \t]+", " ", raw_text)
     raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+
+    # Перевод контента (чанками)
+    translated_chunks = []
+    if translate_to:
+        for para in paras:
+            clean_para = bad_re.sub("", para)
+            if clean_para.strip():
+                translated = translate_text(clean_para, translate_to)
+                translated_chunks.append(translated)
 
     # Сохранение изображений
     img_dir = art_dir / "images"
@@ -210,8 +208,17 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 images.append(path)
 
     if not images:
-        logging.warning("No images for ID=%s; skipping", aid)
+        logging.warning(f"No images for ID={aid}; skipping")
         return None
+
+    # Сохранение текста
+    (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
+    
+    # Сохранение переведенного текста
+    translated_text = "\n\n".join(translated_chunks) if translate_to else ""
+    if translate_to:
+        txt_t = art_dir / f"content.{translate_to}.txt"
+        txt_t.write_text(translated_text, encoding="utf-8")
 
     # Формирование метаданных
     meta = {
@@ -224,43 +231,11 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         "text_file": str(art_dir / "content.txt"),
         "images": images,
         "posted": False,
-        "hash": hashlib.sha256(raw_text.encode()).hexdigest()
+        "hash": hashlib.sha256(raw_text.encode()).hexdigest(),
+        "translated_to": translate_to if translate_to else None,
+        "translated_text": translated_text if translate_to else None,
+        "translated_file": str(txt_t) if translate_to else None
     }
-
-    (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
-
-    # Обработка перевода
-    if translate_to:
-        h = meta["hash"]
-        old = {}
-        if meta_path.exists():
-            try:
-                old = json.loads(meta_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                pass
-
-        if old.get("hash") != h or old.get("translated_to") != translate_to:
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    clean_paras = [bad_re.sub("", p) for p in paras]
-                    trans = [
-                        GoogleTranslator(source="auto", target=translate_to).translate(p)
-                        for p in clean_paras
-                    ]
-                    txt_t = art_dir / f"content.{translate_to}.txt"
-                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
-                    meta.update({
-                        "translated_to": translate_to,
-                        "translated_paras": trans,
-                        "translated_file": str(txt_t)
-                    })
-                    break
-                except Exception as e:
-                    delay = BASE_DELAY * 2 ** (attempt - 1)
-                    logging.warning("Translate try %s failed: %s; retry in %.1fs", attempt, e, delay)
-                    time.sleep(delay)
-        else:
-            logging.info("Using cached translation %s for ID=%s", translate_to, aid)
 
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -270,15 +245,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
     """Основная функция"""
     parser = argparse.ArgumentParser(description="Parser with translation")
-    parser.add_argument("--base-url", type=str,
-                       default="https://www.khmertimeskh.com",
-                       help="WP site base URL")
-    parser.add_argument("--slug", type=str, default="national",
-                       help="Category slug")
-    parser.add_argument("-n", "--limit", type=int, default=None,
-                       help="Max posts to parse")
-    parser.add_argument("-l", "--lang", type=str, default="",
-                       help="Translate to language code")
+    parser.add_argument("--base-url", type=str, default="https://www.khmertimeskh.com", help="WP site base URL")
+    parser.add_argument("--slug", type=str, default="national", help="Category slug")
+    parser.add_argument("-n", "--limit", type=int, default=None, help="Max posts to parse")
+    parser.add_argument("-l", "--lang", type=str, default="", help="Translate to language code")
     args = parser.parse_args()
 
     try:
