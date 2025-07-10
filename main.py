@@ -201,14 +201,21 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}")
 
-    # Остальная логика функции остается без изменений
+    # Обработка заголовка с исправлением экранированных символов
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    # Удаляем экранирование для дефиса и других символов
+    orig_title = re.sub(r'\\([-`*_{}()$%&])', r'\1', orig_title)
+    # Дополнительно убираем лишние пробелы вокруг дефиса
+    orig_title = re.sub(r'\s*-\s*', '-', orig_title)
     title = orig_title
 
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
+                # Обрабатываем перевод аналогичным образом
+                title = re.sub(r'\\([-`*_{}()$%&])', r'\1', title)
+                title = re.sub(r'\s*-\s*', '-', title)
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
