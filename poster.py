@@ -154,9 +154,9 @@ async def send_media_group(
         img_bytes = apply_watermark(img)
         files[key] = (img.name, img_bytes, "image/png")
         item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0:
-            item["caption"] = escape_markdown(caption)
-            item["parse_mode"] = "MarkdownV2"
+#        if idx == 0:
+#            item["caption"] = escape_markdown(caption)
+#            item["parse_mode"] = "MarkdownV2"
         media.append(item)
 
     data = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
