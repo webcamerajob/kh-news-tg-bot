@@ -279,7 +279,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                         for p in clean_paras
                     ]
                     txt_t = art_dir / f"content.{translate_to}.txt"
-                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
+                    trans_txt = "\n\n".join(trans)
+                    header_t = f"{title}\n\n"
+                    txt_t.write_text(header_t + trans_txt, encoding="utf-8")
+
                     meta.update({
                         "translated_to": translate_to,
                         "translated_paras": trans,
