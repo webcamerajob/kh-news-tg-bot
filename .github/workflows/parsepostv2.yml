@@ -9,9 +9,9 @@ on:
 permissions:
   contents: read
 
-#concurrency:
-#  group: parse-and-post-${{ github.ref }}
-#  cancel-in-progress: true
+   #concurrency:
+   #group: parse-and-post-${{ github.ref }}
+   #cancel-in-progress: true
 
 jobs:
   parse:
@@ -90,7 +90,7 @@ jobs:
     env:
       TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      BATCH_LIMIT: 5        # публикуем по 5 статей за запуск
+      BATCH_LIMIT: 15        # публикуем по 5 статей за запуск
       POST_DELAY: 60        # пауза между постами, с
 
     steps:
