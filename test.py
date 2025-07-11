@@ -3,17 +3,19 @@ import requests
 from bs4 import BeautifulSoup
 from googletrans import Translator
 from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message
+from aiogram.filters import Command
 import asyncio
 
 # Загрузка переменных окружения (Secrets через GitHub)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Токен Telegram бота
-CHAT_ID = os.getenv("TELEGRAM_CHANNEL")  # ID чата для отправки сообщений
+TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL")  # ID чата для отправки сообщений
 PUBLISHED_ARTICLES_FILE = "published_articles.txt"  # Локальный файл для защиты от повторных публикаций
 URL = "https://kmertimes/national"  # Сайт для парсинга статей
 
 # Настройка Telegram бота
 bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
 def chunk_text(text, max_length=4096):
     """Разделение текста на чанки длиной не более max_length."""
@@ -79,6 +81,11 @@ async def main():
             save_published_articles([article["link"] for article in new_articles])
     except Exception as e:
         print(f"Ошибка: {e}")
+
+# Обработчик команды /start
+@dp.message(Command("start"))
+async def start_command(message: Message):
+    await message.answer("Бот готов к работе!")
 
 if name == "main":
     asyncio.run(main())
