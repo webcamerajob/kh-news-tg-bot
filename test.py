@@ -1,4 +1,5 @@
 import os
+import cloudscraper
 import requests
 from bs4 import BeautifulSoup
 from googletrans import Translator
@@ -6,12 +7,13 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
+import time
 
 # Загрузка переменных окружения (Secrets через GitHub)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Токен Telegram бота
 TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL")  # ID чата для отправки сообщений
 PUBLISHED_ARTICLES_FILE = "published_articles.txt"  # Локальный файл для защиты от повторных публикаций
-URL = "https://kmertimes/national"  # Сайт для парсинга статей
+URL = "https://www.khmertimeskh.com/national"  # Сайт для парсинга статей
 
 # Настройка Telegram бота
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -21,12 +23,27 @@ def chunk_text(text, max_length=4096):
     """Разделение текста на чанки длиной не более max_length."""
     return [text[i:i + max_length] for i in range(0, len(text), max_length)]
 
+def fetch_html_with_cloudflare(url):
+    """Получение HTML с обходом защиты Cloudflare."""
+    scraper = cloudscraper.create_scraper()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    for attempt in range(3):  # Три попытки с экспоненциальной задержкой
+        try:
+            response = scraper.get(url, headers=headers)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            print(f"[WARNING] Timeout fetching HTML (try {attempt + 1}/3): {e}; retry in {2**attempt}s")
+            time.sleep(2**attempt)
+    raise RuntimeError("Failed to fetch HTML after 3 attempts")
+
 def fetch_articles():
     """Получение последних 10 статей с сайта."""
-    response = requests.get(URL)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
+    html = fetch_html_with_cloudflare(URL)
+    soup = BeautifulSoup(html, "html.parser")
     articles = soup.find_all("article", limit=10)  # Настраиваем поиск статей
     parsed_articles = []
 
@@ -80,12 +97,9 @@ async def main():
             await send_articles_to_telegram(new_articles)
             save_published_articles([article["link"] for article in new_articles])
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"[ERROR] Fatal error in main: {e}")
 
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def start_command(message: Message):
     await message.answer("Бот готов к работе!")
-
-if name == "main":
-    asyncio.run(main())
