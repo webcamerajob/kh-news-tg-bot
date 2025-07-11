@@ -264,8 +264,11 @@ async def main(limit: Optional[int]):
             continue
         caption, text_path, images = validated
 
+        from yourmodule import escape_markdown  # если у тебя функция уже есть
+        caption_bold = f"*{escape_markdown(caption)}*"
+
         # send media group with first paragraph as caption
-        if not await send_media_group(client, token, chat_id, images, caption):
+        if not await send_media_group(client, token, chat_id, images, caption_bold):
             continue
 
         # send body chunks after skipping first paragraph
