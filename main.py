@@ -221,8 +221,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     # Удаляем <p>, находящиеся внутри блоков изображений (чтобы заголовки и подписи не попали в текст)
     for container in soup.find_all(["figure", "div"], class_="wp-block-image"):
-    for bad_p in container.find_all("p"):
-        bad_p.decompose()
+        for bad_p in container.find_all("p"):
+            bad_p.decompose()
 
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
