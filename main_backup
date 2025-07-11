@@ -21,7 +21,6 @@ from bs4 import BeautifulSoup
 bad_patterns = [
     r"synopsis\s*:\s*",    # «Synopsis»
     r"\(video inside\)",   # «(video inside)»
-    r"\(video\)",
     r"\bkhmer times\b"      # слово «khmer times»
 ]
 # единое регулярное выражение с флагом IGNORECASE
