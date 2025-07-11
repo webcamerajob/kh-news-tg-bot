@@ -272,7 +272,7 @@ async def main(limit: Optional[int]):
 
         # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
-        chunks = chunk_text(raw, size=4096, preserve_formatting=True)
+        chunks = chunk_text(full_text, size=4096, preserve_formatting=True)
 
         # Если чанков несколько — убираем первый (он в caption),
         # иначе — шлём единственный
