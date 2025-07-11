@@ -227,47 +227,83 @@ def process_article_content(content: str, img_dir: Path) -> Tuple[str, List[str]
     return raw_text, images
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
-    """Обрабатывает и сохраняет статью"""
+    """CHANGED: Добавлена проверка hash существующего контента"""
     aid, slug = post["id"], post["slug"]
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
-    img_dir = art_dir / "images"
-    
-    # Проверка существующей статьи
+
+    # Проверяем существующую статью
     meta_path = art_dir / "meta.json"
-    current_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
-    
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            current_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
-                logging.info(f"Skipping unchanged article ID={aid}")
+                logging.info("Skipping unchanged article ID=%d", aid)
                 return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logging.warning(f"Failed to read existing meta for ID={aid}: {e}")
+            logging.warning("Failed to read existing meta for ID=%d: %s", aid, str(e))
 
-    # Обработка заголовка
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    # Извлекаем заголовок из h2.entry-title
+    soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
+    title_tag = soup.find("h2", class_="entry-title")
+    
+    if not title_tag:
+        # Fallback 1: попробуем найти любой h2
+        title_tag = soup.find("h2")
+        if not title_tag:
+            # Fallback 2: используем заголовок из API как резервный вариант
+            title_tag = BeautifulSoup(post["title"]["rendered"], "html.parser")
+    
+    orig_title = title_tag.get_text(strip=True) if title_tag else "No Title Found"
     title = orig_title
-    
-    if translate_to:
-        title = translate_text(orig_title, translate_to) or orig_title
 
-    # Обработка контента
-    raw_text, images = process_article_content(post["content"]["rendered"], img_dir)
-    
-    # Проверка featured image
+    if translate_to:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
+                break
+            except Exception as e:
+                delay = BASE_DELAY * 2 ** (attempt - 1)
+                logging.warning(
+                    "Translate title attempt %d/%d failed: %s; retry in %.1fs",
+                    attempt, MAX_RETRIES, str(e), delay
+                )
+                time.sleep(delay)
+
+    # Остальная часть функции
+    paras = [p.get_text(strip=True) for p in soup.find_all("p")]
+    raw_text = "\n\n".join(paras)
+    raw_text = bad_re.sub("", raw_text)
+    raw_text = re.sub(r"[ \t]+", " ", raw_text)
+    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+
+    img_dir = art_dir / "images"
+    images: List[str] = []
+    srcs = []
+
+    for img in soup.find_all("img"):
+        url = extract_img_url(img)
+        if url:
+            srcs.append(url)
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
+        for fut in as_completed(futures):
+            if path := fut.result():
+                images.append(path)
+
     if not images and "_embedded" in post:
-        media = post["_embedded"].get("wp:featuredmedia", [])
+        media = post["_embedded"].get("wp:featuredmedia", [{}])
         if media and media[0].get("source_url"):
-            if path := save_image(media[0]["source_url"], img_dir):
-                images.insert(0, path)  # featured image первым в списке
-    
+            path = save_image(media[0]["source_url"], img_dir)
+            if path:
+                images.append(path)
+
     if not images:
-        logging.warning("No images for ID=%s; skipping", aid)
+        logging.warning("No images for ID=%d; skipping", aid)
         return None
 
-    # Подготовка метаданных
     meta = {
         "id": aid,
         "slug": slug,
@@ -277,27 +313,45 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         "text_file": str(art_dir / "content.txt"),
         "images": images,
         "posted": False,
-        "hash": current_hash
+        "hash": hashlib.sha256(raw_text.encode()).hexdigest()
     }
     
-    # Сохранение оригинального текста
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
 
-    # Обработка перевода
     if translate_to:
-        translated_text = translate_text(raw_text, translate_to)
-        if translated_text:
-            txt_t = art_dir / f"content.{translate_to}.txt"
-            txt_t.write_text(translated_text, encoding="utf-8")
-            meta.update({
-                "translated_to": translate_to,
-                "translated_file": str(txt_t),
-                "text_file": str(txt_t)
-            })
-        else:
-            logging.warning("Failed to translate content for ID=%s", aid)
+        h = meta["hash"]
+        old = {}
+        if meta_path.exists():
+            try:
+                old = json.loads(meta_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
 
-    # Сохранение метаданных
+        if old.get("hash") != h or old.get("translated_to") != translate_to:
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    clean_paras = [bad_re.sub("", p) for p in paras]
+                    trans = [
+                        GoogleTranslator(source="auto", target=translate_to).translate(p)
+                        for p in clean_paras
+                    ]
+                    txt_t = art_dir / f"content.{translate_to}.txt"
+                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
+                    meta.update({
+                        "translated_to": translate_to,
+                        "translated_paras": trans,
+                        "translated_file": str(txt_t),
+                        "text_file": str(txt_t)
+                    })
+                    break
+                except Exception as e:
+                    delay = BASE_DELAY * 2 ** (attempt - 1)
+                    logging.warning("Translate try %d/%d failed: %s; retry in %.1fs",
+                                  attempt, MAX_RETRIES, str(e), delay)
+                    time.sleep(delay)
+        else:
+            logging.info("Using cached translation %s for ID=%d", translate_to, aid)
+
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
