@@ -234,11 +234,11 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
 
     # используем только заголовок статьи в качестве подписи
     # экранируем MarkdownV2 и обрезаем до 100 символов
-    raw_title = title.strip()
-    short = raw_title if len(raw_title) <= 1024 else raw_title[:1023] + "…"
-    caption = escape_markdown(short)
+#    raw_title = title.strip()
+#    short = raw_title if len(raw_title) <= 1024 else raw_title[:1023] + "…"
+#    caption = escape_markdown(short)
 
-    return caption, Path(txt), valid_imgs
+#    return caption, Path(txt), valid_imgs
 
 
 async def main(limit: Optional[int]):
