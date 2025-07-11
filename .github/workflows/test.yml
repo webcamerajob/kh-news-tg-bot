@@ -1,0 +1,38 @@
+name: Telegram News Bot
+
+on:
+  schedule:
+    # Запуск каждые 5 минут с 6 утра до 12 ночи
+    - cron: "*/5 6-23 * * *"
+
+  workflow_dispatch: # Ручной запуск (опционально)
+    inputs:
+      reason:
+        description: "Причина запуска"
+        required: false
+        default: "Ручной запуск"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout репозиторий
+        uses: actions/checkout@v3
+
+      - name: Установка Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Запуск скрипта
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: |
+          python test.py
