@@ -148,20 +148,23 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
         logging.error("Failed to save catalog: %s", e)
 
 def chunk_text(text: str, size: int = 4096, preserve_formatting: bool = True) -> List[str]:
-    """Аналогично исходной версии"""
+    """Разбивает текст на чанки фиксированного размера"""
     norm = text.replace('\r\n', '\n')
     paras = [p for p in norm.split('\n\n') if p.strip()]
     if not preserve_formatting:
         paras = [re.sub(r'\n+', ' ', p) for p in paras]
 
     chunks, curr = [], ""
+    
     def _split_long(p: str) -> List[str]:
         parts, sub = [], ""
         for w in p.split(" "):
             if len(sub) + len(w) + 1 > size:
-                parts.append(sub); sub = w
+                if sub:  # Добавлена проверка на пустую строку
+                    parts.append(sub)
+                sub = w
             else:
-                sub = (sub + " " + w).lstrip()
+                sub = (sub + " " + w).strip()  # Изменено с lstrip() на strip()
         if sub:
             parts.append(sub)
         return parts
@@ -169,15 +172,17 @@ def chunk_text(text: str, size: int = 4096, preserve_formatting: bool = True) ->
     for p in paras:
         if len(p) > size:
             if curr:
-                chunks.append(curr); curr = ""
+                chunks.append(curr)
+                curr = ""
             chunks.extend(_split_long(p))
         else:
             if not curr:
                 curr = p
             elif len(curr) + 2 + len(p) <= size:
-                curr += "\n\n" + p
+                curr = (curr + "\n\n" + p).strip()  # Также заменено здесь
             else:
-                chunks.append(curr); curr = p
+                chunks.append(curr)
+                curr = p
 
     if curr:
         chunks.append(curr)
