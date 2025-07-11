@@ -3,3 +3,4 @@ beautifulsoup4
 googletrans==4.0.0-rc1
 aiogram
 cloudscraper
+deep_translator
