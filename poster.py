@@ -264,11 +264,14 @@ async def main(limit: Optional[int]):
             continue
         caption, text_path, images = validated
 
-        caption_bold = f"*{escape_markdown(caption)}*"
-
         # send media group with first paragraph as caption
-        if not await send_media_group(client, token, chat_id, images, caption_bold):
+        if not await send_media_group(client, token, chat_id, images, caption):
             continue
+            
+        title = art.get("title", "").strip()
+        bold_title = f"*{escape_markdown(title)}*\n\n"
+        raw = text_path.read_text(encoding="utf-8")
+        full_text = bold_title + raw
 
         # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
