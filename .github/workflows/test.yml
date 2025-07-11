@@ -35,4 +35,4 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL }}
         run: |
-          python test.py
+          python main.py
