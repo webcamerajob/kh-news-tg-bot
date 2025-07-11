@@ -2,8 +2,8 @@ name: Parse and Post V2
 
 on:
   schedule:
-    - cron: '0,30 22-23 * * *'   # 05–06 Indo‐China (UTC+7)
-    - cron: '0,30 0-10 * * *'    # 06–18 Indo‐China
+    - cron: '3,00 22-23 * * *'   # 05–06 Indo‐China (UTC+7)
+    - cron: '3,00 00-10 * * *'    # 06–18 Indo‐China
   workflow_dispatch:
 
 permissions:
