@@ -264,7 +264,6 @@ async def main(limit: Optional[int]):
             continue
         caption, text_path, images = validated
 
-        from yourmodule import escape_markdown  # если у тебя функция уже есть
         caption_bold = f"*{escape_markdown(caption)}*"
 
         # send media group with first paragraph as caption
