@@ -103,3 +103,5 @@ async def main():
 @dp.message(Command("start"))
 async def start_command(message: Message):
     await message.answer("Бот готов к работе!")
+    if name == "main":
+    asyncio.run(main())
