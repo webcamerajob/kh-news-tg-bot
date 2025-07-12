@@ -3,12 +3,16 @@ name: Bot
 on:
   push:
     branches: [main]
-
+    
 jobs:
   telegram-trigger:
     name: 🚀 Launch parser via Telegram
     runs-on: ubuntu-latest
     steps:
+
+      - name: 💾 Install parser dependencies
+        run: pip install -r requirements-parser.txt
+  
       - name: 🔄 Checkout
         uses: actions/checkout@v4
 
