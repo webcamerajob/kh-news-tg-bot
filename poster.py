@@ -309,7 +309,7 @@ async def main(limit: Optional[int]):
         logging.info(f"📝 Updated published.json with {len(published)} entries")
 
     # Вызываем:
-    update_published_log(catalog, Path("published.json"))
+    update_published_log(catalog, Path("articles/published.json"))
 
     logging.info("📢 Done: sent %d articles", sent)
 
