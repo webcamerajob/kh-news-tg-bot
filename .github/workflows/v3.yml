@@ -153,7 +153,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: catalog-after-posting-${{ github.run_id }}
-          path: articles/catalog.json
+          path: catalog.json
 
       - name: 🚨 Notify post failure
         if: failure()
