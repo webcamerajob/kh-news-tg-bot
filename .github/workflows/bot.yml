@@ -21,6 +21,15 @@ jobs:
             echo "⚠️ requirements-parser.txt не найден — пропускаем установку"
           fi
           
+      - name: 🔐 WireGuard VPN setup
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf jq curl
+          mkdir -p $HOME/wg
+          echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          
       - name: 📡 Telegram Notify
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
