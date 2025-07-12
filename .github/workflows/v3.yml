@@ -140,17 +140,17 @@ jobs:
           set -e
           python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
-          - name: 📝 Auto-commit articles/ only if changes exist
-          run: |
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "bot@github.com"
-            git add articles/
-            if git diff --cached --quiet; then
-              echo "🟢 Nothing to commit"
-            else
-              git commit -m "📦 Update catalog and published log for run ${{ github.run_id }}"
-              git push
-            fi
+      - name: 📝 Auto-commit articles/ only if changes exist
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "bot@github.com"
+          git add articles/
+          if git diff --cached --quiet; then
+            echo "🟢 Nothing to commit"
+          else
+            git commit -m "📦 Update catalog and published log for run ${{ github.run_id }}"
+            git push
+          fi
 
       - name: 📝 Upload catalog-after-posting
         uses: actions/upload-artifact@v4
