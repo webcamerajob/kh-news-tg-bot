@@ -21,15 +21,6 @@ jobs:
             echo "⚠️ requirements-parser.txt не найден — пропускаем установку"
           fi
           
-      - name: 🔐 WireGuard VPN setup
-        run: |
-          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf jq curl
-          mkdir -p $HOME/wg
-          echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
-          chmod 600 $HOME/wg/wg0.conf
-          sudo wg-quick up $HOME/wg/wg0.conf
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-          
       - name: 📡 Telegram Notify
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -58,6 +49,15 @@ jobs:
           else
             echo "ℹ️ Сброс не требуется"
           fi
+          
+      - name: 🔐 WireGuard VPN setup
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf jq curl
+          mkdir -p $HOME/wg
+          echo "${{ secrets.WG_CONFIG }}" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: 🔍 Run parser
         run: |
@@ -65,6 +65,10 @@ jobs:
           SLUG=$(jq -r '.slug' settings.json)
           LANG=$(jq -r '.lang' settings.json)
           python3 main.py --base-url "$BASE" --slug "$SLUG" --lang "$LANG"
+
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
 
       - name: 📤 Run poster
         run: |
