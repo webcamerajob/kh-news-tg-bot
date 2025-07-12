@@ -1,0 +1,46 @@
+on:
+  push:
+    branches: [main]
+
+jobs:
+  telegram-trigger:
+    name: 🚀 Launch parser via Telegram
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🔄 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🧠 Load settings
+        run: |
+          echo "📥 Загрузка настроек"
+          jq . settings.json
+
+      - name: 🧹 Reset published.json if requested
+        run: |
+          if jq -e '.published_reset' settings.json > /dev/null; then
+            echo "{}" > articles/published.json
+            jq '.published_reset = false' settings.json > tmp && mv tmp settings.json
+            echo "♻️ published.json сброшен"
+          else
+            echo "ℹ️ Сброс не требуется"
+          fi
+
+      - name: 🔍 Run parser
+        run: |
+          BASE=$(jq -r '.base_url' settings.json)
+          SLUG=$(jq -r '.slug' settings.json)
+          LANG=$(jq -r '.lang' settings.json)
+          python3 main.py --base-url "$BASE" --slug "$SLUG" --lang "$LANG"
+
+      - name: 📤 Run poster
+        run: |
+          LIMIT=$(jq -r '.limit' settings.json)
+          python3 poster.py --limit "$LIMIT"
+
+      - name: 📡 Telegram Notify (optional)
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          CHANNEL=$(jq -r '.telegram_channel' settings.json)
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="$CHANNEL" -d text="✅ Запуск завершён. Параметры:\n$(jq . settings.json)"
