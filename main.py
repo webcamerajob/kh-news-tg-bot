@@ -17,6 +17,10 @@ from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
+# количество постов
+
+DEFAULT_LIMIT = 10
+
 # списком — все фразы/слова, которые нужно вырезать
 bad_patterns = [
     r"synopsis\s*:\s*",    # «Synopsis»
@@ -338,7 +342,7 @@ def main():
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or DEFAULT_LIMIT))
 
         catalog = load_catalog()
         existing_ids = {article["id"] for article in catalog}
