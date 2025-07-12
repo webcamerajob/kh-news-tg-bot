@@ -291,9 +291,9 @@ async def main(limit: Optional[int]):
     await client.aclose()
     save_catalog_atomic(catalog)
     def update_published_log(catalog: List[Dict[str, Any]], path: Path) -> None:
-    """
-    Обновляет published.json: добавляет ID и дату публикации.
-    """
+    
+    # Обновляет published.json: добавляет ID и дату публикации.
+    
     published = {}
     if path.is_file():
         try:
