@@ -1,3 +1,5 @@
+name: Bot
+
 on:
   push:
     branches: [main]
