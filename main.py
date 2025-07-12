@@ -229,20 +229,8 @@ def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
 
     logging.warning(f"[ID={aid}] Перевод заголовка провален после {MAX_RETRIES} попыток.")
     return title
-
-    
+  
     title = safe_translate_title(orig_title, translate_to, aid) if translate_to else orig_title
-
-            try:
-                title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
-                break
-            except Exception as e:
-                delay = BASE_DELAY * 2 ** (attempt - 1)
-                logging.warning(
-                    "Translate title attempt %s failed: %s; retry in %.1fs",
-                    attempt, e, delay
-                )
-                time.sleep(delay)
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     # Удаляем <p>, находящиеся внутри блоков изображений (чтобы заголовки и подписи не попали в текст)
