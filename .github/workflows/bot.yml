@@ -28,9 +28,6 @@ jobs:
           CHANNEL=$(jq -r '.telegram_channel' settings.json)
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
             -d chat_id="$CHANNEL" -d text="✅ Запуск завершён. Параметры:\n$(jq . settings.json)"
-
-      - name: 💾 Install parser dependencies
-        run: pip install -r requirements-parser.txt
   
       - name: 🔄 Checkout
         uses: actions/checkout@v4
@@ -58,6 +55,9 @@ jobs:
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+
+      - name: 💾 Install poster dependencies
+        run: pip install -r requirements-poster.txt
 
       - name: 🔍 Run parser
         run: |
