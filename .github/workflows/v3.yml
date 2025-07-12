@@ -135,6 +135,14 @@ jobs:
       - name: 📤 Run Poster
         run: python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
+      - name: 📝 Auto-commit published.json
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "bot@github.com"
+          git add published.json
+          git commit -m "📦 Update published log for run ${{ github.run_id }}"
+          git push
+
       - name: 📝 Reupload catalog after posting
         uses: actions/upload-artifact@v4
         with:
