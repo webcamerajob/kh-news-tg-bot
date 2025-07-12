@@ -203,10 +203,36 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     # Остальная логика функции остается без изменений
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = orig_title
 
-    if translate_to:
-        for attempt in range(1, MAX_RETRIES + 1):
+    def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
+    """
+    Переводит заголовок статьи, защищён от ошибок NoneType, пустых строк и странных входных данных.
+    Возвращает переведённый заголовок или оригинал, если перевод невозможен.
+    """
+    title = orig_title.strip() if isinstance(orig_title, str) else ""
+    if not title:
+        logging.warning(f"[ID={aid}] Заголовок пустой — пропущен перевод.")
+        return "Без заголовка"
+
+    safe_input = title[:200]  # ограничим длину, если нужно
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            translated = GoogleTranslator(source="auto", target=target_lang).translate(safe_input)
+            return translated.strip() or title
+        except Exception as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(
+                f"[ID={aid}] Перевод заголовка попытка {attempt} не удалась: {e}; ждём {delay:.1f}s"
+            )
+            time.sleep(delay)
+
+    logging.warning(f"[ID={aid}] Перевод заголовка провален после {MAX_RETRIES} попыток.")
+    return title
+
+    
+    title = safe_translate_title(orig_title, translate_to, aid) if translate_to else orig_title
+
             try:
                 title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
                 break
