@@ -290,6 +290,27 @@ async def main(limit: Optional[int]):
 
     await client.aclose()
     save_catalog_atomic(catalog)
+    def update_published_log(catalog: List[Dict[str, Any]], path: Path) -> None:
+    """
+    Обновляет published.json: добавляет ID и дату публикации.
+    """
+    published = {}
+    if path.is_file():
+        try:
+            published = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+
+    for art in catalog:
+        if art.get("posted") and str(art["id"]) not in published:
+            published[str(art["id"])] = art.get("date") or art.get("published_at") or time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    path.write_text(json.dumps(published, ensure_ascii=False, indent=2), encoding="utf-8")
+    logging.info(f"📝 Updated published.json with {len(published)} entries")
+
+    # Вызываем:
+    update_published_log(catalog, Path("published.json"))
+
     logging.info("📢 Done: sent %d articles", sent)
 
 
