@@ -8,7 +8,7 @@ import hashlib
 import time
 import fcntl  # ADDED: для блокировки файла
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
