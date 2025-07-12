@@ -145,7 +145,7 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "bot@github.com"
           git pull
-          git add published.json
+          git add articles/published.json
           git commit -m "📦 Update published log for run ${{ github.run_id }}"
           git push
 
