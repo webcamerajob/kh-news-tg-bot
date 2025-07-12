@@ -121,6 +121,17 @@ jobs:
           fi
           jq empty articles/catalog.json
 
+      - name: 🔍 Count new articles in catalog.json
+        id: catalog-check
+        run: |
+          COUNT=$(jq '[.[] | select(.posted != true)] | length' articles/catalog.json)
+          echo "🔎 Найдено новых статей: $COUNT"
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: ⏩ Skip poster if no articles
+        if: steps.catalog-check.outputs.count == '0'
+        run: echo "✅ Нет новых статей для публикации — пропускаем poster"
+
       - name: 📤 Run Poster
         run: python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
