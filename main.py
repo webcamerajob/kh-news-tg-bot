@@ -362,6 +362,11 @@ def main():
         else:
             logging.info("No new articles found")
 
+        if not CATALOG_PATH.exists():
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            CATALOG_PATH.write_text("[]", encoding="utf-8")
+            logging.info("Created empty catalog.json as fallback")
+
     except Exception as e:
         logging.exception("Fatal error in main:")
         exit(1)
