@@ -204,7 +204,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     # Остальная логика функции остается без изменений
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
 
-    def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
+def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
     """
     Переводит заголовок статьи, защищён от ошибок NoneType, пустых строк и странных входных данных.
     Возвращает переведённый заголовок или оригинал, если перевод невозможен.
