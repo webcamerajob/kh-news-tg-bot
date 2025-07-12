@@ -51,7 +51,7 @@ jobs:
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: 🧠 Run Parser
-        run: python3 parser.py --base-url https://www.khmertimeskh.com --slug national --lang ru
+        run: python3 main.py --base-url https://www.khmertimeskh.com --slug national --lang ru
 
       - name: 🛑 Teardown WireGuard
         if: always()
