@@ -48,6 +48,15 @@ OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 # ──────────────────────────────────────────────────────────────────────────────
 
+def load_published_ids(path: Path) -> Set[str]:
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return set(data.keys())
+    except json.JSONDecodeError:
+        return set()
+
 def extract_img_url(img_tag):
     """Аналогично исходной версии"""
     for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
@@ -347,13 +356,20 @@ def main():
         catalog = load_catalog()
         existing_ids = {article["id"] for article in catalog}
         new_articles = 0
+        
+        published_ids = load_published_ids(Path("published.json"))  # ← NEW
 
         for post in posts[:args.limit or len(posts)]:
             post_id = post["id"]
+            
             if post_id in existing_ids:
                 logging.debug(f"Skipping existing article ID={post_id}")
                 continue
-
+                
+            if str(post_id) in published_ids:
+                logging.info(f"Skipping already published ID={post_id}")
+                continue
+                
             if meta := parse_and_save(post, args.lang, args.base_url):
                 catalog.append(meta)
                 existing_ids.add(post_id)
