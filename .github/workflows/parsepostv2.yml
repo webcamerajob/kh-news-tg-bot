@@ -9,9 +9,9 @@ on:
 permissions:
   contents: read
 
-   #concurrency:
-   #group: parse-and-post-${{ github.ref }}
-   #cancel-in-progress: true
+concurrency:
+  group: parse-and-post-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   parse:
