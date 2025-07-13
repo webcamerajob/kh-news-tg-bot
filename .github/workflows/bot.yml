@@ -75,4 +75,5 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
-            -d text="❌ Post failed for run ${{ github.run_id }}"
+            -d text="❌ Post failed for run ${{ github.run_id }}: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
