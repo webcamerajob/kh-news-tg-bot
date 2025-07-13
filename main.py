@@ -78,7 +78,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             break
     raise RuntimeError("Failed fetching category id")
 
-def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
+def fetch_posts(base_url: str, cat_id: int, per_page: int = 1) -> List[Dict[str, Any]]:
     """Аналогично исходной версии"""
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
