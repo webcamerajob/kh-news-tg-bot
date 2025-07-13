@@ -143,12 +143,24 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
-    """CHANGED: Добавлена блокировка файла"""
+    """
+    Сохраняет только минимальный набор полей для защиты от дублей:
+    id, hash, translated_to
+    """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Фильтруем каждую запись
+    minimal = []
+    for item in catalog:
+        minimal.append({
+            "id": item["id"],
+            "hash": item["hash"],
+            "translated_to": item.get("translated_to", "")
+        })
+
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)  # Эксклюзивная блокировка
-            json.dump(catalog, f, ensure_ascii=False, indent=2)
+            fcntl.flock(f, fcntl.LOCK_EX)
+            json.dump(minimal, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
 
