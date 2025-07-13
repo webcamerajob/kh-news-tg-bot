@@ -63,6 +63,9 @@ jobs:
         run: sudo wg-quick down $HOME/wg/wg0.conf || true
 
       - name: 📤 Run poster
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
         run: |
           LIMIT=$(jq -r '.limit' settings.json)
           python3 poster.py --limit "$LIMIT"
