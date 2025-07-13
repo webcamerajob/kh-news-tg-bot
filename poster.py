@@ -154,9 +154,9 @@ async def send_media_group(
         img_bytes = apply_watermark(img)
         files[key] = (img.name, img_bytes, "image/png")
         item = {"type": "photo", "media": f"attach://{key}"}
-#        if idx == 0:
-#            item["caption"] = escape_markdown(caption)
-#            item["parse_mode"] = "MarkdownV2"
+        if idx == 0:
+            item["caption"] = escape_markdown(caption)
+            item["parse_mode"] = "MarkdownV2"
         media.append(item)
 
     data = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
@@ -267,7 +267,7 @@ async def main(limit: Optional[int]):
         # send media group with first paragraph as caption
         if not await send_media_group(client, token, chat_id, images, caption):
             continue
-        
+
         # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw, size=4096, preserve_formatting=True)
@@ -290,27 +290,6 @@ async def main(limit: Optional[int]):
 
     await client.aclose()
     save_catalog_atomic(catalog)
-    def update_published_log(catalog: List[Dict[str, Any]], path: Path) -> None:
-    
-        # Обновляет published.json: добавляет ID и дату публикации.
-    
-        published = {}
-        if path.is_file():
-            try:
-                published = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                pass
-
-        for art in catalog:
-            if art.get("posted") and str(art["id"]) not in published:
-                published[str(art["id"])] = art.get("date") or art.get("published_at") or time.strftime("%Y-%m-%dT%H:%M:%S")
-
-        path.write_text(json.dumps(published, ensure_ascii=False, indent=2), encoding="utf-8")
-        logging.info(f"📝 Updated published.json with {len(published)} entries")
-
-    # Вызываем:
-    update_published_log(catalog, Path("articles/published.json"))
-
     logging.info("📢 Done: sent %d articles", sent)
 
 
