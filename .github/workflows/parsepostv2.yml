@@ -146,12 +146,15 @@ jobs:
           set -e
           python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
+      # ————————————————————————————————————————————————————————————————
+      # 1. Полный checkout для пуша — НЕ чистит untracked-файлы
       - name: 🔄 Full checkout for push
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
+     # 2. Коммитим обновлённый catalog.json
       - name: 🔧 Commit updated catalog.json
         run: |
           git config user.name "github-actions[bot]"
@@ -163,7 +166,8 @@ jobs:
           else
             echo "✅ catalog.json unchanged — skipping commit"
           fi
-          
+
+      # 3. Загружаем артефакт только после пуша
       - name: 📝 Upload catalog-after-posting
         uses: actions/upload-artifact@v4
         with:
