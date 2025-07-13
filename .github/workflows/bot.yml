@@ -20,9 +20,6 @@ jobs:
           else
             echo "⚠️ requirements-parser.txt не найден — пропускаем установку"
           fi
-          
-      - name: 🔄 Checkout
-        uses: actions/checkout@v4
 
       - name: 🧠 Load settings
         run: |
