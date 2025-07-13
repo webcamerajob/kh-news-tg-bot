@@ -146,6 +146,24 @@ jobs:
           set -e
           python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
+      - name: 🔄 Full checkout for push
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: 🔧 Commit updated catalog.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add articles/catalog.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update catalog after run ${{ github.run_id }}"
+            git push
+          else
+            echo "✅ catalog.json unchanged — skipping commit"
+          fi
+          
       - name: 📝 Upload catalog-after-posting
         uses: actions/upload-artifact@v4
         with:
