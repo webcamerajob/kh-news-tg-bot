@@ -1,302 +1,183 @@
-#!/usr/bin/env python3
-import os
-import json
-import argparse
-import asyncio
-import logging
-import re
-from typing import Any, Dict, List, Optional, Tuple
-from pathlib import Path
-from io import BytesIO
+name: Parse and Post V2
 
-import httpx
-from httpx import HTTPStatusError, ReadTimeout, Timeout
-from PIL import Image
+on:
+  schedule:
+    - cron: '00 22 * * *'   # 05–06 Indo‐China (UTC+7)
+    - cron: '00 04,10 * * *'    # 06–18 Indo‐China
+  workflow_dispatch:
 
-# ──────────────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-# ──────────────────────────────────────────────────────────────────────────────
+permissions:
+  contents: write
 
-HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES   = 3
-RETRY_DELAY   = 5.0
-DEFAULT_DELAY = 5.0
+concurrency:
+  group: parse-and-post-${{ github.ref }}
+  cancel-in-progress: true
 
-# Путь к минимальному state-файлу в репо
-STATE_PATH = Path("articles/catalog.json")
+jobs:
+  parse:
+    name: 🔍 Parse Articles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WG_CONFIG:      ${{ secrets.WG_CONFIG }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
+    steps:
+      - name: 🔄 Checkout code
+        uses: actions/checkout@v4
 
-def escape_markdown(text: str) -> str:
-    """
-    Экранирует спецсимволы для MarkdownV2.
-    """
-    markdown_chars = r'\_*[]()~`>#+-=|{}.!'
-    return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
+      - name: 📦 Cache parser pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-parser-${{ hashFiles('requirements-parser.txt') }}
 
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
 
-def chunk_text(
-    text: str,
-    size: int = 4096,
-    preserve_formatting: bool = True
-) -> List[str]:
-    """
-    Делит text на чанки длиной <= size.
-    Сохраняет двойные переводы строк как разделители параграфов.
-    """
-    norm = text.replace('\r\n', '\n')
-    paras = [p for p in norm.split('\n\n') if p.strip()]
-    if not preserve_formatting:
-        paras = [re.sub(r'\n+', ' ', p) for p in paras]
+      - name: 💾 Install parser dependencies
+        run: pip3 install -r requirements-parser.txt
 
-    chunks, curr = [], ""
-    def _split_long(p: str) -> List[str]:
-        parts, sub = [], ""
-        for w in p.split(" "):
-            if len(sub) + len(w) + 1 > size:
-                parts.append(sub)
-                sub = w
-            else:
-                sub = (sub + " " + w).lstrip()
-        if sub:
-            parts.append(sub)
-        return parts
+      - name: 🛠 Ensure articles/ exists
+        run: mkdir -p articles
 
-    for p in paras:
-        if len(p) > size:
-            if curr:
-                chunks.append(curr)
-                curr = ""
-            chunks.extend(_split_long(p))
-        else:
-            if not curr:
-                curr = p
-            elif len(curr) + 2 + len(p) <= size:
-                curr += "\n\n" + p
-            else:
-                chunks.append(curr)
-                curr = p
+      - name: 🔐 Setup WireGuard & install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            wireguard-tools resolvconf curl jq
+          mkdir -p $HOME/wg
+          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
-    if curr:
-        chunks.append(curr)
-    return chunks
+      - name: 🧠 Run parser
+        run: python3 main.py --lang ru
 
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
 
-def apply_watermark(img_path: Path, scale: float = 0.45) -> bytes:
-    """
-    Накладывает watermark.png (45% ширины) в правый верхний угол изображения.
-    """
-    base = Image.open(img_path).convert("RGBA")
-    wm = Image.open("watermark.png").convert("RGBA")
-    try:
-        filt = Image.Resampling.LANCZOS
-    except AttributeError:
-        filt = Image.LANCZOS
-    ratio = base.width * scale / wm.width
-    wm = wm.resize((int(wm.width * ratio), int(wm.height * ratio)), resample=filt)
-    base.paste(wm, (base.width - wm.width, 0), wm)
-    buf = BytesIO()
-    base.convert("RGB").save(buf, "PNG")
-    return buf.getvalue()
+      - name: ✅ Validate catalog.json with jq
+        run: |
+          if [ ! -f "articles/catalog.json" ]; then
+            echo "❌ catalog.json not found"
+            exit 1
+          fi
+          jq empty articles/catalog.json
 
+      - name: 📦 Upload parsed-content
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsed-content
+          path: articles
 
-async def _post_with_retry(
-    client: httpx.AsyncClient,
-    method: str,
-    url: str,
-    data: Dict[str, Any],
-    files: Optional[Dict[str, Any]] = None
-) -> bool:
-    """
-    HTTP POST с retry: 4xx – без retry, 5xx/timeout – retry.
-    """
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            resp = await client.request(
-                method, url, data=data, files=files, timeout=HTTPX_TIMEOUT
-            )
-            resp.raise_for_status()
-            return True
+      - name: 🚨 Notify parse failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
+            -d text="🚨 Parsing job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
 
-        except ReadTimeout:
-            logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
+  post:
+    name: 📤 Publish Articles
+    needs: parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      BATCH_LIMIT: 10        # публикуем по 10 статей за запуск
+      POST_DELAY: 10        # пауза между постами, с
 
-        except HTTPStatusError as e:
-            code = e.response.status_code
-            if 400 <= code < 500:
-                logging.error("❌ %s %s: %s", method, code, e.response.text)
-                return False
-            logging.warning("⚠️ %s %s, retrying %s/%s", method, code, attempt, MAX_RETRIES)
+    steps:
+      - name: 🔄 Sparse checkout poster.py
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            poster.py
+            requirements-poster.txt
+            watermark.png
 
-        await asyncio.sleep(RETRY_DELAY)
+      - name: 📦 Cache poster pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-poster-${{ hashFiles('requirements-poster.txt') }}
 
-    logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
-    return False
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
 
+      - name: 💾 Install poster dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip3 install -r requirements-poster.txt
 
-async def send_media_group(
-    client: httpx.AsyncClient,
-    token: str,
-    chat_id: str,
-    images: List[Path],
-    caption: str,
-    use_caption=False
-) -> bool:
-    """
-    Альбом фото в Telegram. Caption только к первому фото.
-    """
-    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    media, files = [], {}
-    for idx, img in enumerate(images):
-        key = f"photo{idx}"
-        files[key] = (img.name, apply_watermark(img), "image/png")
-        item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0 and use_caption:
-            item["caption"] = escape_markdown(caption)
-            item["parse_mode"] = "MarkdownV2"
-        media.append(item)
+      - name: 📥 Download parsed-content
+        uses: actions/download-artifact@v4
+        with:
+          name: parsed-content
+          path: articles
 
-    data = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
-    return await _post_with_retry(client, "POST", url, data, files)
+      - name: 🐞 Debug articles content
+        run: |
+          echo "→ Contents of articles/:"
+          ls -R articles
 
+      - name: 🔧 Install jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
 
-async def send_message(
-    client: httpx.AsyncClient,
-    token: str,
-    chat_id: str,
-    text: str
-) -> bool:
-    """
-    Отправляет текстовое сообщение.
-    """
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {
-        "chat_id": chat_id,
-        "text": escape_markdown(text),
-        "parse_mode": "MarkdownV2"
-    }
-    return await _post_with_retry(client, "POST", url, data)
+      - name: 📁 Validate catalog.json
+        run: |
+          if [ ! -f "articles/catalog.json" ]; then
+            echo "⚠️ catalog.json not found — skipping post"
+            exit 0
+          fi
+          jq empty articles/catalog.json
 
+      - name: 📤 Run poster (batch)
+        run: |
+          set -e
+          python3 poster.py --limit ${{ env.BATCH_LIMIT }}
 
-def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
-    """
-    Проверяет title, text_file и images → возвращает (caption, text_path, images).
-    """
-    title = art.get("title")
-    txt   = art.get("text_file")
-    imgs  = art.get("images", [])
+      # ————————————————————————————————————————————————————————————————
+      # 1. Полный checkout для пуша — НЕ чистит untracked-файлы
+      - name: 🔄 Full checkout for push
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false # сохраняем неотслеживаемые файлы, включая articles/catalog.json
 
-    if not title or not isinstance(title, str):
-        logging.error("Missing or invalid title in article %s", art.get("id"))
-        return None
-    if not txt or not Path(txt).is_file():
-        logging.error("Missing or invalid text_file in article %s", art.get("id"))
-        return None
-    valid_imgs = [Path(p) for p in imgs if Path(p).is_file()]
-    if not valid_imgs:
-        logging.error("No valid images for article %s", art.get("id"))
-        return None
+     # 2. Коммитим обновлённый catalog.json
+      - name: 🔧 Commit updated catalog.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add articles/catalog.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update catalog after run ${{ github.run_id }}"
+            git push
+          else
+            echo "✅ catalog.json unchanged — skipping commit"
+          fi
 
-    raw = title.strip()
-    cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
-    return escape_markdown(cap), Path(txt), valid_imgs
+      # 3. Загружаем артефакт только после пуша
+      - name: 📝 Upload catalog-after-posting
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-after-posting-${{ github.run_id }}
+          path: articles/catalog.json
 
-
-async def main(limit: Optional[int]):
-    token   = os.getenv("TELEGRAM_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHANNEL")
-    if not token or not chat_id:
-        logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
-        return
-
-    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
-
-    # 1) Загружаем уже опубликованные ID из репо-state
-    posted_ids = set()
-    if STATE_PATH.is_file():
-        try:
-            posted_ids = {item["id"] for item in json.loads(
-                STATE_PATH.read_text(encoding="utf-8")
-            ) if "id" in item}
-            logging.info("Loaded %d posted IDs from state", len(posted_ids))
-        except Exception as e:
-            logging.warning("Failed to read state-file %s: %s", STATE_PATH, e)
-    else:
-        logging.info("%s not found, will post all parsed articles", STATE_PATH)
-
-    # 2) Сканируем parsed-content (артефакт) → собираем meta.json из папок
-    parsed_articles: List[Dict[str, Any]] = []
-    for art_dir in sorted(Path("articles").iterdir()):
-        meta_file = art_dir / "meta.json"
-        if art_dir.is_dir() and meta_file.is_file():
-            try:
-                parsed_articles.append(json.loads(
-                    meta_file.read_text(encoding="utf-8")
-                ))
-            except Exception as e:
-                logging.warning("Failed to load meta for %s: %s", art_dir, e)
-
-    client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
-    sent = 0
-
-    # 3) Публикуем новые статьи
-    for art in parsed_articles:
-        aid = art.get("id")
-        if aid in posted_ids:
-            logging.info("Skipping already posted article %s", aid)
-            continue
-        if limit and sent >= limit:
-            break
-
-        validated = validate_article(art)
-        if not validated:
-            continue
-        caption, text_path, images = validated
-
-        if not await send_media_group(
-            client, token, chat_id, images, caption, use_caption=True
-        ):
-            continue
-
-        raw    = text_path.read_text(encoding="utf-8")
-        chunks = chunk_text(raw, size=4096)
-        body   = chunks[1:] if len(chunks) > 1 else chunks
-        for part in body:
-            await send_message(client, token, chat_id, part)
-
-        posted_ids.add(aid)
-        sent += 1
-        logging.info("✅ Posted ID=%s", aid)
-        await asyncio.sleep(delay)
-
-    await client.aclose()
-
-    # 4) Перезаписываем minimal-state только для опубликованных
-    minimal = [
-        {"id": art["id"], "hash": art["hash"], "translated_to": art.get("translated_to", "")}
-        for art in parsed_articles
-        if art.get("id") in posted_ids
-    ]
-    try:
-        STATE_PATH.write_text(
-            json.dumps(minimal, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        logging.info("State saved to %s", STATE_PATH)
-    except Exception as e:
-        logging.error("Failed to save state-file %s: %s", STATE_PATH, e)
-
-    logging.info("📢 Done: sent %d articles", sent)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
-    parser.add_argument(
-        "-n", "--limit", type=int, default=None,
-        help="максимальное число статей для отправки"
-    )
-    args = parser.parse_args()
-    asyncio.run(main(limit=args.limit))
-```
+      - name: 🚨 Notify post failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
+            -d text="🚨 Post job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
