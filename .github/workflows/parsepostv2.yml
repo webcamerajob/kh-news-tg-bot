@@ -90,8 +90,8 @@ jobs:
     env:
       TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      BATCH_LIMIT: 5        # публикуем по 5 статей за запуск
-      POST_DELAY: 5        # пауза между постами, с
+      BATCH_LIMIT: 10        # публикуем по 5 статей за запуск
+      POST_DELAY: 10        # пауза между постами, с
 
     steps:
       - name: 🔄 Sparse checkout poster.py
