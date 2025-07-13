@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cloudscraper
 from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
-from deep_translator import GoogleTranslator
+# from deep_translator import GoogleTranslator
+import translators as ts
 from bs4 import BeautifulSoup
 
 # списком — все фразы/слова, которые нужно вырезать
@@ -147,6 +148,23 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
 
+# Добавляем адаптер-функцию translate_text()
+def translate_text(text: str, to_lang: str = "ru", provider: str = "google") -> str:
+    """
+    Перевод текста через translators с защитой от ошибок.
+    Возвращает оригинал, если перевод недоступен.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    try:
+        translated = ts.translate_text(text, translator=provider, to_language=to_lang)
+        if isinstance(translated, str):
+            return translated
+        logging.warning("Translator returned non-str: %s", text[:50])
+    except Exception as e:
+        logging.warning("Translation error [%s → %s]: %s", provider, to_lang, e)
+    return text
+
 def chunk_text(text: str, size: int = 4096, preserve_formatting: bool = True) -> List[str]:
     """Аналогично исходной версии"""
     norm = text.replace('\r\n', '\n')
@@ -208,7 +226,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
+                title = translate_text(orig_title, to_lang=translate_to, provider="google")
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
@@ -278,10 +296,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     clean_paras = [bad_re.sub("", p) for p in paras]
-                    trans = [
-                        GoogleTranslator(source="auto", target=translate_to).translate(p)
-                        for p in clean_paras
-                    ]
+                    trans = [translate_text(p, to_lang=translate_to, provider="google") for p in clean_paras]
+
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     trans_txt = "\n\n".join(trans)
                     header_t = f"{title}\n\n\n"
