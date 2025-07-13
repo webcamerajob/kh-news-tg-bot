@@ -5,7 +5,7 @@ import argparse
 import asyncio
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from pathlib import Path
 from io import BytesIO
 
@@ -20,39 +20,25 @@ logging.basicConfig(
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES   = 3
-RETRY_DELAY   = 5.0
-DEFAULT_DELAY = 5.0
+HTTPX_TIMEOUT   = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+MAX_RETRIES     = 3
+RETRY_DELAY     = 5.0
+DEFAULT_DELAY   = 5.0
 
-# Путь к минимальному state-файлу в репо
-STATE_PATH = Path("articles/catalog.json")
+ARTICLES_DIR    = Path("articles")
+STATE_FILE_PATH = ARTICLES_DIR / "catalog.json"
 
 
 def escape_markdown(text: str) -> str:
-    """
-    Экранирует спецсимволы для MarkdownV2.
-    """
     markdown_chars = r'\_*[]()~`>#+-=|{}.!'
     return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
 
 
-def chunk_text(
-    text: str,
-    size: int = 4096,
-    preserve_formatting: bool = True
-) -> List[str]:
-    """
-    Делит text на чанки длиной <= size.
-    Сохраняет двойные переводы строк как разделители параграфов.
-    """
+def chunk_text(text: str, size: int = 4096) -> List[str]:
     norm = text.replace('\r\n', '\n')
     paras = [p for p in norm.split('\n\n') if p.strip()]
-    if not preserve_formatting:
-        paras = [re.sub(r'\n+', ' ', p) for p in paras]
-
     chunks, curr = [], ""
-    def _split_long(p: str) -> List[str]:
+    def split_long(p: str) -> List[str]:
         parts, sub = [], ""
         for w in p.split(" "):
             if len(sub) + len(w) + 1 > size:
@@ -67,17 +53,15 @@ def chunk_text(
     for p in paras:
         if len(p) > size:
             if curr:
-                chunks.append(curr)
-                curr = ""
-            chunks.extend(_split_long(p))
+                chunks.append(curr); curr = ""
+            chunks.extend(split_long(p))
         else:
             if not curr:
                 curr = p
             elif len(curr) + 2 + len(p) <= size:
                 curr += "\n\n" + p
             else:
-                chunks.append(curr)
-                curr = p
+                chunks.append(curr); curr = p
 
     if curr:
         chunks.append(curr)
@@ -85,15 +69,9 @@ def chunk_text(
 
 
 def apply_watermark(img_path: Path, scale: float = 0.45) -> bytes:
-    """
-    Накладывает watermark.png (45% ширины) в правый верхний угол изображения.
-    """
     base = Image.open(img_path).convert("RGBA")
-    wm = Image.open("watermark.png").convert("RGBA")
-    try:
-        filt = Image.Resampling.LANCZOS
-    except AttributeError:
-        filt = Image.LANCZOS
+    wm   = Image.open("watermark.png").convert("RGBA")
+    filt = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
     ratio = base.width * scale / wm.width
     wm = wm.resize((int(wm.width * ratio), int(wm.height * ratio)), resample=filt)
     base.paste(wm, (base.width - wm.width, 0), wm)
@@ -109,9 +87,6 @@ async def _post_with_retry(
     data: Dict[str, Any],
     files: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """
-    HTTP POST с retry: 4xx – без retry, 5xx/timeout – retry.
-    """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = await client.request(
@@ -121,18 +96,18 @@ async def _post_with_retry(
             return True
 
         except ReadTimeout:
-            logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
+            logging.warning("Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
 
         except HTTPStatusError as e:
             code = e.response.status_code
             if 400 <= code < 500:
-                logging.error("❌ %s %s: %s", method, code, e.response.text)
+                logging.error("%s %s: %s", method, code, e.response.text)
                 return False
-            logging.warning("⚠️ %s %s, retrying %s/%s", method, code, attempt, MAX_RETRIES)
+            logging.warning("%s %s, retry %s/%s", method, code, attempt, MAX_RETRIES)
 
         await asyncio.sleep(RETRY_DELAY)
 
-    logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
+    logging.error("Failed %s after %s attempts", url, MAX_RETRIES)
     return False
 
 
@@ -141,19 +116,15 @@ async def send_media_group(
     token: str,
     chat_id: str,
     images: List[Path],
-    caption: str,
-    use_caption=False
+    caption: str
 ) -> bool:
-    """
-    Альбом фото в Telegram. Caption только к первому фото.
-    """
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
     media, files = [], {}
     for idx, img in enumerate(images):
         key = f"photo{idx}"
         files[key] = (img.name, apply_watermark(img), "image/png")
         item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0 and use_caption:
+        if idx == 0:
             item["caption"] = escape_markdown(caption)
             item["parse_mode"] = "MarkdownV2"
         media.append(item)
@@ -168,9 +139,6 @@ async def send_message(
     chat_id: str,
     text: str
 ) -> bool:
-    """
-    Отправляет текстовое сообщение.
-    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {
         "chat_id": chat_id,
@@ -181,27 +149,40 @@ async def send_message(
 
 
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
-    """
-    Проверяет title, text_file и images → возвращает (caption, text_path, images).
-    """
     title = art.get("title")
     txt   = art.get("text_file")
     imgs  = art.get("images", [])
 
     if not title or not isinstance(title, str):
-        logging.error("Missing or invalid title in article %s", art.get("id"))
+        logging.error("Invalid title in %s", art.get("id"))
         return None
     if not txt or not Path(txt).is_file():
-        logging.error("Missing or invalid text_file in article %s", art.get("id"))
+        logging.error("Invalid text_file in %s", art.get("id"))
         return None
-    valid_imgs = [Path(p) for p in imgs if Path(p).is_file()]
-    if not valid_imgs:
-        logging.error("No valid images for article %s", art.get("id"))
+    valid = [Path(p) for p in imgs if Path(p).is_file()]
+    if not valid:
+        logging.error("No valid images in %s", art.get("id"))
         return None
 
     raw = title.strip()
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
-    return escape_markdown(cap), Path(txt), valid_imgs
+    return escape_markdown(cap), Path(txt), valid
+
+
+def load_posted_ids() -> Set[int]:
+    if not STATE_FILE_PATH.is_file():
+        return set()
+    try:
+        return set(json.loads(STATE_FILE_PATH.read_text(encoding="utf-8")))
+    except Exception as e:
+        logging.warning("Failed to read %s: %s", STATE_FILE_PATH, e)
+        return set()
+
+
+def save_posted_ids(ids: Set[int]) -> None:
+    ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE_PATH.write_text(json.dumps(sorted(ids), ensure_ascii=False, indent=2),
+                               encoding="utf-8")
 
 
 async def main(limit: Optional[int]):
@@ -212,90 +193,65 @@ async def main(limit: Optional[int]):
         return
 
     delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+    posted_ids_old = load_posted_ids()
+    logging.info("Loaded %d published IDs", len(posted_ids_old))
 
-    # 1) Загружаем уже опубликованные ID из репо-state
-    posted_ids = set()
-    if STATE_PATH.is_file():
-        try:
-            posted_ids = {item["id"] for item in json.loads(
-                STATE_PATH.read_text(encoding="utf-8")
-            ) if "id" in item}
-            logging.info("Loaded %d posted IDs from state", len(posted_ids))
-        except Exception as e:
-            logging.warning("Failed to read state-file %s: %s", STATE_PATH, e)
-    else:
-        logging.info("%s not found, will post all parsed articles", STATE_PATH)
-
-    # 2) Сканируем parsed-content (артефакт) → собираем meta.json из папок
-    parsed_articles: List[Dict[str, Any]] = []
-    for art_dir in sorted(Path("articles").iterdir()):
-        meta_file = art_dir / "meta.json"
-        if art_dir.is_dir() and meta_file.is_file():
+    # Собираем parsed-артикли из подпапок articles/
+    parsed = []
+    for d in sorted(ARTICLES_DIR.iterdir()):
+        meta_f = d / "meta.json"
+        if d.is_dir() and meta_f.is_file():
             try:
-                parsed_articles.append(json.loads(
-                    meta_file.read_text(encoding="utf-8")
-                ))
+                parsed.append(json.loads(meta_f.read_text(encoding="utf-8")))
             except Exception as e:
-                logging.warning("Failed to load meta for %s: %s", art_dir, e)
+                logging.warning("Cannot load meta %s: %s", d, e)
 
     client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent = 0
+    new_ids = set()
 
-    # 3) Публикуем новые статьи
-    for art in parsed_articles:
+    for art in parsed:
         aid = art.get("id")
-        if aid in posted_ids:
-            logging.info("Skipping already posted article %s", aid)
+        if aid in posted_ids_old:
+            logging.info("Skipping already posted %s", aid)
             continue
         if limit and sent >= limit:
             break
 
-        validated = validate_article(art)
-        if not validated:
+        val = validate_article(art)
+        if not val:
             continue
-        caption, text_path, images = validated
+        caption, txt_path, imgs = val
 
-        if not await send_media_group(
-            client, token, chat_id, images, caption, use_caption=True
-        ):
+        if not await send_media_group(client, token, chat_id, imgs, caption):
             continue
 
-        raw    = text_path.read_text(encoding="utf-8")
-        chunks = chunk_text(raw, size=4096)
+        raw    = txt_path.read_text(encoding="utf-8")
+        chunks = chunk_text(raw)
         body   = chunks[1:] if len(chunks) > 1 else chunks
         for part in body:
             await send_message(client, token, chat_id, part)
 
-        posted_ids.add(aid)
+        new_ids.add(aid)
         sent += 1
         logging.info("✅ Posted ID=%s", aid)
         await asyncio.sleep(delay)
 
     await client.aclose()
 
-    # 4) Перезаписываем minimal-state только для опубликованных
-    minimal = [
-        {"id": art["id"], "hash": art["hash"], "translated_to": art.get("translated_to", "")}
-        for art in parsed_articles
-        if art.get("id") in posted_ids
-    ]
-    try:
-        STATE_PATH.write_text(
-            json.dumps(minimal, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        logging.info("State saved to %s", STATE_PATH)
-    except Exception as e:
-        logging.error("Failed to save state-file %s: %s", STATE_PATH, e)
-
+    # Сохраняем объединение старых и новых ID
+    all_ids = posted_ids_old.union(new_ids)
+    save_posted_ids(all_ids)
+    logging.info("State updated with %d total IDs", len(all_ids))
     logging.info("📢 Done: sent %d articles", sent)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
+    parser = argparse.ArgumentParser(description="Poster: пакеты статей")
     parser.add_argument(
         "-n", "--limit", type=int, default=None,
         help="максимальное число статей для отправки"
     )
     args = parser.parse_args()
     asyncio.run(main(limit=args.limit))
+```
