@@ -8,6 +8,10 @@ import hashlib
 import time
 import fcntl  # ADDED: для блокировки файла
 
+import os
+os.environ["translators_default_region"] = "EN"
+import translators as ts
+
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
