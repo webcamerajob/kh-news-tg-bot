@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
+# coding: utf-8
+
 import os
 import json
 import argparse
 import asyncio
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 from io import BytesIO
 
 import httpx
@@ -20,15 +22,11 @@ logging.basicConfig(
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-# HTTP/Telegram settings
+# HTTPX / Telegram retry settings
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 5.0
-
-# Paths
-ARTICLES_DIR    = Path("articles")
-STATE_FILE_PATH = ARTICLES_DIR / "catalog.json"
 
 
 def escape_markdown(text: str) -> str:
@@ -136,7 +134,7 @@ async def send_media_group(
     caption: str
 ) -> bool:
     """
-    Отправляет альбом фото в Telegram с подписью к первому изображению.
+    Отправляет альбом фото в Telegram с подписью к первому фото.
     """
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
     media, files = [], {}
@@ -173,8 +171,8 @@ async def send_message(
 
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
     """
-    Проверяет наличие title, text_file и хотя бы одного изображения.
-    Возвращает (caption, текстовый файл, список изображений).
+    Проверяет title, text_file и наличие изображений.
+    Возвращает (caption, путь к тексту, список путей к изображениям).
     """
     title = art.get("title")
     txt   = art.get("text_file")
@@ -196,30 +194,30 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
     return escape_markdown(cap), Path(txt), valid_imgs
 
 
-def load_posted_ids() -> Set[int]:
+def load_posted_ids(state_file: Path) -> Set[int]:
     """
-    Читает articles/catalog.json и возвращает set опубликованных ID.
-    Поддерживает:
-      - пустой или отсутствующий файл → пустой set
-      - JSON-пустой список [] → пустой set
-      - список чисел [1,2,3]
-      - список объектов [{"id":1}, {"id":2}]
+    Читает state-файл и возвращает set опубликованных ID.
+    Форматы:
+      - не существует или пустой → set()
+      - [] → set()
+      - [1,2,3] → {1,2,3}
+      - [{"id":1}, {"id":2}] → {1,2}
     """
-    if not STATE_FILE_PATH.is_file():
+    if not state_file.is_file():
         return set()
 
-    text = STATE_FILE_PATH.read_text(encoding="utf-8").strip()
+    text = state_file.read_text(encoding="utf-8").strip()
     if not text:
         return set()
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        logging.warning("Не JSON в %s: %r", STATE_FILE_PATH, text)
+        logging.warning("State file not JSON: %s", state_file)
         return set()
 
     if not isinstance(data, list):
-        logging.warning("Ожидался список в %s, получен %s", STATE_FILE_PATH, type(data))
+        logging.warning("State file is not a list: %s", state_file)
         return set()
 
     ids: Set[int] = set()
@@ -234,45 +232,53 @@ def load_posted_ids() -> Set[int]:
     return ids
 
 
-def save_posted_ids(ids: Set[int]) -> None:
+def save_posted_ids(ids: Set[int], state_file: Path) -> None:
     """
-    Сохраняет отсортированный список ID в articles/catalog.json.
+    Сохраняет отсортированный список ID в state-файл.
     """
-    ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     arr = sorted(ids)
-    STATE_FILE_PATH.write_text(
+    state_file.write_text(
         json.dumps(arr, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    logging.info("Saved %d IDs to %s", len(arr), STATE_FILE_PATH)
+    logging.info("Saved %d IDs to %s", len(arr), state_file)
 
 
-async def main(limit: Optional[int]):
+async def main(
+    parsed_dir: str,
+    state_path: str,
+    limit: Optional[int]
+):
     token   = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
     if not token or not chat_id:
         logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
         return
 
-    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+    delay      = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+    parsed_root = Path(parsed_dir)
+    state_file  = Path(state_path)
 
-    posted_ids_old = load_posted_ids()
+    # Загрузка опубликованных ID из репо
+    posted_ids_old = load_posted_ids(state_file)
     logging.info("Loaded %d published IDs", len(posted_ids_old))
 
-    # Читаем распарсенные статьи из подпапок articles/
+    # Сбор всех распарсенных статей
     parsed: List[Dict[str, Any]] = []
-    for d in sorted(ARTICLES_DIR.iterdir()):
+    for d in sorted(parsed_root.iterdir()):
         meta_file = d / "meta.json"
         if d.is_dir() and meta_file.is_file():
             try:
                 parsed.append(json.loads(meta_file.read_text(encoding="utf-8")))
             except Exception as e:
-                logging.warning("Cannot load meta for %s: %s", d.name, e)
+                logging.warning("Cannot load meta %s: %s", d.name, e)
 
     client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
-    sent = 0
+    sent    = 0
     new_ids: Set[int] = set()
 
+    # Публикация
     for art in parsed:
         aid = art.get("id")
         if aid in posted_ids_old:
@@ -302,18 +308,36 @@ async def main(limit: Optional[int]):
 
     await client.aclose()
 
-    # Обновляем и сохраняем state
+    # Сохранение обновлённого state-файла
     all_ids = posted_ids_old.union(new_ids)
-    save_posted_ids(all_ids)
-    logging.info("State updated with %d total IDs", len(all_ids))
+    save_posted_ids(all_ids, state_file)
+
     logging.info("📢 Done: sent %d articles", sent)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
     parser.add_argument(
-        "-n", "--limit", type=int, default=None,
+        "--parsed-dir",
+        type=str,
+        default="parsed/articles",
+        help="директория с распарсенными статьями"
+    )
+    parser.add_argument(
+        "--state-file",
+        type=str,
+        default="articles/catalog.json",
+        help="путь к state-файлу в репо"
+    )
+    parser.add_argument(
+        "-n", "--limit",
+        type=int,
+        default=None,
         help="максимальное число статей для отправки"
     )
     args = parser.parse_args()
-    asyncio.run(main(limit=args.limit))
+    asyncio.run(main(
+        parsed_dir=args.parsed_dir,
+        state_path=args.state_file,
+        limit=args.limit
+    ))
