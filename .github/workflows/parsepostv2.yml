@@ -90,7 +90,7 @@ jobs:
     env:
       TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      BATCH_LIMIT: 10        # публикуем по 5 статей за запуск
+      BATCH_LIMIT: 10        # публикуем по 10 статей за запуск
       POST_DELAY: 10        # пауза между постами, с
 
     steps:
