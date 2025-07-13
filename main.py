@@ -161,7 +161,7 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
     if not text or not isinstance(text, str):
         return ""
     try:
-        translated = ts.translate_text(text, translator=provider, to_language=to_lang)
+        translated = ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
         if isinstance(translated, str):
             return translated
         logging.warning("Translator returned non-str: %s", text[:50])
