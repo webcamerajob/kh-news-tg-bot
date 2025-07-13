@@ -142,7 +142,8 @@ async def send_media_group(
     token: str,
     chat_id: str,
     images: List[Path],
-    caption: str
+    caption: str,
+    use_caption=False
 ) -> bool:
     """
     Отправляет несколько фото как альбом. Подпись даётся первому фото.
@@ -154,7 +155,7 @@ async def send_media_group(
         img_bytes = apply_watermark(img)
         files[key] = (img.name, img_bytes, "image/png")
         item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0:
+        if idx == 0 and use_caption:
             item["caption"] = escape_markdown(caption)
             item["parse_mode"] = "MarkdownV2"
         media.append(item)
