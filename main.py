@@ -284,7 +284,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                     ]
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     trans_txt = "\n\n".join(trans)
-                    header_t = f"**{title}**\n\n"
+                    header_t = f"{title}\n\n\n"
                     txt_t.write_text(header_t + trans_txt, encoding="utf-8")
 
                     meta.update({
