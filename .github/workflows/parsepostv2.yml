@@ -153,6 +153,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          clean: false # сохраняем неотслеживаемые файлы, включая articles/catalog.json
 
      # 2. Коммитим обновлённый catalog.json
       - name: 🔧 Commit updated catalog.json
