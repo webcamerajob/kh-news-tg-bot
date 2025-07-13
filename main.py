@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cloudscraper
 from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 # from deep_translator import GoogleTranslator
-import translators as ts
+# import translators as ts
 from bs4 import BeautifulSoup
 
 # списком — все фразы/слова, которые нужно вырезать
