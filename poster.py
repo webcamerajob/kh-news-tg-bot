@@ -26,7 +26,8 @@ MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 5.0
 
-CATALOG_PATH = Path("articles/catalog.json")
+# Path to minimal state-file (id, hash, translated_to)
+STATE_PATH = Path("articles/catalog.json")
 
 
 def escape_markdown(text: str) -> str:
@@ -52,6 +53,7 @@ def chunk_text(
         paras = [re.sub(r'\n+', ' ', p) for p in paras]
 
     chunks, curr = [], ""
+
     def _split_long(p: str) -> List[str]:
         parts, sub = [], ""
         for w in p.split(" "):
@@ -182,37 +184,6 @@ async def send_message(
     return await _post_with_retry(client, "POST", url, data, None)
 
 
-def load_catalog() -> List[Dict[str, Any]]:
-    """
-    Загружает и возвращает список артиклей из JSON.
-    """
-    if not CATALOG_PATH.is_file():
-        logging.error("catalog.json not found at %s", CATALOG_PATH)
-        return []
-    try:
-        return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        logging.error("JSON decode error: %s", e)
-        return []
-
-
-def save_catalog_atomic(catalog: List[Dict[str, Any]]) -> None:
-    """
-    Сохраняет обновлённый каталог в JSON атомарно.
-    """
-    OUTPUT_DIR = CATALOG_PATH.parent
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = CATALOG_PATH.with_suffix(".json.tmp")
-    text = json.dumps(catalog, ensure_ascii=False, indent=2)
-    # write to temp file
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    # atomic replace
-    os.replace(tmp, CATALOG_PATH)
-
-
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
     """
     Проверяет обязательные поля и возвращает
@@ -233,12 +204,9 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
         logging.error("No valid images for article %s", art.get("id"))
         return None
 
-    # используем только заголовок статьи в качестве подписи
-    # экранируем MarkdownV2 и обрезаем до 100 символов
     raw_title = title.strip()
     short = raw_title if len(raw_title) <= 1024 else raw_title[:1023] + "…"
     caption = escape_markdown(short)
-
     return caption, Path(txt), valid_imgs
 
 
@@ -249,13 +217,39 @@ async def main(limit: Optional[int]):
         logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
         return
 
-    delay   = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
-    catalog = load_catalog()
-    client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
-    sent    = 0
+    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
 
-    for art in catalog:
-        if art.get("posted"):
+    # 1) Загружаем уже опубликованные ID из repo-state
+    posted_ids = set()
+    if STATE_PATH.is_file():
+        try:
+            lst = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            posted_ids = {item["id"] for item in lst if "id" in item}
+        except Exception as e:
+            logging.warning(f"Не удалось прочитать state-файл {STATE_PATH}: {e}")
+    else:
+        logging.info(f"{STATE_PATH} не найден — публикуем всё как новое")
+
+    # 2) Собираем список всех parsed-статей из артефакта
+    parsed_articles: List[Dict[str, Any]] = []
+    for art_dir in sorted(Path("articles").iterdir()):
+        meta_file = art_dir / "meta.json"
+        if not (art_dir.is_dir() and meta_file.is_file()):
+            continue
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            parsed_articles.append(meta)
+        except Exception as e:
+            logging.warning(f"Failed to load meta for {art_dir.name}: {e}")
+
+    client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
+    sent = 0
+
+    # 3) Перебираем parsed_articles, пропуская уже опубликованные
+    for art in parsed_articles:
+        aid = art.get("id")
+        if aid in posted_ids:
+            logging.info(f"Skipping already posted article {aid}")
             continue
         if limit and sent >= limit:
             break
@@ -265,32 +259,34 @@ async def main(limit: Optional[int]):
             continue
         caption, text_path, images = validated
 
-        # send media group with first paragraph as caption
-        if not await send_media_group(client, token, chat_id, images, caption):
+        if not await send_media_group(client, token, chat_id, images, caption, use_caption=True):
             continue
 
-        # send body chunks after skipping first paragraph
         raw = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw, size=4096, preserve_formatting=True)
-
-        # Если чанков несколько — убираем первый (он в caption),
-        # иначе — шлём единственный
-        if len(chunks) > 1:
-            body_chunks = chunks[1:]
-        else:
-            body_chunks = chunks
+        body_chunks = chunks[1:] if len(chunks) > 1 else chunks
 
         for part in body_chunks:
             await send_message(client, token, chat_id, part)
 
-
         art["posted"] = True
         sent += 1
-        logging.info("✅ Posted ID=%s", art.get("id"))
+        logging.info("✅ Posted ID=%s", aid)
         await asyncio.sleep(delay)
 
     await client.aclose()
-    save_catalog_atomic(catalog)
+
+    # 4) Сохраняем обновлённый minimal-state в STATE_PATH
+    minimal = [
+        {"id": x["id"], "hash": x["hash"], "translated_to": x.get("translated_to", "")}
+        for x in parsed_articles
+    ]
+    try:
+        STATE_PATH.write_text(json.dumps(minimal, ensure_ascii=False, indent=2), encoding="utf-8")
+        logging.info(f"State saved to {STATE_PATH}")
+    except Exception as e:
+        logging.error(f"Failed to save state-file {STATE_PATH}: {e}")
+
     logging.info("📢 Done: sent %d articles", sent)
 
 
