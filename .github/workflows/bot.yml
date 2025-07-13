@@ -70,12 +70,9 @@ jobs:
           LIMIT=$(jq -r '.limit' settings.json)
           python3 poster.py --limit "$LIMIT"
 
-      - name: 📡 Telegram Notify
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      - name: 🚨 Notify post failure
+        if: failure()
         run: |
-          MESSAGE=$(jq -c . settings.json | sed 's/"/\\"/g')
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -d chat_id="$CHANNEL" \
-            -d text="✅ Запуск завершён.\nПараметры:\n${MESSAGE}"
+          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
+            -d text="❌ Post failed for run ${{ github.run_id }}"
