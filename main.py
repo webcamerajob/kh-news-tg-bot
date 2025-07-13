@@ -8,7 +8,7 @@ import hashlib
 import time
 import fcntl  # ADDED: для блокировки файла
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -16,10 +16,6 @@ import cloudscraper
 from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
-
-# количество постов
-
-DEFAULT_LIMIT = 10
 
 # списком — все фразы/слова, которые нужно вырезать
 bad_patterns = [
@@ -47,15 +43,6 @@ BASE_DELAY  = 2.0                 # базовый интервал для backo
 OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 # ──────────────────────────────────────────────────────────────────────────────
-
-def load_published_ids(path: Path) -> Set[str]:
-    if not path.is_file():
-        return set()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return set(data.keys())
-    except json.JSONDecodeError:
-        return set()
 
 def extract_img_url(img_tag):
     """Аналогично исходной версии"""
@@ -216,41 +203,22 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     # Остальная логика функции остается без изменений
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    title = orig_title
 
-def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
-    """
-    Переводит заголовок статьи, защищён от ошибок NoneType, пустых строк и странных входных данных.
-    Возвращает переведённый заголовок или оригинал, если перевод невозможен.
-    """
-    title = orig_title.strip() if isinstance(orig_title, str) else ""
-    if not title:
-        logging.warning(f"[ID={aid}] Заголовок пустой — пропущен перевод.")
-        return "Без заголовка"
-
-    safe_input = title[:200]  # ограничим длину, если нужно
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            translated = GoogleTranslator(source="auto", target=target_lang).translate(safe_input)
-            return translated.strip() or title
-        except Exception as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                f"[ID={aid}] Перевод заголовка попытка {attempt} не удалась: {e}; ждём {delay:.1f}s"
-            )
-            time.sleep(delay)
-
-    logging.warning(f"[ID={aid}] Перевод заголовка провален после {MAX_RETRIES} попыток.")
-    return title
-  
-    title = safe_translate_title(orig_title, translate_to, aid) if translate_to else orig_title
+    if translate_to:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                title = GoogleTranslator(source="auto", target=translate_to).translate(orig_title)
+                break
+            except Exception as e:
+                delay = BASE_DELAY * 2 ** (attempt - 1)
+                logging.warning(
+                    "Translate title attempt %s failed: %s; retry in %.1fs",
+                    attempt, e, delay
+                )
+                time.sleep(delay)
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
-    # Удаляем <p>, находящиеся внутри блоков изображений (чтобы заголовки и подписи не попали в текст)
-    for container in soup.find_all(["figure", "div"], class_="wp-block-image"):
-        for bad_p in container.find_all("p"):
-            bad_p.decompose()
-
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
     raw_text = bad_re.sub("", raw_text)
@@ -311,10 +279,7 @@ def safe_translate_title(orig_title: str, target_lang: str, aid: Any) -> str:
                         for p in clean_paras
                     ]
                     txt_t = art_dir / f"content.{translate_to}.txt"
-                    trans_txt = "\n\n".join(trans)
-                    header_t = f"{title}\n\n"
-                    txt_t.write_text(header_t + trans_txt, encoding="utf-8")
-
+                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
                     meta.update({
                         "translated_to": translate_to,
                         "translated_paras": trans,
@@ -351,25 +316,18 @@ def main():
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or DEFAULT_LIMIT))
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
         catalog = load_catalog()
         existing_ids = {article["id"] for article in catalog}
         new_articles = 0
-        
-        published_ids = load_published_ids(Path("published.json"))  # ← NEW
 
         for post in posts[:args.limit or len(posts)]:
             post_id = post["id"]
-            
             if post_id in existing_ids:
                 logging.debug(f"Skipping existing article ID={post_id}")
                 continue
-                
-            if str(post_id) in published_ids:
-                logging.info(f"Skipping already published ID={post_id}")
-                continue
-                
+
             if meta := parse_and_save(post, args.lang, args.base_url):
                 catalog.append(meta)
                 existing_ids.add(post_id)
@@ -381,11 +339,6 @@ def main():
             logging.info(f"Added {new_articles} new articles. Total: {len(catalog)}")
         else:
             logging.info("No new articles found")
-
-        if not CATALOG_PATH.exists():
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            CATALOG_PATH.write_text("[]", encoding="utf-8")
-            logging.info("Created empty catalog.json as fallback")
 
     except Exception as e:
         logging.exception("Fatal error in main:")
