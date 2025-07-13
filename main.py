@@ -219,21 +219,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 time.sleep(delay)
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
-    
-    for container in soup.find_all(["figure", "div"], class_="wp-block-image"):
-        for bad_p in container.find_all("p"):
-            txt = bad_p.get_text(strip=True)
-            if txt:
-                new_p = soup.new_tag("p")
-                new_p.string = txt
-                container.insert_after(new_p)
-            bad_p.decompose()
 
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
     raw_text = bad_re.sub("", raw_text)
     raw_text = re.sub(r"[ \t]+", " ", raw_text)
     raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+
+    # Вставка заголовка в начало
+    raw_text = f"**{title}**\n\n{raw_text}"
 
     img_dir = art_dir / "images"
     images: List[str] = []
@@ -289,13 +283,17 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                         for p in clean_paras
                     ]
                     txt_t = art_dir / f"content.{translate_to}.txt"
-                    txt_t.write_text("\n\n".join(trans), encoding="utf-8")
+                    trans_txt = "\n\n".join(trans)
+                    header_t = f"**{title}**\n\n"
+                    txt_t.write_text(header_t + trans_txt, encoding="utf-8")
+
                     meta.update({
                         "translated_to": translate_to,
                         "translated_paras": trans,
                         "translated_file": str(txt_t),
                         "text_file": str(txt_t)
                     })
+
                     break
                 except Exception as e:
                     delay = BASE_DELAY * 2 ** (attempt - 1)
