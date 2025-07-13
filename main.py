@@ -149,7 +149,7 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
         logging.error("Failed to save catalog: %s", e)
 
 # Добавляем адаптер-функцию translate_text()
-def translate_text(text: str, to_lang: str = "ru", provider: str = "google") -> str:
+def translate_text(text: str, to_lang: str = "ru", provider: str = "Deepl") -> str:
     """
     Перевод текста через translators с защитой от ошибок.
     Возвращает оригинал, если перевод недоступен.
@@ -226,7 +226,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                title = translate_text(orig_title, to_lang=translate_to, provider="google")
+                title = translate_text(orig_title, to_lang=translate_to, provider="Deepl")
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
@@ -296,7 +296,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     clean_paras = [bad_re.sub("", p) for p in paras]
-                    trans = [translate_text(p, to_lang=translate_to, provider="google") for p in clean_paras]
+                    trans = [translate_text(p, to_lang=translate_to, provider="Deepl") for p in clean_paras]
 
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     trans_txt = "\n\n".join(trans)
