@@ -221,13 +221,13 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     
     for container in soup.find_all(["figure", "div"], class_="wp-block-image"):
-    for bad_p in container.find_all("p"):
-        txt = bad_p.get_text(strip=True)
-        if txt:
-            new_p = soup.new_tag("p")
-            new_p.string = txt
-            container.insert_after(new_p)
-        bad_p.decompose()
+        for bad_p in container.find_all("p"):
+            txt = bad_p.get_text(strip=True)
+            if txt:
+                new_p = soup.new_tag("p")
+                new_p.string = txt
+                container.insert_after(new_p)
+            bad_p.decompose()
 
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
