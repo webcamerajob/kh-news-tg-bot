@@ -21,26 +21,61 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🔐 Setup WireGuard & install jq
+      - name: 🔐 Setup WireGuard & DNS
         run: |
-          sudo apt-get update \
-            && sudo apt-get install -y wireguard-tools resolvconf curl jq
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools resolvconf
+          
+          # Настройка надежного DNS
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+          
           mkdir -p $HOME/wg
           echo "$WG_CONFIG" > $HOME/wg/wg0.conf
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          
+          # Проверка подключения
+          ping -c 3 google.com
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+          cache: 'pip'
 
-      - name: Install parser requirements
-        run: pip install -r requirements-parser.txt
+      - name: Install parser requirements with retry
+        run: |
+          function install_with_retry {
+            local retries=5
+            local delay=15
+            local success=0
+            
+            for ((i=1; i<=retries; i++)); do
+              if pip install --default-timeout=100 -r requirements-parser.txt; then
+                success=1
+                break
+              else
+                echo "Attempt $i failed. Retrying in $delay seconds..."
+                sleep $delay
+              fi
+            done
+            
+            if [ "$success" -ne 1 ]; then
+              echo "Failed to install requirements after $retries attempts"
+              exit 1
+            fi
+          }
+          
+          install_with_retry
 
       - name: 🧠 Run parser
         run: python3 main.py --lang ru --posted-file articles/posted.json
+
+      - name: Apply watermarks
+        run: |
+          pip install pillow  # Установка только необходимого для ротатора
+          python3 watermark_rotator.py
 
       - name: 🛑 Teardown WireGuard
         if: always()
