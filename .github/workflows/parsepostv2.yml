@@ -3,20 +3,21 @@ name: Parse & Post Articles
 
 on:
   push:
-    branches: 
+    branches:
       - main
   workflow_dispatch:
 
 env:
-  # общие переменные, прокинутся в оба job’а
   POST_DELAY: 5
   BATCH_LIMIT: 50
 
 jobs:
 
   parse:
-    name: Парсинг → артефакты
+    name: Парсинг → артефакты (WireGuard)
     runs-on: ubuntu-latest
+    env:
+      WG_CONFIG: ${{ secrets.WG_CONFIG }}
 
     steps:
       - name: Checkout code
@@ -27,24 +28,32 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: 🔐 Setup WireGuard & install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            wireguard-tools resolvconf curl jq
+          mkdir -p $HOME/wg
+          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+
       - name: Install parser requirements
         run: |
           if [ -f requirements-parser.txt ]; then
-            echo "🛠 Installing parser deps"
+            echo "Installing parser deps"
             pip install -r requirements-parser.txt
           else
-            echo "📦 No requirements-parser.txt, skipping"
+            echo "No requirements-parser.txt — skipping"
           fi
 
-      - name: Run parser
-        run: |
-          echo "▶️ Запускаем main.py без --out-dir"
-          python3 main.py
+      - name: 🧠 Run parser
+        run: python3 main.py --lang ru
 
-      - name: Debug parser output
+      - name: 🛑 Teardown WireGuard
+        if: always()
         run: |
-          echo "→ Дерево корня после парсера:"
-          ls -R .
+          sudo wg-quick down $HOME/wg/wg0.conf || true
 
       - name: Upload parsed-content
         uses: actions/upload-artifact@v4
@@ -67,15 +76,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Set up Python
+      - name: Set up Python for poster
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
       - name: Install poster requirements
-        run: |
-          echo "🛠 Installing poster deps"
-          pip install httpx pillow
+        run: pip install httpx pillow
 
       - name: Download parsed-content
         uses: actions/download-artifact@v4
@@ -85,12 +92,11 @@ jobs:
 
       - name: Debug parsed-dir
         run: |
-          echo "→ Структура parsed/articles в post-job:"
+          echo "→ parsed/articles structure:"
           ls -R parsed/articles
 
       - name: Run poster
         run: |
-          echo "▶️ Запускаем poster.py"
           python3 poster.py \
             --parsed-dir parsed/articles \
             --state-file articles/catalog.json \
