@@ -1,4 +1,3 @@
-# .github/workflows/ci.yml
 name: Parse & Post Articles
 
 on:
@@ -25,10 +24,10 @@ jobs:
       - name: 🔐 Setup WireGuard & install jq
         run: |
           sudo apt-get update \
-            && sudo apt-get install -y --no-install-recommends \
-               wireguard-tools resolvconf curl jq
+            && sudo apt-get install -y wireguard-tools resolvconf curl jq
           mkdir -p $HOME/wg
-          echo "${WG_CONFIG}" | base64 --decode > $HOME/wg/wg0.conf
+          # Пишем конфиг напрямую, без base64‐decode
+          echo "$WG_CONFIG" > $HOME/wg/wg0.conf
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
@@ -49,7 +48,7 @@ jobs:
 
       - name: Debug parser output
         run: |
-          echo "→ Tree of articles/:"
+          echo "→ Tree of generated articles/:"
           ls -R articles
 
       - name: Upload parsed-content
@@ -63,7 +62,7 @@ jobs:
         run: sudo wg-quick down $HOME/wg/wg0.conf || true
 
   post:
-    name: Публикация новых статей
+    name: Publish new articles
     needs: parse
     runs-on: ubuntu-latest
     env:
@@ -71,13 +70,13 @@ jobs:
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
     steps:
-      - name: Checkout repo (с пустым catalog.json)
+      - name: Checkout repo (contains empty catalog.json)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Set up Python
+      - name: Set up Python for poster
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
@@ -112,5 +111,5 @@ jobs:
             git commit -m "chore: update catalog after posting"
             git push
           else
-            echo "✅ catalog.json unchanged — skipping commit"
+            echo "✅ catalog.json unchanged"
           fi
