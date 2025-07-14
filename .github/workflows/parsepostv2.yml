@@ -3,17 +3,19 @@ name: Parse & Post Articles
 
 on:
   push:
-    branches: [ main ]
+    branches: 
+      - main
   workflow_dispatch:
 
 env:
+  # общие переменные, прокинутся в оба job’а
   POST_DELAY: 5
   BATCH_LIMIT: 50
 
 jobs:
 
   parse:
-    name: Parse source → artifacts
+    name: Парсинг → артефакты
     runs-on: ubuntu-latest
 
     steps:
@@ -25,21 +27,33 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install deps if any
+      - name: Install parser requirements
         run: |
-          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
+          if [ -f requirements-parser.txt ]; then
+            echo "🛠 Installing parser deps"
+            pip install -r requirements-parser.txt
+          else
+            echo "📦 No requirements-parser.txt, skipping"
+          fi
 
       - name: Run parser
-        run: python3 main.py --out-dir parsed
+        run: |
+          echo "▶️ Запускаем main.py без --out-dir"
+          python3 main.py
+
+      - name: Debug parser output
+        run: |
+          echo "→ Дерево корня после парсера:"
+          ls -R .
 
       - name: Upload parsed-content
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
-          path: parsed
+          path: parsed/articles
 
   post:
-    name: Publish new articles
+    name: Публикация новых статей
     needs: parse
     runs-on: ubuntu-latest
     env:
@@ -47,25 +61,36 @@ jobs:
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
     steps:
-      - name: Checkout repo (with catalog.json)
+      - name: Checkout repo (с пустым catalog.json)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install poster requirements
+        run: |
+          echo "🛠 Installing poster deps"
+          pip install httpx pillow
+
       - name: Download parsed-content
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
-          path: parsed
+          path: parsed/articles
 
       - name: Debug parsed-dir
         run: |
-          echo "→ parsed structure:"
-          ls -R parsed
+          echo "→ Структура parsed/articles в post-job:"
+          ls -R parsed/articles
 
       - name: Run poster
         run: |
+          echo "▶️ Запускаем poster.py"
           python3 poster.py \
             --parsed-dir parsed/articles \
             --state-file articles/catalog.json \
