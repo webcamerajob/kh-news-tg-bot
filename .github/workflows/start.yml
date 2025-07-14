@@ -38,14 +38,18 @@ jobs:
 
       - id: parse
         name: Run parser (main.py)
+        shell: bash
         run: |
-          python3 main.py \
+          set -eux
+          # запускаем парсер и сохраняем число новых статей в переменную
+          new_count=$(python3 main.py \
             --state-file articles/posted.json \
             --output-dir parser_output \
             --base-url https://www.khmertimeskh.com \
             --slug national \
-            --lang ru
-        shell: bash
+            --lang ru)
+          # экспортируем в GITHUB_OUTPUT
+          echo "new_count=$new_count" >> $GITHUB_OUTPUT
 
       - name: Debug parser_output
         if: always()
