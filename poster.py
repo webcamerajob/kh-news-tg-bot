@@ -165,34 +165,38 @@ async def send_message(
     }
     return await _post_with_retry(client, "POST", url, data)
 
-
-def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
-    """
-    Проверяет title, text_file и наличие изображений.
-    Возвращает (caption, текстовый файл, список изображений).
-    """
+def validate_article(
+    art: Dict[str, Any],
+    article_dir: Path
+) -> Optional[Tuple[str, Path, List[Path]]]:
     title = art.get("title")
-    logging.debug("Validating article: id=%s title=%s", art.get("id"), title)
-    txt   = art.get("text_file")
-    logging.debug(" → text_file path in meta: %s", txt)
-    imgs  = art.get("images", [])
-    logging.debug(" → images list from meta: %s", imgs)
+    txt_name = art.get("text_file")
+    img_names = art.get("images", [])
 
     if not title or not isinstance(title, str):
         logging.error("Invalid title in article %s", art.get("id"))
         return None
-    if not txt or not Path(txt).is_file():
-        logging.error("Invalid text_file in article %s", art.get("id"))
+
+    # строим полный путь к тексту:
+    text_path = article_dir / txt_name
+    if not txt_name or not text_path.is_file():
+        logging.error("Invalid text_file %s in %s", txt_name, art.get("id"))
         return None
-    valid_imgs = [Path(p) for p in imgs if Path(p).is_file()]
-    if not valid_imgs:
+
+    # строим пути к картинкам:
+    imgs = []
+    for name in img_names:
+        p = article_dir / name
+        if p.is_file():
+            imgs.append(p)
+    if not imgs:
         logging.error("No valid images in article %s", art.get("id"))
         return None
 
+    # готовим подпись (caption)
     raw = title.strip()
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
-    return escape_markdown(cap), Path(txt), valid_imgs
-
+    return escape_markdown(cap), text_path, imgs
 
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
@@ -285,7 +289,7 @@ async def main(
     sent    = 0
     new_ids: Set[int] = set()
 
-    for art in parsed:
+    for art, article_dir in parsed:
         aid = art.get("id")
         if aid in posted_ids_old:
             logging.info("Skipping already posted %s", aid)
@@ -293,7 +297,7 @@ async def main(
         if limit and sent >= limit:
             break
 
-        validated = validate_article(art)
+        validated = validate_article(art, article_dir)
         if not validated:
             continue
         caption, text_path, images = validated
