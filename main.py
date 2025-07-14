@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-import os
 import sys
+import os
 import json
 import logging
 import argparse
@@ -22,35 +22,37 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Cloudflare bypass
+# Обход Cloudflare
 scraper = cloudscraper.create_scraper()
 # ──────────────────────────────────────────────────────────────────────────────
 
 def setup_vpn():
     """
-    Настраивает WireGuard из единой переменной WG_CONFIG.
-    Если переменная не задана — пропускаем.
+    Поднимает WireGuard из полной конфигурации в переменной WG_CONFIG.
     """
     config = os.getenv("WG_CONFIG")
     if not config:
         logging.info("WG_CONFIG not provided, skipping VPN setup")
         return
 
-    tmp_conf = Path("/tmp/wg0.conf")
-    tmp_conf.write_text(config, encoding="utf-8")
+    conf_path = Path("/tmp/wg0.conf")
+    conf_path.write_text(config, encoding="utf-8")
 
     try:
-        subprocess.run(["wg-quick", "up", str(tmp_conf)], check=True)
-        logging.info("WireGuard interface up")
+        subprocess.run(["wg-quick", "up", str(conf_path)], check=True)
+        logging.info("WireGuard interface is up")
     except Exception as e:
         logging.error("Failed to start WireGuard: %s", e)
         sys.exit(1)
 
-# Поднимаем VPN сразу
+# инициализируем VPN
 setup_vpn()
 
 
 def load_posted_ids(state_file: Path) -> Set[int]:
+    """
+    Читает articles/posted.json и возвращает множество уже размещенных ID.
+    """
     if not state_file.is_file():
         logging.info("State file %s not found, starting fresh", state_file)
         return set()
@@ -62,11 +64,11 @@ def load_posted_ids(state_file: Path) -> Set[int]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        logging.warning("State file not JSON: %s", state_file)
+        logging.warning("State file is not valid JSON: %s", state_file)
         return set()
 
     if not isinstance(data, list):
-        logging.warning("State file is not a list: %s", state_file)
+        logging.warning("State file isn’t a list: %s", state_file)
         return set()
 
     ids: Set[int] = set()
@@ -82,12 +84,15 @@ def load_posted_ids(state_file: Path) -> Set[int]:
 
 
 def fetch_category_id(base_url: str, slug: str) -> int:
+    """
+    Запрашивает WP REST API и возвращает ID категории по slug.
+    """
     url = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     resp = scraper.get(url, timeout=10)
     resp.raise_for_status()
     cats = resp.json()
     if not isinstance(cats, list) or not cats:
-        raise ValueError(f"No category found for slug={slug}")
+        raise ValueError(f"No category for slug={slug}")
     return int(cats[0].get("id"))
 
 
@@ -96,6 +101,9 @@ def fetch_posts(
     category_id: int,
     per_page: int = 10
 ) -> List[Dict[str, Any]]:
+    """
+    Возвращает список постов из указанной категории.
+    """
     url = f"{base_url}/wp-json/wp/v2/posts"
     params = {
         "categories": category_id,
@@ -109,12 +117,18 @@ def fetch_posts(
 
 
 def slugify(text: str) -> str:
+    """
+    Простое slugify: lowercase + alnum + dashes.
+    """
     s = text.lower()
     s = re.sub(r"[^\w\s-]", "", s)
     return re.sub(r"\s+", "-", s).strip("-")
 
 
 def translate_text(text: str, lang: str) -> str:
+    """
+    Переводит текст через Yandex. Если lang пуст, возвращает исходный текст.
+    """
     if not lang:
         return text
     try:
@@ -130,8 +144,16 @@ def parse_and_save(
     base_url: str,
     output_dir: Path
 ) -> Optional[Dict[str, Any]]:
-    post_id    = post.get("id")
-    title_raw  = post.get("title", {}).get("rendered", "").strip()
+    """
+    Парсит один пост:
+      - очищает и переводит текст;
+      - сохраняет его в content.<lang>.txt;
+      - скачивает <img> в images/;
+      - fallback: featured_media;
+      - записывает meta.json с локальными путями.
+    """
+    post_id = post.get("id")
+    title_raw = post.get("title", {}).get("rendered", "").strip()
     content_html = post.get("content", {}).get("rendered", "")
 
     if not title_raw or not content_html:
@@ -142,11 +164,11 @@ def parse_and_save(
     text = soup.get_text(separator="\n").strip()
     text = translate_text(text, lang)
 
-    dirname     = f"{post_id}_{slugify(title_raw)}"
+    dirname = f"{post_id}_{slugify(title_raw)}"
     article_dir = output_dir / dirname
     article_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix    = lang or "raw"
+    suffix = lang or "raw"
     text_file = article_dir / f"content.{suffix}.txt"
     text_file.write_text(text, encoding="utf-8")
 
@@ -164,12 +186,13 @@ def parse_and_save(
             ext = Path(src).suffix or ".jpg"
             img_path = images_dir / f"{idx}{ext}"
             img_path.write_bytes(r.content)
+            # путь относительный к article_dir
             images.append(str(Path("images") / img_path.name))
         except Exception as e:
             logging.warning("Failed to download image %s: %s", src, e)
 
     if not images and post.get("featured_media"):
-        mid   = post["featured_media"]
+        mid = post["featured_media"]
         m_url = f"{base_url}/wp-json/wp/v2/media/{mid}"
         try:
             m = scraper.get(m_url, timeout=10)
@@ -183,7 +206,7 @@ def parse_and_save(
                 img_path.write_bytes(r.content)
                 images.append(str(Path("images") / img_path.name))
         except Exception as e:
-            logging.warning("Failed featured image %s: %s", post_id, e)
+            logging.warning("Failed featured image for %s: %s", post_id, e)
 
     meta = {
         "id":        post_id,
@@ -232,7 +255,9 @@ def main(
         else:
             logging.info("No new articles to parse")
 
+        # GitHub Actions
         print(f"::set-output name=new_count::{new_count}")
+
     except Exception:
         logging.exception("Fatal error in parser")
         sys.exit(1)
