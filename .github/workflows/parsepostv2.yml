@@ -103,7 +103,7 @@ jobs:
       - name: Run poster
         run: |
           python3 poster.py \
-            --parsed-dir articles/articles \
+            --parsed-dir articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
