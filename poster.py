@@ -266,12 +266,14 @@ async def main(
     posted_ids_old = load_posted_ids(state_file)
     logging.info("Loaded %d published IDs", len(posted_ids_old))
 
-    parsed: List[Dict[str, Any]] = []
+    # соберём пары (meta-json, папка)
+    parsed: List[Tuple[Dict[str, Any], Path]] = []
     for d in sorted(parsed_root.iterdir()):
         meta_file = d / "meta.json"
         if d.is_dir() and meta_file.is_file():
             try:
-                parsed.append(json.loads(meta_file.read_text(encoding="utf-8")))
+                art = json.loads(meta_file.read_text(encoding="utf-8"))
+                parsed.append((art, d))
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
                 
