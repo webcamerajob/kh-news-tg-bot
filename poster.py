@@ -172,8 +172,11 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
     Возвращает (caption, текстовый файл, список изображений).
     """
     title = art.get("title")
+    logging.debug("Validating article: id=%s title=%s", art.get("id"), title)
     txt   = art.get("text_file")
+    logging.debug(" → text_file path in meta: %s", txt)
     imgs  = art.get("images", [])
+    logging.debug(" → images list from meta: %s", imgs)
 
     if not title or not isinstance(title, str):
         logging.error("Invalid title in article %s", art.get("id"))
@@ -271,7 +274,11 @@ async def main(
                 parsed.append(json.loads(meta_file.read_text(encoding="utf-8")))
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
-
+                
+    logging.info("🔍 Found %d folders with meta.json in %s", len(parsed), parsed_root)
+    ids = [art.get("id") for art in parsed]
+    logging.info("🔍 Parsed IDs: %s", ids)
+    
     client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent    = 0
     new_ids: Set[int] = set()
