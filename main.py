@@ -433,7 +433,6 @@ def main():
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
        # грузим уже опубликованные ID
-       from pathlib import Path
        posted_ids = load_posted_ids(Path(state_file))
         new_articles = 0
 
@@ -466,4 +465,5 @@ if __name__ == "__main__":
     parser.add_argument("--state-file",  type=str, required=True, help="path to articles/posted.json")
     parser.add_argument("--output-dir",  type=str, required=True, help="where to write parsed/{id}")
     args = parser.parse_args()
-    main(state_file=args.state_file, output_dir=args.output_dir)
+def main(state_file: str, output_dir: str, base_url: str, slug: str, lang: str, limit: Optional[int]):
+
