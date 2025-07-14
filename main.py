@@ -14,6 +14,7 @@ import translators as ts
 
 from typing import Any, Dict, List, Optional
 from pathlib import Path
+from typing import Set, List 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cloudscraper
