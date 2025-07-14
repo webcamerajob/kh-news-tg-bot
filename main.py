@@ -16,17 +16,20 @@ import cloudscraper
 import translators as ts
 from bs4 import BeautifulSoup
 
+# ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Cloudflare‐bypass
+# Cloudflare-bypass
 scraper = cloudscraper.create_scraper()
+
 
 def setup_vpn():
     """
-    Поднимает WireGuard из полного конфига WG_CONFIG.
+    Поднимает WireGuard из конфига в переменной WG_CONFIG.
+    Если WG_CONFIG не задан, выходим с ошибкой.
     """
     cfg = os.getenv("WG_CONFIG")
     if not cfg:
@@ -35,37 +38,46 @@ def setup_vpn():
 
     conf_path = Path("/tmp/wg0.conf")
     conf_path.write_text(cfg, encoding="utf-8")
+
     try:
-        subprocess.run(["wg-quick", "up", str(conf_path)], check=True)
+        subprocess.run(["sudo", "wg-quick", "up", str(conf_path)], check=True)
         logging.info("WireGuard is up")
     except Exception as e:
         logging.error("WireGuard setup failed: %s", e)
         sys.exit(1)
 
-# поднимаем VPN сразу
+
+# Запускаем VPN до любой сетевой активности
 setup_vpn()
 
+
 def load_posted_ids(state_file: Path) -> Set[int]:
+    """
+    Читает articles/posted.json и возвращает set опубликованных ID.
+    Поддерживает:
+      - отсутствующий или пустой файл → empty set
+      - [1,2,3] или [{"id":1}, {"id":2}]
+    """
     if not state_file.is_file():
         logging.info("State file %s not found, starting fresh", state_file)
         return set()
 
-    text = state_file.read_text(encoding="utf-8").strip()
-    if not text:
+    data = state_file.read_text(encoding="utf-8").strip()
+    if not data:
         return set()
 
     try:
-        data = json.loads(text)
-    except:
-        logging.warning("State file not valid JSON: %s", state_file)
+        arr = json.loads(data)
+    except json.JSONDecodeError:
+        logging.warning("State file is not valid JSON: %s", state_file)
         return set()
 
-    if not isinstance(data, list):
+    if not isinstance(arr, list):
         logging.warning("State file is not a list: %s", state_file)
         return set()
 
     ids: Set[int] = set()
-    for item in data:
+    for item in arr:
         if isinstance(item, dict) and "id" in item:
             try:
                 ids.add(int(item["id"]))
@@ -75,16 +87,28 @@ def load_posted_ids(state_file: Path) -> Set[int]:
             ids.add(int(item))
     return ids
 
+
 def fetch_category_id(base_url: str, slug: str) -> int:
+    """
+    Через WP REST API находит ID категории по slug.
+    """
     url = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     resp = scraper.get(url, timeout=10)
     resp.raise_for_status()
     cats = resp.json()
     if not isinstance(cats, list) or not cats:
-        raise ValueError(f"No category for slug={slug}")
+        raise ValueError(f"No category found for slug={slug}")
     return int(cats[0].get("id"))
 
-def fetch_posts(base_url: str, category_id: int, per_page: int=10) -> List[Dict[str, Any]]:
+
+def fetch_posts(
+    base_url: str,
+    category_id: int,
+    per_page: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает список постов данной категории.
+    """
     url = f"{base_url}/wp-json/wp/v2/posts"
     params = {
         "categories": category_id,
@@ -96,12 +120,20 @@ def fetch_posts(base_url: str, category_id: int, per_page: int=10) -> List[Dict[
     resp.raise_for_status()
     return resp.json()
 
+
 def slugify(text: str) -> str:
+    """
+    Простое slugify: lowercase, strip non-word, spaces→dashes.
+    """
     s = text.lower()
     s = re.sub(r"[^\w\s-]", "", s)
     return re.sub(r"\s+", "-", s).strip("-")
 
+
 def translate_text(text: str, lang: str) -> str:
+    """
+    Перевод через Yandex. Если lang пустой — возвращает оригинал.
+    """
     if not lang:
         return text
     try:
@@ -110,29 +142,45 @@ def translate_text(text: str, lang: str) -> str:
         logging.warning("Translation failed: %s", e)
         return text
 
-def parse_and_save(post: Dict[str, Any], lang: str,
-                   base_url: str, output_dir: Path
-                  ) -> Optional[Dict[str, Any]]:
-    post_id     = post.get("id")
-    title_raw   = post.get("title", {}).get("rendered", "").strip()
-    content_html= post.get("content", {}).get("rendered", "")
+
+def parse_and_save(
+    post: Dict[str, Any],
+    lang: str,
+    base_url: str,
+    output_dir: Path
+) -> Optional[Dict[str, Any]]:
+    """
+    Парсинг одного поста:
+      - Извлечение, очистка и перевод текста
+      - Сохранение в content.<lang>.txt
+      - Скачивание всех <img> в папку images/
+      - Fallback на featured_media
+      - Запись meta.json с локальными путями
+    """
+    post_id = post.get("id")
+    title_raw = post.get("title", {}).get("rendered", "").strip()
+    content_html = post.get("content", {}).get("rendered", "")
 
     if not title_raw or not content_html:
         logging.warning("Empty title/content for %s", post_id)
         return None
 
+    # HTML → текст → перевод
     soup = BeautifulSoup(content_html, "html.parser")
     text = soup.get_text(separator="\n").strip()
     text = translate_text(text, lang)
 
-    dirname     = f"{post_id}_{slugify(title_raw)}"
+    # Создание директории статьи
+    dirname = f"{post_id}_{slugify(title_raw)}"
     article_dir = output_dir / dirname
     article_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix    = lang or "raw"
+    # Сохранение текста
+    suffix = lang or "raw"
     text_file = article_dir / f"content.{suffix}.txt"
     text_file.write_text(text, encoding="utf-8")
 
+    # Скачиваем <img> в images/
     images_dir = article_dir / "images"
     images_dir.mkdir(exist_ok=True)
     images: List[str] = []
@@ -147,12 +195,13 @@ def parse_and_save(post: Dict[str, Any], lang: str,
             ext = Path(src).suffix or ".jpg"
             img_path = images_dir / f"{idx}{ext}"
             img_path.write_bytes(r.content)
-            images.append(str(Path("images")/img_path.name))
+            images.append(str(Path("images") / img_path.name))
         except Exception as e:
             logging.warning("Image download failed: %s", e)
 
+    # Fallback на featured_media
     if not images and post.get("featured_media"):
-        mid   = post["featured_media"]
+        mid = post["featured_media"]
         m_url = f"{base_url}/wp-json/wp/v2/media/{mid}"
         try:
             m = scraper.get(m_url, timeout=10)
@@ -164,17 +213,18 @@ def parse_and_save(post: Dict[str, Any], lang: str,
                 ext = Path(src).suffix or ".jpg"
                 img_path = images_dir / f"1{ext}"
                 img_path.write_bytes(r.content)
-                images.append(str(Path("images")/img_path.name))
+                images.append(str(Path("images") / img_path.name))
         except Exception as e:
-            logging.warning("Featured media failed: %s", e)
+            logging.warning("Featured media fetch failed: %s", e)
 
+    # Запись meta.json
     meta = {
         "id":        post_id,
         "title":     title_raw,
         "text_file": text_file.name,
         "images":    images
     }
-    (article_dir/"meta.json").write_text(
+    (article_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
@@ -182,9 +232,15 @@ def parse_and_save(post: Dict[str, Any], lang: str,
     logging.info("Parsed %s → %s", post_id, article_dir)
     return meta
 
-def main(state_file: str, output_dir: str,
-         base_url: str, slug: str,
-         lang: str, limit: Optional[int]):
+
+def main(
+    state_file: str,
+    output_dir: str,
+    base_url: str,
+    slug: str,
+    lang: str,
+    limit: Optional[int]
+):
     try:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -192,7 +248,7 @@ def main(state_file: str, output_dir: str,
         posted = load_posted_ids(Path(state_file))
         logging.info("Loaded %d posted IDs", len(posted))
 
-        cid   = fetch_category_id(base_url, slug)
+        cid = fetch_category_id(base_url, slug)
         posts = fetch_posts(base_url, cid, per_page=(limit or 10))
 
         new_count = 0
@@ -204,20 +260,28 @@ def main(state_file: str, output_dir: str,
                 new_count += 1
 
         logging.info("Parsed %d new articles", new_count)
+        # для GitHub Actions
         print(f"::set-output name=new_count::{new_count}")
 
     except Exception:
         logging.exception("Fatal error in parser")
         sys.exit(1)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Parser with VPN, CF-bypass & translate")
-    parser.add_argument("--state-file", required=True, help="path to articles/posted.json")
-    parser.add_argument("--output-dir", required=True, help="where to write parsed/{id}")
-    parser.add_argument("--base-url", default="https://www.khmertimeskh.com", help="WP site base URL")
-    parser.add_argument("--slug", default="national", help="category slug")
-    parser.add_argument("--lang", default="ru", help="translation language")
-    parser.add_argument("--limit", type=int, default=None, help="max posts to fetch")
+    parser.add_argument("--state-file", required=True,
+                        help="path to articles/posted.json")
+    parser.add_argument("--output-dir", required=True,
+                        help="where to write parsed/{id}")
+    parser.add_argument("--base-url", default="https://www.khmertimeskh.com",
+                        help="WP site base URL")
+    parser.add_argument("--slug", default="national",
+                        help="category slug")
+    parser.add_argument("--lang", default="ru",
+                        help="translation language")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="max number of posts to fetch")
     args = parser.parse_args()
 
     main(
