@@ -282,7 +282,8 @@ async def main(
                 logging.warning("Cannot load meta %s: %s", d.name, e)
                 
     logging.info("🔍 Found %d folders with meta.json in %s", len(parsed), parsed_root)
-    ids = [art.get("id") for art in parsed]
+    # Распаковка метаданных для лога
+    ids = [art.get("id") for art, _ in parsed]
     logging.info("🔍 Parsed IDs: %s", ids)
     
     client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
