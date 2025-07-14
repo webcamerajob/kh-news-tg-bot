@@ -169,10 +169,6 @@ def validate_article(
     art: Dict[str, Any],
     article_dir: Path
 ) -> Optional[Tuple[str, Path, List[Path]]]:
-    """
-    Проверяем, что у статьи есть title, текстовый файл и хотя бы одно изображение.
-    Из meta.json берём только basename путей.
-    """
     aid      = art.get("id")
     title    = art.get("title")
     txt_name = art.get("text_file", "")
@@ -183,18 +179,20 @@ def validate_article(
         logging.error("Invalid title in article %s", aid)
         return None
 
-    # 2) Text file: берём только имя файла
-    file_basename = Path(txt_name).name
-    text_path     = article_dir / file_basename
-    if not file_basename or not text_path.is_file():
+    # 2) Text file: сначала полный относительный путь, потом basename
+    text_path = article_dir / Path(txt_name)
+    if not text_path.is_file():
+        text_path = article_dir / Path(txt_name).name
+    if not text_path.is_file():
         logging.error("Invalid text_file %s in article %s", txt_name, aid)
         return None
 
-    # 3) Images: для каждого имени берём basename
+    # 3) Images: то же — сначала путь с подпапкой, потом basename
     valid_imgs: List[Path] = []
-    for img in img_names:
-        img_basename = Path(img).name
-        p = article_dir / img_basename
+    for name in img_names:
+        p = article_dir / Path(name)
+        if not p.is_file():
+            p = article_dir / Path(name).name
         if p.is_file():
             valid_imgs.append(p)
 
@@ -202,7 +200,7 @@ def validate_article(
         logging.error("No valid images in article %s", aid)
         return None
 
-    # 4) Формируем подпись (caption)
+    # 4) Caption
     raw = title.strip()
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
 
