@@ -14,12 +14,19 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_count: ${{ steps.parse.outputs.new_count }}
+    env:
+      WG_CONFIG: ${{ secrets.WG_CONFIG }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install WireGuard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools
 
       - name: Setup Python for parser
         uses: actions/setup-python@v4
@@ -34,9 +41,12 @@ jobs:
         run: |
           python3 main.py \
             --state-file articles/posted.json \
-            --output-dir parser_output
-        # старый set-output здесь же выводит new_count
-      
+            --output-dir parser_output \
+            --base-url https://www.khmertimeskh.com \
+            --slug national \
+            --lang ru
+        # `main.py` must print "::set-output name=new_count::<n>"
+
       - name: Upload parsed-content
         if: steps.parse.outputs.new_count != '0'
         uses: actions/upload-artifact@v4
@@ -75,7 +85,7 @@ jobs:
           python3 poster.py \
             --parsed-dir parsed_articles \
             --state-file articles/posted.json \
-            --limit $BATCH_LIMIT
+            --limit ${{ env.BATCH_LIMIT }}
 
       - name: Commit updated posted.json
         run: |
