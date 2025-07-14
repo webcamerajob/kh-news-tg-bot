@@ -1,4 +1,6 @@
 name: Parse & Post Articles
+permissions:
+  contents: write
 on:
   push:
     branches: [ main ]
@@ -9,72 +11,69 @@ env:
   BATCH_LIMIT: 50
 
 jobs:
-
   parse:
+    name: Парсинг → артефакты (WireGuard)
     runs-on: ubuntu-latest
-    outputs:
-      new_count: ${{ steps.parse.outputs.new_count }}
     env:
       WG_CONFIG: ${{ secrets.WG_CONFIG }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Setup WireGuard & install jq
+        run: |
+          sudo apt-get update \
+            && sudo apt-get install -y wireguard-tools resolvconf curl jq
+          mkdir -p $HOME/wg
+          echo "$WG_CONFIG" > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install parser requirements
+        run: pip install -r requirements-parser.txt
+
+      - name: 🧠 Run parser
+        run: python3 main.py --lang ru --posted-file articles/posted.json
+
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
+
+      - name: Upload parsed-content
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsed-content
+          path: articles/*
+
+  post:
+    name: Publish new articles
+    needs: parse
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Install WireGuard
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools
-
-      - name: Setup Python for parser
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
-      - name: Install parser dependencies
-        run: pip install -r requirements-parser.txt
-
-      - id: parse
-        name: Run parser (main.py)
-        shell: bash
-        run: |
-          set -eux
-          # запускаем парсер и сохраняем число новых статей в переменную
-          new_count=$(python3 main.py \
-            --state-file articles/posted.json \
-            --output-dir parser_output \
-            --base-url https://www.khmertimeskh.com \
-            --slug national \
-            --lang ru)
-          # экспортируем в GITHUB_OUTPUT
-          echo "new_count=$new_count" >> $GITHUB_OUTPUT
-
-      - name: Debug parser_output
-        if: always()
-        run: |
-          echo "=== parser_output ==="
-          ls -R parser_output
-
-      - name: Upload parsed-content
-        if: steps.parse.outputs.new_count != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: parsed-content
-          path: parser_output/*
-
-  post:
-    needs: parse
-    if: needs.parse.outputs.new_count != '0'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo (state-file)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
+      - name: Install poster requirements
+        run: pip install -r requirements-poster.txt
 
       - name: Download parsed-content
         uses: actions/download-artifact@v4
@@ -82,30 +81,19 @@ jobs:
           name: parsed-content
           path: parsed_articles
 
-      - name: Setup Python for poster
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install poster dependencies
-        run: pip install -r requirements-poster.txt
-
-      - name: Run poster (poster.py)
+      - name: Run poster
         run: |
           python3 poster.py \
             --parsed-dir parsed_articles \
             --state-file articles/posted.json \
-            --limit ${{ env.BATCH_LIMIT }}
-        shell: bash
+            --limit $BATCH_LIMIT
 
       - name: Commit updated posted.json
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add articles/posted.json
-          if ! git diff --quiet; then
-            git commit -m "chore: update posted.json"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update posted catalog after posting"
             git push
-          else
-            echo "✅ posted.json unchanged"
           fi
