@@ -23,43 +23,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: 🔐 Setup WireGuard & install jq
+        run: |
+          sudo apt-get update \
+            && sudo apt-get install -y --no-install-recommends wireguard-tools resolvconf curl jq
+          mkdir -p $HOME/wg
+          echo "${WG_CONFIG}" | base64 --decode > $HOME/wg/wg0.conf
+          chmod 600 $HOME/wg/wg0.conf
+          sudo wg-quick up $HOME/wg/wg0.conf
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
-      - name: 🔐 Setup WireGuard & install jq
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            wireguard-tools resolvconf curl jq
-          mkdir -p $HOME/wg
-          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
-          chmod 600 $HOME/wg/wg0.conf
-          sudo wg-quick up $HOME/wg/wg0.conf
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-
       - name: Install parser requirements
         run: |
           if [ -f requirements-parser.txt ]; then
-            echo "Installing parser deps"
             pip install -r requirements-parser.txt
-          else
-            echo "No requirements-parser.txt — skipping"
           fi
 
       - name: 🧠 Run parser
         run: python3 main.py --lang ru
 
-      - name: 🛑 Teardown WireGuard
-        if: always()
+      - name: Debug parser output
         run: |
-          sudo wg-quick down $HOME/wg/wg0.conf || true
+          echo "→ После парсера:"
+          ls -R parsed
 
       - name: Upload parsed-content
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: parsed-content
-          path: parsed/articles
+          path: parsed
+
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
 
   post:
     name: Публикация новых статей
@@ -85,20 +86,20 @@ jobs:
         run: pip install httpx pillow
 
       - name: Download parsed-content
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           name: parsed-content
-          path: parsed/articles
+          path: parsed
 
       - name: Debug parsed-dir
         run: |
-          echo "→ parsed/articles structure:"
-          ls -R parsed/articles
+          echo "→ Структура parsed/:"
+          ls -R parsed
 
       - name: Run poster
         run: |
           python3 poster.py \
-            --parsed-dir parsed/articles \
+            --parsed-dir parsed \
             --state-file articles/catalog.json \
             --limit $BATCH_LIMIT
 
