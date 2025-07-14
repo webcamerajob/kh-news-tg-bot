@@ -56,7 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
-          path: parsed/articles
+          path: articles
 
       - name: 🛑 Teardown WireGuard
         if: always()
@@ -92,7 +92,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
-          path: parsed/articles
+          path: articles
 
       - name: Debug parsed-dir
         run: |
@@ -102,7 +102,7 @@ jobs:
       - name: Run poster
         run: |
           python3 poster.py \
-            --parsed-dir parsed/articles \
+            --parsed-dir articles \
             --state-file articles/catalog.json \
             --limit $BATCH_LIMIT
 
