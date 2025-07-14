@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-import os
 import sys
 import json
 import logging
@@ -14,7 +13,6 @@ from typing import Optional, List, Dict, Any, Set
 import cloudscraper
 import translators as ts
 from bs4 import BeautifulSoup
-from PIL import Image
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -22,39 +20,59 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Cloudflare bypass
+# bypass Cloudflare protection
 scraper = cloudscraper.create_scraper()
-
-# Путь к водяной бумажке в корне репозитория
-WATERMARK_PATH = Path(__file__).parent / "watermark.png"
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_posted_ids(state_path: Path) -> Set[int]:
+def load_posted_ids(state_file: Path) -> Set[int]:
     """
-    Читает state-файл posted.json и возвращает множество уже опубликованных ID.
+    Читает state_file (articles/posted.json) и возвращает set уже опубликованных ID.
+    Поддерживает:
+      - отсутствующий или пустой файл → пустой set
+      - список чисел [1,2,3]
+      - список объектов [{"id":1}, {"id":2}]
     """
-    if not state_path.is_file():
-        logging.info("State file %s not found, starting fresh", state_path)
+    if not state_file.is_file():
+        logging.info("State file %s not found, starting fresh", state_file)
         return set()
+
+    text = state_file.read_text(encoding="utf-8").strip()
+    if not text:
+        return set()
+
     try:
-        arr = json.loads(state_path.read_text(encoding="utf-8"))
-        return {int(x) for x in arr}
-    except Exception as e:
-        logging.warning("Cannot read state-file %s: %s", state_path, e)
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        logging.warning("State file is not JSON: %s", state_file)
         return set()
+
+    if not isinstance(data, list):
+        logging.warning("State file is not a list: %s", state_file)
+        return set()
+
+    ids: Set[int] = set()
+    for item in data:
+        if isinstance(item, dict) and "id" in item:
+            try:
+                ids.add(int(item["id"]))
+            except (ValueError, TypeError):
+                pass
+        elif isinstance(item, (int, str)) and str(item).isdigit():
+            ids.add(int(item))
+    return ids
 
 
 def fetch_category_id(base_url: str, slug: str) -> int:
     """
-    Возвращает ID категории по slug через WP REST API.
+    Возвращает ID категории по её slug через WP REST API.
     """
     url = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     resp = scraper.get(url, timeout=10)
     resp.raise_for_status()
     cats = resp.json()
-    if not cats:
+    if not isinstance(cats, list) or not cats:
         raise ValueError(f"No category found for slug={slug}")
-    return cats[0]["id"]
+    return int(cats[0].get("id"))
 
 
 def fetch_posts(
@@ -63,7 +81,7 @@ def fetch_posts(
     per_page: int = 10
 ) -> List[Dict[str, Any]]:
     """
-    Возвращает список постов из категории category_id.
+    Возвращает список последних постов из категории.
     """
     url = f"{base_url}/wp-json/wp/v2/posts"
     params = {
@@ -79,16 +97,17 @@ def fetch_posts(
 
 def slugify(text: str) -> str:
     """
-    Простейший slugify: оставляет буквы, цифры, дефисы.
+    Простейший slugify: lowercase, remove non-alphanum, spaces→dashes.
     """
-    text = text.lower()
-    text = re.sub(r"[^\w\s-]", "", text)
-    return re.sub(r"\s+", "-", text).strip("-")
+    s = text.lower()
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"\s+", "-", s)
+    return s.strip("-")
 
 
 def translate_text(text: str, lang: str) -> str:
     """
-    Переводит text на lang через провайдера Yandex. Если пустой lang — возвращает исходник.
+    Переводит текст на указанный язык через Yandex. Если lang пустой — возвращает исходник.
     """
     if not lang:
         return text
@@ -99,36 +118,6 @@ def translate_text(text: str, lang: str) -> str:
         return text
 
 
-def apply_watermark(image_path: Path):
-    """
-    Накладывает картинку watermark.png из корня на image_path.
-    """
-    if not WATERMARK_PATH.is_file():
-        logging.warning("Watermark file %s not found", WATERMARK_PATH)
-        return
-
-    try:
-        base = Image.open(image_path).convert("RGBA")
-        mark = Image.open(WATERMARK_PATH).convert("RGBA")
-
-        # Масштабируем watermark до 30% ширины
-        scale = base.width * 0.3 / mark.width
-        w, h = int(mark.width * scale), int(mark.height * scale)
-        mark = mark.resize((w, h), Image.ANTIALIAS)
-
-        # Позиция: правый нижний угол с отступом 10px
-        pos = (base.width - w - 10, base.height - h - 10)
-
-        # Накладываем
-        transparent = Image.new("RGBA", base.size)
-        transparent.paste(mark, pos, mask=mark)
-        watermarked = Image.alpha_composite(base, transparent)
-        # Сохраняем обратно
-        watermarked.convert("RGB").save(image_path)
-    except Exception as e:
-        logging.warning("Watermark failed for %s: %s", image_path, e)
-
-
 def parse_and_save(
     post: Dict[str, Any],
     lang: str,
@@ -137,93 +126,85 @@ def parse_and_save(
 ) -> Optional[Dict[str, Any]]:
     """
     Парсит один пост:
-      - очищает HTML-контент
-      - переводит на lang
-      - сохраняет текст и картинки с watermark
-      - возвращает meta для catalog.json
+      - очищает HTML, переводит на lang
+      - сохраняет текст в content.<lang>.txt
+      - скачивает <img> в папку images/
+      - fallback на featured_media, если картинок не найдено
+      - пишет meta.json с локальными путями
     """
     post_id = post.get("id")
     title_raw = post.get("title", {}).get("rendered", "").strip()
-    if not title_raw:
-        logging.warning("Empty title for post %s", post_id)
-        return None
-
-    # Содержимое
     content_html = post.get("content", {}).get("rendered", "")
-    if not content_html:
-        logging.warning("Empty content for post %s", post_id)
+
+    if not title_raw or not content_html:
+        logging.warning("Empty title or content for post %s", post_id)
         return None
 
-    # Вычищаем HTML
+    # очистка и перевод
     soup = BeautifulSoup(content_html, "html.parser")
     text = soup.get_text(separator="\n").strip()
     text = translate_text(text, lang)
 
-    # Создаём папку статьи
+    # каталог статьи
     dirname = f"{post_id}_{slugify(title_raw)}"
     article_dir = output_dir / dirname
     article_dir.mkdir(parents=True, exist_ok=True)
 
-    # Сохраняем текст
-    lang_suffix = lang or "raw"
-    text_file = article_dir / f"content.{lang_suffix}.txt"
+    # сохранение текста
+    suffix = lang or "raw"
+    text_file = article_dir / f"content.{suffix}.txt"
     text_file.write_text(text, encoding="utf-8")
 
-    # Скачиваем картинки из <img>
-    images = []
+    # скачиваем все <img> в папку images/
+    images_dir = article_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+
+    images: List[str] = []
     for idx, img_tag in enumerate(soup.find_all("img"), start=1):
         src = img_tag.get("src")
         if not src:
             continue
         try:
-            resp = scraper.get(src, timeout=10)
-            resp.raise_for_status()
+            r = scraper.get(src, timeout=10)
+            r.raise_for_status()
             ext = Path(src).suffix or ".jpg"
-            img_path = article_dir / f"{idx}{ext}"
-            img_path.write_bytes(resp.content)
-            apply_watermark(img_path)
+            img_path = images_dir / f"{idx}{ext}"
+            img_path.write_bytes(r.content)
             images.append(str(Path("images") / img_path.name))
         except Exception as e:
-            logging.warning("Failed to fetch image %s: %s", src, e)
+            logging.warning("Failed image %s: %s", src, e)
 
-    # Если нет картинок внутри контента, пробуем featured_media
+    # fallback: featured_media
     if not images and post.get("featured_media"):
-        # GET /media/{id}
         mid = post["featured_media"]
-        url = f"{base_url}/wp-json/wp/v2/media/{mid}"
+        m_url = f"{base_url}/wp-json/wp/v2/media/{mid}"
         try:
-            m = scraper.get(url, timeout=10)
+            m = scraper.get(m_url, timeout=10)
             m.raise_for_status()
             src = m.json().get("source_url")
             if src:
-                resp = scraper.get(src, timeout=10)
-                resp.raise_for_status()
+                r = scraper.get(src, timeout=10)
+                r.raise_for_status()
                 ext = Path(src).suffix or ".jpg"
-                img_dir = article_dir / "images"
-                img_dir.mkdir(exist_ok=True)
-                img_path = img_dir / f"1{ext}"
-                img_path.write_bytes(resp.content)
-                apply_watermark(img_path)
+                img_path = images_dir / f"1{ext}"
+                img_path.write_bytes(r.content)
                 images.append(str(Path("images") / img_path.name))
         except Exception as e:
-            logging.warning("Failed to fetch featured image: %s", e)
+            logging.warning("Failed featured image for %s: %s", post_id, e)
 
-    # Список относительных путей для meta.json
-    images_rel = images
-
-    # Сохранение meta.json
+    # записываем meta.json
     meta = {
-        "id": post_id,
-        "title": title_raw,
+        "id":        post_id,
+        "title":     title_raw,
         "text_file": text_file.name,
-        "images": images_rel
+        "images":    images
     }
     (article_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
-    logging.info("Saved post %s → %s", post_id, article_dir)
+    logging.info("Parsed post %s → %s", post_id, article_dir)
     return meta
 
 
@@ -239,54 +220,38 @@ def main(
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) Фильтруем уже опубликованные по posted.json
-        posted_ids = load_posted_ids(Path(state_file))
-        logging.info("Loaded %d posted IDs", len(posted_ids))
+        # загружаем уже опубликованные ID
+        posted = load_posted_ids(Path(state_file))
+        logging.info("Loaded %d posted IDs", len(posted))
 
-        # 2) Получаем посты
+        # получаем список постов
         cid   = fetch_category_id(base_url, slug)
         posts = fetch_posts(base_url, cid, per_page=(limit or 10))
 
-        # 3) Загружаем существующий catalog.json, если есть
-        catalog_path = Path("articles/catalog.json")
-        catalog: List[Dict[str, Any]] = []
-        if catalog_path.is_file():
-            try:
-                catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-            except Exception as e:
-                logging.warning("Cannot load catalog.json: %s", e)
-
-        # 4) Парсим только новые
         new_count = 0
         for post in posts[: limit or len(posts)]:
             pid = post.get("id")
-            if pid in posted_ids:
+            if pid in posted:
                 logging.debug("Skip already posted %s", pid)
                 continue
-            if meta := parse_and_save(post, lang, base_url, out_dir):
-                catalog.append(meta)
+            if parse_and_save(post, lang, base_url, out_dir):
                 new_count += 1
 
-        # 5) Сохраняем catalog.json
-        if new_count > 0:
-            catalog_path.write_text(
-                json.dumps(catalog, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
-            logging.info("Added %d new articles (total %d)", new_count, len(catalog))
+        if new_count:
+            logging.info("Parsed %d new articles", new_count)
         else:
             logging.info("No new articles to parse")
 
-        # 6) Вывод для GH Actions
+        # вывод для GitHub Actions
         print(f"::set-output name=new_count::{new_count}")
 
     except Exception:
-        logging.exception("Fatal error in main:")
+        logging.exception("Fatal error in parser")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser("Smart parser with watermark, VPN & translate")
+    parser = argparse.ArgumentParser(description="Smart parser: skips posted IDs")
     parser.add_argument(
         "--state-file", type=str, required=True,
         help="path to articles/posted.json"
