@@ -43,41 +43,50 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'  # Фиксированная версия для стабильности
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-          cache-dependency-path: 'requirements-parser.txt'  # Явное указание файла зависимостей
+          cache-dependency-path: 'requirements-parser.txt'
 
-      - name: Install parser requirements with retry
+      - name: Install parser dependencies
         run: |
-          function install_with_retry {
-            local retries=5
-            local delay=15
-            local success=0
-            
-            for ((i=1; i<=retries; i++)); do
-              if pip install --default-timeout=100 -r requirements-parser.txt; then
-                success=1
-                break
-              else
-                echo "Attempt $i failed. Retrying in $delay seconds..."
-                sleep $delay
-              fi
-            done
-            
-            if [ "$success" -ne 1 ]; then
-              echo "Failed to install requirements after $retries attempts"
-              exit 1
-            fi
-          }
-          
-          # Проверка существования файла требований
+          set -e  # Прерывать при ошибках
+
+          # Проверка файла требований
           if [ ! -f "requirements-parser.txt" ]; then
-            echo "Error: requirements-parser.txt not found!"
+            echo "::error::Файл requirements-parser.txt не найден!"
             ls -la
             exit 1
           fi
-          
-          install_with_retry
+
+          echo "=== Содержимое requirements-parser.txt ==="
+          cat requirements-parser.txt
+          echo "========================================"
+
+          # Обновление pip
+          python -m pip install --upgrade pip --no-cache-dir
+
+          # Установка зависимостей с retry
+          for i in {1..5}; do
+            echo "Попытка $i установки зависимостей..."
+            if pip install \
+              --no-cache-dir \
+              --default-timeout=100 \
+              -r requirements-parser.txt; then
+              echo "Установка успешно завершена"
+              break
+            else
+              echo "Ошибка установки, повтор через 15 секунд..."
+              sleep 15
+            fi
+          done
+
+          # Проверка установленных пакетов
+          echo "=== Установленные пакеты ==="
+          pip list
+          echo "==========================="
+
+          # Проверка зависимостей
+          pip check || echo "::warning::Обнаружены проблемы в зависимостях"
 
       - name: 🧠 Run parser
         run: python3 main.py --lang ru --posted-file articles/posted.json
