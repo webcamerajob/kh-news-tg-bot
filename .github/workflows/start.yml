@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install parser deps
+      - name: Install parser dependencies
         run: pip install -r requirements-parser.txt
 
       - id: parse
@@ -45,7 +45,7 @@ jobs:
             --base-url https://www.khmertimeskh.com \
             --slug national \
             --lang ru
-        # `main.py` must print "::set-output name=new_count::<n>"
+        shell: bash
 
       - name: Upload parsed-content
         if: steps.parse.outputs.new_count != '0'
@@ -77,7 +77,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install poster deps
+      - name: Install poster dependencies
         run: pip install -r requirements-poster.txt
 
       - name: Run poster (poster.py)
@@ -86,6 +86,7 @@ jobs:
             --parsed-dir parsed_articles \
             --state-file articles/posted.json \
             --limit ${{ env.BATCH_LIMIT }}
+        shell: bash
 
       - name: Commit updated posted.json
         run: |
