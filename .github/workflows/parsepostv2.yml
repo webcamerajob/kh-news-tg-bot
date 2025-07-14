@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update \
             && sudo apt-get install -y --no-install-recommends wireguard-tools resolvconf curl jq
           mkdir -p $HOME/wg
-          echo "${WG_CONFIG}" | base64 --decode > $HOME/wg/wg0.conf
+          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
@@ -49,11 +49,11 @@ jobs:
 
       - name: Debug parser output
         run: |
-          echo "→ После парсера:"
+          echo "→ После парсера папка parsed/:"
           ls -R parsed
 
       - name: Upload parsed-content
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: parsed-content
           path: parsed
@@ -86,20 +86,20 @@ jobs:
         run: pip install httpx pillow
 
       - name: Download parsed-content
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: parsed-content
           path: parsed
 
       - name: Debug parsed-dir
         run: |
-          echo "→ Структура parsed/:"
+          echo "→ Дерево parsed/:"
           ls -R parsed
 
       - name: Run poster
         run: |
           python3 poster.py \
-            --parsed-dir parsed \
+            --parsed-dir parsed/articles \
             --state-file articles/catalog.json \
             --limit $BATCH_LIMIT
 
