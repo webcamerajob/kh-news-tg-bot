@@ -422,19 +422,21 @@ def main():
         cid = fetch_category_id(args.base_url, args.slug)
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
-        catalog = load_catalog()
-        existing_ids = {article["id"] for article in catalog}
+       # грузим уже опубликованные ID
+       from pathlib import Path
+       posted_ids = load_posted_ids(Path(state_file))
         new_articles = 0
 
-        for post in posts[:args.limit or len(posts)]:
-            post_id = post["id"]
-            if post_id in existing_ids:
-                logging.debug(f"Skipping existing article ID={post_id}")
-                continue
+       for post in posts[:args.limit or len(posts)]:
+           post_id = post["id"]
+           # пропускаем те, что уже запощены
+           if post_id in posted_ids:
+               logging.debug(f"Skipping already posted ID={post_id}")
+               continue
 
             if meta := parse_and_save(post, args.lang, args.base_url):
                 catalog.append(meta)
-                existing_ids.add(post_id)
+               # добавляем в список новых (для логов)
                 new_articles += 1
                 logging.info(f"Processed new article ID={post_id}")
 
