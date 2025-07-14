@@ -64,7 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
-          path: articles
+          path: articles/*
 
   post:
     name: Publish new articles
@@ -93,7 +93,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
-          path: .
+          path: parsed_articles
 
       - name: Debug parsed-dir
         run: |
@@ -101,7 +101,7 @@ jobs:
           ls -R articles
 
       - name: Run poster
-        run: |
+        run: ls -R parsed_articles
           python3 poster.py \
             --parsed-dir articles \
             --state-file articles/posted.json \
