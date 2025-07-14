@@ -95,10 +95,10 @@ jobs:
           name: parsed-content
           path: parsed_articles
 
-      - name: Debug parsed-dir
+      - name: Debug parsed_articles
         run: |
-          echo "→ Tree of downloaded articles/:"
-          ls -R articles
+          echo "→ Tree of parsed_articles/:"
+          ls -R parsed_articles
 
       - name: Run poster
         run: |
@@ -108,9 +108,9 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Debug parsed-dir in post-job
+      - name: Debug articles after poster
         run: |
-          echo "→ Tree of articles/ after download:"
+          echo "→ Tree of articles/ after poster run:"
           ls -R articles
 
       - name: Commit updated posted.json
