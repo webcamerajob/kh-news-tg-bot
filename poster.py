@@ -169,39 +169,59 @@ def validate_article(
     art: Dict[str, Any],
     article_dir: Path
 ) -> Optional[Tuple[str, Path, List[Path]]]:
-    aid      = art.get("id")
-    title    = art.get("title")
-    txt_name = art.get("text_file", "")
-    img_names= art.get("images", [])
+    """
+    Ищем:
+      1) заголовок
+      2) текстовый .txt внутри article_dir
+      3) картинки внутри article_dir/images
+    Если meta.json даёт какие-то кривые пути — они будут отброшены.
+    """
+    aid       = art.get("id")
+    title     = art.get("title", "").strip()
+    txt_name  = art.get("text_file", "")
+    img_names = art.get("images", [])
 
     # 1) Title
-    if not title or not isinstance(title, str):
+    if not title:
         logging.error("Invalid title in article %s", aid)
         return None
 
-    # 2) Text file: сначала полный относительный путь, потом basename
-    text_path = article_dir / Path(txt_name)
+    # 2) Text file: сначала basename из meta.json, потом scan *.txt
+    txt_basename = Path(txt_name).name
+    text_path    = article_dir / txt_basename
     if not text_path.is_file():
-        text_path = article_dir / Path(txt_name).name
-    if not text_path.is_file():
-        logging.error("Invalid text_file %s in article %s", txt_name, aid)
-        return None
+        # fallback: любой .txt в корне article_dir
+        candidates = list(article_dir.glob("*.txt"))
+        if not candidates:
+            logging.error("No text file found in %s for article %s", article_dir, aid)
+            return None
+        # берём первый (обычно content.txt или content.ru.txt)
+        text_path = candidates[0]
 
-    # 3) Images: то же — сначала путь с подпапкой, потом basename
+    # 3) Images: сначала пытаем из meta.json, потом scan папку images
     valid_imgs: List[Path] = []
     for name in img_names:
-        p = article_dir / Path(name)
+        img_basename = Path(name).name
+        # 3.1 пробуем прямо в корне
+        p = article_dir / img_basename
+        # 3.2 пробуем в подкаталоге images
         if not p.is_file():
-            p = article_dir / Path(name).name
+            p = article_dir / "images" / img_basename
         if p.is_file():
             valid_imgs.append(p)
 
     if not valid_imgs:
-        logging.error("No valid images in article %s", aid)
-        return None
+        # fallback: все картинки из папки images/
+        imgs_dir = article_dir / "images"
+        if imgs_dir.is_dir():
+            valid_imgs = [p for p in imgs_dir.iterdir()
+                          if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        if not valid_imgs:
+            logging.error("No valid images in %s for article %s", article_dir, aid)
+            return None
 
     # 4) Caption
-    raw = title.strip()
+    raw = title
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
 
     return escape_markdown(cap), text_path, valid_imgs
