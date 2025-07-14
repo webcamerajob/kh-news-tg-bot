@@ -13,7 +13,6 @@ os.environ["translators_default_region"] = "EN"
 import translators as ts
 
 from typing import Any, Dict, List, Optional
-from pathlib import Path
 from typing import Set, List 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,6 +21,7 @@ from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 # from deep_translator import GoogleTranslator
 # import translators as ts
 from bs4 import BeautifulSoup
+from pathlib import Path
 
 # списком — все фразы/слова, которые нужно вырезать
 bad_patterns = [
@@ -93,14 +93,24 @@ def main(state_file: str, output_dir: str):
     # 3) Выдаём результат в виде output для GitHub Actions
     print(f"::set-output name=new_count::{len(new_ids)}")
 
+    if __name__ == "__main__":
+        parser = argparse.ArgumentParser("Smart parser with dedupe")
+        parser.add_argument("--state-file",  type=str, required=True, help="path to articles/posted.json")
+        parser.add_argument("--output-dir",  type=str, required=True, help="where to write parsed/{id}")
+        parser.add_argument("--base-url",    type=str, required=True, help="API base URL")
+        parser.add_argument("--slug",        type=str, required=True, help="category slug")
+        parser.add_argument("--lang",        type=str, default="ru",    help="language code")
+        parser.add_argument("--limit",       type=int, default=None,    help="max number to fetch")
+        args = parser.parse_args()
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Smart parser with dedupe")
-    parser.add_argument("--state-file",  type=str, required=True, help="path to articles/posted.json")
-    parser.add_argument("--output-dir",  type=str, required=True, help="where to write parsed/{id}")
-    args = parser.parse_args()
-    main(state_file=args.state_file, output_dir=args.output_dir)
-
+        main(
+            state_file=args.state_file,
+            output_dir=args.output_dir,
+            base_url=args.base_url,
+            slug=args.slug,
+            lang=args.lang,
+            limit=args.limit
+        )
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
