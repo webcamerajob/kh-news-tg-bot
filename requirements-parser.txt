@@ -1,6 +1,6 @@
-requests
-beautifulsoup4
-httpx
-deep-translator
-cloudscraper
-translators
+requests==2.31.0
+beautifulsoup4==4.12.2
+httpx==0.25.0
+deep-translator==1.11.4
+cloudscraper==1.2.71
+translators==6.0.1
