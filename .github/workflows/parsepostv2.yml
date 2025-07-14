@@ -101,9 +101,10 @@ jobs:
           ls -R articles
 
       - name: Run poster
-        run: ls -R parsed_articles
+        run: |
+          echo "→ Running poster against parsed_articles"
           python3 poster.py \
-            --parsed-dir articles \
+            --parsed-dir parsed_articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
