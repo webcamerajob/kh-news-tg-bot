@@ -64,13 +64,17 @@ jobs:
             exit 1
           fi
 
-          # Обновление pip
-          python -m pip install --upgrade pip
+          # Обновление pip и установка wheel
+          python -m pip install --upgrade pip wheel
+
+          # Явная установка проблемных зависимостей
+          pip install --force-reinstall cloudscraper==1.2.71
 
           # Установка зависимостей с таймаутом и повторами
           for attempt in {1..5}; do
             echo "Попытка установки №$attempt"
             if pip install \
+              --no-cache-dir \
               --default-timeout=120 \
               -r requirements-parser.txt; then
               echo "Установка успешно завершена"
@@ -87,8 +91,12 @@ jobs:
           pip list
           echo "=========================="
 
+          # Явная проверка импорта модулей
+          python -c "import cloudscraper; print(f'Cloudscraper version: {cloudscraper.__version__}')"
+
       - name: 🧠 Run parser
-        run: python3 main.py --lang ru --posted-file articles/posted.json
+        run: |
+          python3 main.py --lang ru --posted-file articles/posted.json
 
       - name: Apply watermarks
         run: |
