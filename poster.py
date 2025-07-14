@@ -22,7 +22,6 @@ logging.basicConfig(
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-# HTTPX / Telegram retry settings
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
@@ -43,8 +42,8 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
     """
     norm = text.replace('\r\n', '\n')
     paras = [p for p in norm.split('\n\n') if p.strip()]
-
     chunks, curr = [], ""
+
     def split_long(p: str) -> List[str]:
         parts, sub = [], ""
         for w in p.split(" "):
@@ -104,9 +103,7 @@ async def _post_with_retry(
     """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = await client.request(
-                method, url, data=data, files=files, timeout=HTTPX_TIMEOUT
-            )
+            resp = await client.request(method, url, data=data, files=files, timeout=HTTPX_TIMEOUT)
             resp.raise_for_status()
             return True
 
@@ -172,7 +169,7 @@ async def send_message(
 def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path]]]:
     """
     Проверяет title, text_file и наличие изображений.
-    Возвращает (caption, путь к тексту, список путей к изображениям).
+    Возвращает (caption, текстовый файл, список изображений).
     """
     title = art.get("title")
     txt   = art.get("text_file")
@@ -197,11 +194,10 @@ def validate_article(art: Dict[str, Any]) -> Optional[Tuple[str, Path, List[Path
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
     Читает state-файл и возвращает set опубликованных ID.
-    Форматы:
-      - не существует или пустой → set()
-      - [] → set()
-      - [1,2,3] → {1,2,3}
-      - [{"id":1}, {"id":2}] → {1,2}
+    Поддерживает:
+      - отсутствующий или пустой файл → пустой set
+      - список чисел [1,2,3]
+      - список объектов [{"id":1}, {"id":2}]
     """
     if not state_file.is_file():
         return set()
@@ -256,15 +252,17 @@ async def main(
         logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
         return
 
-    delay      = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
-    parsed_root = Path(parsed_dir)
-    state_file  = Path(state_path)
+    delay        = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+    parsed_root  = Path(parsed_dir)
+    state_file   = Path(state_path)
 
-    # Загрузка опубликованных ID из репо
+    if not parsed_root.is_dir():
+        logging.error("Parsed directory %s does not exist", parsed_root)
+        return
+
     posted_ids_old = load_posted_ids(state_file)
     logging.info("Loaded %d published IDs", len(posted_ids_old))
 
-    # Сбор всех распарсенных статей
     parsed: List[Dict[str, Any]] = []
     for d in sorted(parsed_root.iterdir()):
         meta_file = d / "meta.json"
@@ -274,11 +272,10 @@ async def main(
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
 
-    client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
+    client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent    = 0
     new_ids: Set[int] = set()
 
-    # Публикация
     for art in parsed:
         aid = art.get("id")
         if aid in posted_ids_old:
@@ -308,10 +305,9 @@ async def main(
 
     await client.aclose()
 
-    # Сохранение обновлённого state-файла
     all_ids = posted_ids_old.union(new_ids)
     save_posted_ids(all_ids, state_file)
-
+    logging.info("State updated with %d total IDs", len(all_ids))
     logging.info("📢 Done: sent %d articles", sent)
 
 
