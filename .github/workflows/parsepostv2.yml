@@ -1,5 +1,5 @@
-
-name: “Parse & Post Articles”
+# .github/workflows/ci.yml
+name: Parse & Post Articles
 
 on:
   push:
@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 env:
-  # по желанию: можно задать лимит и задержку как vars в репо
   POST_DELAY: 5
   BATCH_LIMIT: 50
 
@@ -43,10 +42,11 @@ jobs:
     needs: parse
     runs-on: ubuntu-latest
     env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      POST_DELAY:      ${{ env.POST_DELAY }}
-      BATCH_LIMIT:     ${{ env.BATCH_LIMIT }}
+      POST_DELAY:       ${{ env.POST_DELAY }}
+      BATCH_LIMIT:      ${{ env.BATCH_LIMIT }}
+
     steps:
       - name: Checkout repo (with catalog.json)
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
           python3 poster.py \
             --parsed-dir parsed/articles \
             --state-file articles/catalog.json \
-            --limit      ${{ env.BATCH_LIMIT }}
+            --limit ${{ env.BATCH_LIMIT }}
 
       - name: Commit updated catalog.json
         run: |
