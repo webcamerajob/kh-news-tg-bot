@@ -169,34 +169,34 @@ def validate_article(
     art: Dict[str, Any],
     article_dir: Path
 ) -> Optional[Tuple[str, Path, List[Path]]]:
-    title = art.get("title")
+    aid      = art.get("id")
+    title    = art.get("title")
     txt_name = art.get("text_file")
-    img_names = art.get("images", [])
+    img_names= art.get("images", [])
 
     if not title or not isinstance(title, str):
-        logging.error("Invalid title in article %s", art.get("id"))
+        logging.error("Invalid title in article %s", aid)
         return None
 
-    # строим полный путь к тексту:
+    # строим полный путь к тексту
     text_path = article_dir / txt_name
     if not txt_name or not text_path.is_file():
-        logging.error("Invalid text_file %s in %s", txt_name, art.get("id"))
+        logging.error("Invalid text_file %s in %s", text_path, aid)
         return None
 
-    # строим пути к картинкам:
-    imgs = []
+    # собираем картинки из той же папки
+    valid_imgs: List[Path] = []
     for name in img_names:
         p = article_dir / name
         if p.is_file():
-            imgs.append(p)
-    if not imgs:
-        logging.error("No valid images in article %s", art.get("id"))
+            valid_imgs.append(p)
+    if not valid_imgs:
+        logging.error("No valid images in article %s", aid)
         return None
 
-    # готовим подпись (caption)
     raw = title.strip()
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
-    return escape_markdown(cap), text_path, imgs
+    return escape_markdown(cap), text_path, valid_imgs
 
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
