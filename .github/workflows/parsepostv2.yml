@@ -3,8 +3,7 @@ name: Parse & Post Articles
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -14,20 +13,17 @@ env:
 jobs:
 
   parse:
-    name: Parse source → artifacts
+    name: Parse → artifacts
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.x' }
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install deps if any
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run parser
         run: python3 parser.py --out-dir parsed
@@ -47,8 +43,7 @@ jobs:
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
     steps:
-      - name: Checkout repo (with catalog.json)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
@@ -57,7 +52,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
-          path: parsed/articles
+          path: parsed        # ← вот здесь!
+
+      - name: Debug parsed-dir
+        run: |
+          echo "→ parsed/ structure:"
+          ls -R parsed
 
       - name: Run poster
         run: |
@@ -70,10 +70,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add articles/catalog.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: update catalog after posting"
-            git push
-          else
-            echo "✅ catalog.json unchanged — skipping commit"
+          git add articles/catalog.json 
+          if ! git diff --cached --quiet; then 
+            git commit -m "chore: update catalog after posting" 
+            git push 
+          else 
+            echo "✅ catalog.json unchanged"
           fi
