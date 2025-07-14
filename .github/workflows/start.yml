@@ -32,7 +32,7 @@ jobs:
       - id: parser
         name: Run smart parser
         run: |
-          python3 parser/main.py \
+          python3 main.py \
             --state-file articles/posted.json \
             --output-dir parser_output
         # скрипт внутри выведет ::set-output name=new_count::<X>
