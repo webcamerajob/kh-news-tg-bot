@@ -316,7 +316,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--parsed-dir",
         type=str,
-        default="parsed/articles",
+        default="articles",
         help="директория с распарсенными статьями"
     )
     parser.add_argument(
