@@ -169,33 +169,43 @@ def validate_article(
     art: Dict[str, Any],
     article_dir: Path
 ) -> Optional[Tuple[str, Path, List[Path]]]:
+    """
+    Проверяем, что у статьи есть title, текстовый файл и хотя бы одно изображение.
+    Из meta.json берём только basename путей.
+    """
     aid      = art.get("id")
     title    = art.get("title")
-    txt_name = art.get("text_file")
+    txt_name = art.get("text_file", "")
     img_names= art.get("images", [])
 
+    # 1) Title
     if not title or not isinstance(title, str):
         logging.error("Invalid title in article %s", aid)
         return None
 
-    # строим полный путь к тексту
-    text_path = article_dir / txt_name
-    if not txt_name or not text_path.is_file():
-        logging.error("Invalid text_file %s in %s", text_path, aid)
+    # 2) Text file: берём только имя файла
+    file_basename = Path(txt_name).name
+    text_path     = article_dir / file_basename
+    if not file_basename or not text_path.is_file():
+        logging.error("Invalid text_file %s in article %s", txt_name, aid)
         return None
 
-    # собираем картинки из той же папки
+    # 3) Images: для каждого имени берём basename
     valid_imgs: List[Path] = []
-    for name in img_names:
-        p = article_dir / name
+    for img in img_names:
+        img_basename = Path(img).name
+        p = article_dir / img_basename
         if p.is_file():
             valid_imgs.append(p)
+
     if not valid_imgs:
         logging.error("No valid images in article %s", aid)
         return None
 
+    # 4) Формируем подпись (caption)
     raw = title.strip()
     cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
+
     return escape_markdown(cap), text_path, valid_imgs
 
 def load_posted_ids(state_file: Path) -> Set[int]:
