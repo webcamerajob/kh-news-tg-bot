@@ -1,9 +1,7 @@
 name: Parse & Post Articles
-permissions:
-  contents: write
-
 on:
-  push:    { branches: [main] }
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -11,34 +9,36 @@ env:
   BATCH_LIMIT: 50
 
 jobs:
+
   parse:
     runs-on: ubuntu-latest
     outputs:
-      new_count: ${{ steps.parser.outputs.new_count }}
+      new_count: ${{ steps.parse.outputs.new_count }}
 
     steps:
-      - name: Checkout code & state
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Setup Python for parser
         uses: actions/setup-python@v4
-        with: {python-version: '3.x'}
+        with:
+          python-version: '3.x'
 
       - name: Install parser deps
         run: pip install -r requirements-parser.txt
 
-      - id: parser
-        name: Run smart parser
+      - id: parse
+        name: Run parser (main.py)
         run: |
           python3 main.py \
             --state-file articles/posted.json \
             --output-dir parser_output
-        # скрипт внутри выведет ::set-output name=new_count::<X>
-
-      - name: Upload new parsed-content
-        if: steps.parser.outputs.new_count != '0'
+        # старый set-output здесь же выводит new_count
+      
+      - name: Upload parsed-content
+        if: steps.parse.outputs.new_count != '0'
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
@@ -46,14 +46,11 @@ jobs:
 
   post:
     needs: parse
-    runs-on: ubuntu-latest
     if: needs.parse.outputs.new_count != '0'
-    env:
-      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout state-file
+      - name: Checkout repo (state-file)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -65,19 +62,15 @@ jobs:
           name: parsed-content
           path: parsed_articles
 
-      - name: Debug parsed_articles
-        run: |
-          echo "→ Tree of parsed_articles/:"
-          ls -R parsed_articles
-
       - name: Setup Python for poster
         uses: actions/setup-python@v4
-        with: {python-version: '3.x'}
+        with:
+          python-version: '3.x'
 
       - name: Install poster deps
         run: pip install -r requirements-poster.txt
 
-      - name: Run poster
+      - name: Run poster (poster.py)
         run: |
           python3 poster.py \
             --parsed-dir parsed_articles \
@@ -89,7 +82,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add articles/posted.json
-          if ! git diff --cached --quiet; then
+          if ! git diff --quiet; then
             git commit -m "chore: update posted.json"
             git push
           else
