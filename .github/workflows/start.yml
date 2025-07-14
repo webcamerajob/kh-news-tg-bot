@@ -9,6 +9,7 @@ on:
 env:
   POST_DELAY: 5
   BATCH_LIMIT: 50
+  PYTHON_VERSION: "3.10"  # Фиксированная версия Python
 
 jobs:
   parse:
@@ -23,24 +24,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🔐 Setup WireGuard & DNS
+      - name: 🔐 Setup WireGuard
         run: |
           sudo apt-get update
-          sudo apt-get install -y wireguard-tools resolvconf
-          
-          # Настройка надежного DNS
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+          sudo apt-get install -y wireguard-tools jq
           
           mkdir -p $HOME/wg
           echo "$WG_CONFIG" > $HOME/wg/wg0.conf
           chmod 600 $HOME/wg/wg0.conf
+          
+          # Явное отключение автоматического DNS в WG
+          echo -e "\n[Interface]\nDNS = off" >> $HOME/wg/wg0.conf
+          
           sudo wg-quick up $HOME/wg/wg0.conf
+          
+          # Принудительная настройка DNS
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
           
           # Проверка подключения
           ping -c 3 google.com
 
-      - name: Set up Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -49,51 +54,45 @@ jobs:
 
       - name: Install parser dependencies
         run: |
-          set -e  # Прерывать при ошибках
+          set -ex  # Включить подробное логирование и прерывание при ошибках
 
-          # Проверка файла требований
+          # Проверка существования файла требований
           if [ ! -f "requirements-parser.txt" ]; then
-            echo "::error::Файл requirements-parser.txt не найден!"
+            echo "::error::Файл requirements-parser.txt не найден в корне репозитория!"
+            echo "Содержимое рабочей директории:"
             ls -la
             exit 1
           fi
 
-          echo "=== Содержимое requirements-parser.txt ==="
-          cat requirements-parser.txt
-          echo "========================================"
-
           # Обновление pip
-          python -m pip install --upgrade pip --no-cache-dir
+          python -m pip install --upgrade pip
 
-          # Установка зависимостей с retry
-          for i in {1..5}; do
-            echo "Попытка $i установки зависимостей..."
+          # Установка зависимостей с таймаутом и повторами
+          for attempt in {1..5}; do
+            echo "Попытка установки №$attempt"
             if pip install \
-              --no-cache-dir \
-              --default-timeout=100 \
+              --default-timeout=120 \
               -r requirements-parser.txt; then
               echo "Установка успешно завершена"
               break
             else
-              echo "Ошибка установки, повтор через 15 секунд..."
-              sleep 15
+              echo "Ошибка установки, повтор через 20 секунд..."
+              sleep 20
+              [ $attempt -eq 5 ] && exit 1
             fi
           done
 
           # Проверка установленных пакетов
           echo "=== Установленные пакеты ==="
           pip list
-          echo "==========================="
-
-          # Проверка зависимостей
-          pip check || echo "::warning::Обнаружены проблемы в зависимостях"
+          echo "=========================="
 
       - name: 🧠 Run parser
         run: python3 main.py --lang ru --posted-file articles/posted.json
 
       - name: Apply watermarks
         run: |
-          pip install pillow
+          pip install pillow==10.1.0
           python3 watermark_rotator.py
 
       - name: 🛑 Teardown WireGuard
@@ -121,20 +120,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Set up Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
           cache-dependency-path: 'requirements-poster.txt'
 
       - name: Install poster requirements
         run: |
-          if [ ! -f "requirements-poster.txt" ]; then
-            echo "Error: requirements-poster.txt not found!"
-            ls -la
-            exit 1
-          fi
+          set -ex
           pip install -r requirements-poster.txt
 
       - name: Download parsed-content
