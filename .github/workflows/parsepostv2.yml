@@ -47,6 +47,14 @@ jobs:
       - name: 🧠 Run parser
         run: python3 main.py --lang ru
 
+        
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down $HOME/wg/wg0.conf || true
+
+      - name: Debug all files
+        run: ls -R
+
       - name: Debug parser output
         run: |
           echo "→ Tree of generated articles/:"
@@ -57,13 +65,6 @@ jobs:
         with:
           name: parsed-content
           path: articles
-
-      - name: 🛑 Teardown WireGuard
-        if: always()
-        run: sudo wg-quick down $HOME/wg/wg0.conf || true
-
-      - name: Debug all files
-        run: ls -R .
 
   post:
     name: Publish new articles
