@@ -1,4 +1,4 @@
-# .github/workflows/ci.yml
+# .github/workflows/parsepostv2.yml
 name: Parse & Post Articles
 
 on:
@@ -12,50 +12,36 @@ env:
   BATCH_LIMIT: 50
 
 jobs:
-
   parse:
-    name: Parse source → artifacts
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.x"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run parser
-        run: python3 parser.py --out-dir parsed
-
-      - name: Upload parsed-content
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with: python-version: "3.x"
+      - run: pip install -r requirements.txt
+      - run: python3 parser.py --out-dir parsed
+      - uses: actions/upload-artifact@v4
         with:
           name: parsed-content
           path: parsed
 
   post:
-    name: Publish new articles
     needs: parse
     runs-on: ubuntu-latest
     env:
       TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      # здесь задаём литеральные значения из top-level env
       POST_DELAY:       ${{ env.POST_DELAY }}
       BATCH_LIMIT:      ${{ env.BATCH_LIMIT }}
 
     steps:
-      - name: Checkout repo (with catalog.json)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download parsed-content
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: parsed-content
           path: parsed/articles
@@ -65,7 +51,7 @@ jobs:
           python3 poster.py \
             --parsed-dir parsed/articles \
             --state-file articles/catalog.json \
-            --limit ${{ env.BATCH_LIMIT }}
+            --limit $BATCH_LIMIT
 
       - name: Commit updated catalog.json
         run: |
