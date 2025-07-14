@@ -56,11 +56,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
-          path: articles
+          path: parsed/articles
 
       - name: 🛑 Teardown WireGuard
         if: always()
         run: sudo wg-quick down $HOME/wg/wg0.conf || true
+
+      - name: Debug all files
+        run: ls -R .
 
   post:
     name: Publish new articles
@@ -89,7 +92,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
-          path: articles
+          path: parsed/articles
 
       - name: Debug parsed-dir
         run: |
