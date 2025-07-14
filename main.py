@@ -232,7 +232,10 @@ def main(
         logging.info("Loaded %d posted IDs", len(posted))
 
         cid  = fetch_category_id(base_url, slug)
+        logging.info("Fetched category ID %s for slug %s", cid, slug)
         pts  = fetch_posts(base_url, cid, per_page=(limit or 10))
+        ids = [p.get("id") for p in pts]
+        logging.info("Fetched %d pts IDs: %s", len(pts), ids)
 
         nc = 0
         for post in pts[: limit or len(pts)]:
