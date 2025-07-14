@@ -102,19 +102,19 @@ jobs:
 
       - name: Run poster
         run: |
-          python3 poster11111111111111111111.py \
+          python3 poster1111111111111111111111111111111111111.py \
             --parsed-dir articles \
-            --state-file articles/catalog.json \
+            --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated catalog.json
+      - name: Commit updated posted.json
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add articles/catalog.json
+          git add articles/posted.json
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update catalog after posting"
+            git commit -m "chore: update posted catalog after posting"
             git push
           else
-            echo "✅ catalog.json unchanged"
+            echo "✅ posted.json unchanged"
           fi
