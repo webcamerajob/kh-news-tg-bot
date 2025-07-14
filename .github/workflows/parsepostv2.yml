@@ -1,183 +1,80 @@
-name: Parse and Post V2
+
+name: “Parse & Post Articles”
 
 on:
-  schedule:
-    - cron: '00 22 * * *'   # 05–06 Indo‐China (UTC+7)
-    - cron: '00 04,10 * * *'    # 06–18 Indo‐China
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
-permissions:
-  contents: write
-
-concurrency:
-  group: parse-and-post-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  # по желанию: можно задать лимит и задержку как vars в репо
+  POST_DELAY: 5
+  BATCH_LIMIT: 50
 
 jobs:
-  parse:
-    name: 🔍 Parse Articles
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      WG_CONFIG:      ${{ secrets.WG_CONFIG }}
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
 
+  parse:
+    name: Parse source → artifacts
+    runs-on: ubuntu-latest
     steps:
-      - name: 🔄 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 📦 Cache parser pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-parser-${{ hashFiles('requirements-parser.txt') }}
-
-      - name: 🔧 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
-      - name: 💾 Install parser dependencies
-        run: pip3 install -r requirements-parser.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: 🛠 Ensure articles/ exists
-        run: mkdir -p articles
+      - name: Run parser
+        run: python3 parser.py --out-dir parsed
 
-      - name: 🔐 Setup WireGuard & install jq
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            wireguard-tools resolvconf curl jq
-          mkdir -p $HOME/wg
-          echo "${WG_CONFIG}" > $HOME/wg/wg0.conf
-          chmod 600 $HOME/wg/wg0.conf
-          sudo wg-quick up $HOME/wg/wg0.conf
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-
-      - name: 🧠 Run parser
-        run: python3 main.py --lang ru
-
-      - name: 🛑 Teardown WireGuard
-        if: always()
-        run: sudo wg-quick down $HOME/wg/wg0.conf || true
-
-      - name: ✅ Validate catalog.json with jq
-        run: |
-          if [ ! -f "articles/catalog.json" ]; then
-            echo "❌ catalog.json not found"
-            exit 1
-          fi
-          jq empty articles/catalog.json
-
-      - name: 📦 Upload parsed-content
+      - name: Upload parsed-content
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
-          path: articles
-
-      - name: 🚨 Notify parse failure
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
-            -d text="🚨 Parsing job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
+          path: parsed
 
   post:
-    name: 📤 Publish Articles
+    name: Publish new articles
     needs: parse
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     env:
-      TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      BATCH_LIMIT: 10        # публикуем по 10 статей за запуск
-      POST_DELAY: 10        # пауза между постами, с
-
+      POST_DELAY:      ${{ env.POST_DELAY }}
+      BATCH_LIMIT:     ${{ env.BATCH_LIMIT }}
     steps:
-      - name: 🔄 Sparse checkout poster.py
+      - name: Checkout repo (with catalog.json)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
-          sparse-checkout: |
-            poster.py
-            requirements-poster.txt
-            watermark.png
+          fetch-depth: 0
+          persist-credentials: true
 
-      - name: 📦 Cache poster pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-poster-${{ hashFiles('requirements-poster.txt') }}
-
-      - name: 🔧 Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: 💾 Install poster dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip3 install -r requirements-poster.txt
-
-      - name: 📥 Download parsed-content
+      - name: Download parsed-content
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
           path: parsed/articles
 
-      - name: 🐞 Debug articles content
+      - name: Run poster
         run: |
-          echo "→ Contents of articles/:"
-          ls -R articles
+          python3 poster.py \
+            --parsed-dir parsed/articles \
+            --state-file articles/catalog.json \
+            --limit      ${{ env.BATCH_LIMIT }}
 
-      - name: 🔧 Install jq
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
-
-      - name: 📁 Validate catalog.json
+      - name: Commit updated catalog.json
         run: |
-          if [ ! -f "articles/catalog.json" ]; then
-            echo "⚠️ catalog.json not found — skipping post"
-            exit 0
-          fi
-          jq empty articles/catalog.json
-
-      - name: 📤 Run poster (batch)
-        run: |
-          set -e
-          python3 poster.py --limit ${{ env.BATCH_LIMIT }}
-
-      # ————————————————————————————————————————————————————————————————
-      # 1. Полный checkout для пуша — НЕ чистит untracked-файлы
-      - name: 🔄 Full checkout for push
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          clean: false # сохраняем неотслеживаемые файлы, включая articles/catalog.json
-
-     # 2. Коммитим обновлённый catalog.json
-      - name: 🔧 Commit updated catalog.json
-        run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add articles/catalog.json
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update catalog after run ${{ github.run_id }}"
+            git commit -m "chore: update catalog after posting"
             git push
           else
             echo "✅ catalog.json unchanged — skipping commit"
           fi
-
-      # 3. Загружаем артефакт только после пуша
-      - name: 📝 Upload catalog-after-posting
-        uses: actions/upload-artifact@v4
-        with:
-          name: catalog-after-posting-${{ github.run_id }}
-          path: articles/catalog.json
-
-      - name: 🚨 Notify post failure
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ env.TELEGRAM_CHANNEL }}" \
-            -d text="🚨 Post job failed for run ${{ github.run_id }} of ${{ github.workflow }}"
