@@ -47,6 +47,12 @@ jobs:
             --lang ru
         shell: bash
 
+      - name: Debug parser_output
+        if: always()
+        run: |
+          echo "=== parser_output ==="
+          ls -R parser_output
+
       - name: Upload parsed-content
         if: steps.parse.outputs.new_count != '0'
         uses: actions/upload-artifact@v4
