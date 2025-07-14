@@ -9,11 +9,11 @@ on:
 env:
   POST_DELAY: 5
   BATCH_LIMIT: 50
-  PYTHON_VERSION: "3.10"  # Фиксированная версия Python
+  PYTHON_VERSION: "3.10"
 
 jobs:
   parse:
-    name: Парсинг → артефакты (WireGuard)
+    name: Parsing
     runs-on: ubuntu-latest
     env:
       WG_CONFIG: ${{ secrets.WG_CONFIG }}
@@ -24,97 +24,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🔐 Setup WireGuard
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools jq
-          
-          mkdir -p $HOME/wg
-          echo "$WG_CONFIG" > $HOME/wg/wg0.conf
-          chmod 600 $HOME/wg/wg0.conf
-          
-          # Явное отключение автоматического DNS в WG
-          echo -e "\n[Interface]\nDNS = off" >> $HOME/wg/wg0.conf
-          
-          sudo wg-quick up $HOME/wg/wg0.conf
-          
-          # Принудительная настройка DNS
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
-          
-          # Проверка подключения
-          ping -c 3 google.com
-
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-          cache-dependency-path: 'requirements-parser.txt'
+          cache-dependency-path: 'requirements.txt'
 
-      - name: Install parser dependencies
+      - name: Install dependencies
         run: |
-          set -ex  # Включить подробное логирование и прерывание при ошибках
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import cloudscraper; print(f'Cloudscraper v{cloudscraper.__version__}')"
 
-          # Проверка существования файла требований
-          if [ ! -f "requirements-parser.txt" ]; then
-            echo "::error::Файл requirements-parser.txt не найден в корне репозитория!"
-            echo "Содержимое рабочей директории:"
-            ls -la
-            exit 1
-          fi
+      - name: Run parser
+        run: python3 main.py --lang ru --posted-file articles/posted.json
 
-          # Обновление pip и установка wheel
-          python -m pip install --upgrade pip wheel
-
-          # Явная установка проблемных зависимостей
-          pip install --force-reinstall cloudscraper==1.2.71
-
-          # Установка зависимостей с таймаутом и повторами
-          for attempt in {1..5}; do
-            echo "Попытка установки №$attempt"
-            if pip install \
-              --no-cache-dir \
-              --default-timeout=120 \
-              -r requirements-parser.txt; then
-              echo "Установка успешно завершена"
-              break
-            else
-              echo "Ошибка установки, повтор через 20 секунд..."
-              sleep 20
-              [ $attempt -eq 5 ] && exit 1
-            fi
-          done
-
-          # Проверка установленных пакетов
-          echo "=== Установленные пакеты ==="
-          pip list
-          echo "=========================="
-
-          # Явная проверка импорта модулей
-          python -c "import cloudscraper; print(f'Cloudscraper version: {cloudscraper.__version__}')"
-
-      - name: 🧠 Run parser
-        run: |
-          python3 main.py --lang ru --posted-file articles/posted.json
-
-      - name: Apply watermarks
-        run: |
-          pip install pillow==10.1.0
-          python3 watermark_rotator.py
-
-      - name: 🛑 Teardown WireGuard
-        if: always()
-        run: sudo wg-quick down $HOME/wg/wg0.conf || true
-
-      - name: Upload parsed-content
+      - name: Upload parsed content
         uses: actions/upload-artifact@v4
         with:
           name: parsed-content
           path: articles/*
 
   post:
-    name: Publish new articles
+    name: Publishing
     needs: parse
     runs-on: ubuntu-latest
     env:
@@ -126,21 +59,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-          cache-dependency-path: 'requirements-poster.txt'
+          cache-dependency-path: 'requirements.txt'
 
-      - name: Install poster requirements
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download watermark
         run: |
-          set -ex
-          pip install -r requirements-poster.txt
+          mkdir -p watermarks
+          # Скачивание водяного знака (пример)
+          curl -L -o watermark.png https://example.com/watermark.png
 
-      - name: Download parsed-content
+      - name: Download parsed content
         uses: actions/download-artifact@v4
         with:
           name: parsed-content
@@ -153,12 +89,15 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated posted.json
+      - name: Update catalog
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add articles/posted.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted catalog after posting"
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update posted articles catalog"
             git push
           fi
