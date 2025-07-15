@@ -6,9 +6,10 @@ translators==6.0.1
 httpx==0.28.1
 Pillow==10.1.0
 python-dotenv==1.0.0
-python-telegram-bot==20.3
+# Обновляем python-telegram-bot до версии, совместимой с httpx 0.28.1
+python-telegram-bot==21.2.0
 aiohttp==3.9.3
 asyncio==3.4.3
-tqdm==4.67.1  # Обновлено до версии, совместимой с translators
+tqdm==4.67.1
 loguru==0.7.2
-lxml==6.0.0   # Явно добавлена последняя версия для поддержки translators
+lxml==6.0.0
