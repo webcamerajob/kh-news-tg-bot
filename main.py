@@ -6,12 +6,12 @@ import logging
 import re
 import hashlib
 import time
-import fcntl
+import random
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import sys
 
-# Настройка пути для импорта
+# Настройка путей для импорта
 sys.path.insert(0, str(Path(__file__).parent))
 
 import cloudscraper
@@ -41,10 +41,19 @@ BAD_PATTERNS = [
 ]
 BAD_RE = re.compile("|".join(BAD_PATTERNS), flags=re.IGNORECASE)
 SCRAPER_TIMEOUT = (10.0, 60.0)
-MAX_RETRIES = 3
-BASE_DELAY = 2.0
+MAX_RETRIES = 5  # Увеличено количество попыток
+BASE_DELAY = 3.0
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
+
+# Список User-Agents для ротации
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+]
 
 def load_posted_ids(state_file: Path) -> set:
     try:
@@ -59,27 +68,64 @@ def load_posted_ids(state_file: Path) -> set:
         return set()
 
 def fetch_category_id(base_url: str, slug: str) -> int:
-    scraper = cloudscraper.create_scraper()
+    """Получение ID категории с улучшенным обходом защиты"""
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = scraper.get(endpoint, timeout=SCRAPER_TIMEOUT)
-            response.raise_for_status()
-            data = response.json()
+            # Создаем новый экземпляр scraper для каждой попытки
+            scraper = cloudscraper.create_scraper(
+                interpreter='nodejs',
+                delay=10,
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                }
+            )
             
+            # Случайный User-Agent и заголовки
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": base_url,
+                "DNT": "1",
+                "Accept-Encoding": "gzip, deflate, br"
+            }
+            
+            response = scraper.get(
+                endpoint,
+                headers=headers,
+                timeout=SCRAPER_TIMEOUT
+            )
+            
+            # Проверка статуса ответа
+            if response.status_code == 403:
+                logger.warning(f"403 Forbidden (attempt {attempt}). Rotating session...")
+                time.sleep(BASE_DELAY * 2 ** attempt)
+                continue
+                
+            response.raise_for_status()
+            
+            data = response.json()
             if not data:
                 raise ValueError(f"Category '{slug}' not found")
                 
             return data[0]["id"]
+            
         except (ReqTimeout, RequestException) as e:
-            logger.warning(f"Timeout fetching category (attempt {attempt}): {e}")
-            time.sleep(BASE_DELAY * 2 ** (attempt - 1))
+            wait_time = BASE_DELAY * 2 ** (attempt - 1) + random.uniform(1, 3)
+            logger.warning(f"Timeout (attempt {attempt}/{MAX_RETRIES}). Waiting {wait_time:.1f}s: {e}")
+            time.sleep(wait_time)
+            
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
+            if response and response.text:
+                logger.debug(f"Response content: {response.text[:500]}")
             break
-            
-    raise RuntimeError(f"Failed to fetch category ID for slug: {slug}")
+                
+    raise RuntimeError(f"Failed to fetch category ID for slug: {slug} after {MAX_RETRIES} attempts")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> list:
     scraper = cloudscraper.create_scraper()
@@ -87,12 +133,14 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> list:
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = scraper.get(endpoint, timeout=SCRAPER_TIMEOUT)
+            headers = {"User-Agent": random.choice(USER_AGENTS)}
+            response = scraper.get(endpoint, headers=headers, timeout=SCRAPER_TIMEOUT)
             response.raise_for_status()
             return response.json()
         except (ReqTimeout, RequestException) as e:
-            logger.warning(f"Timeout fetching posts (attempt {attempt}): {e}")
-            time.sleep(BASE_DELAY * 2 ** (attempt - 1))
+            wait_time = BASE_DELAY * 2 ** (attempt - 1)
+            logger.warning(f"Timeout fetching posts (attempt {attempt}): {e}, retry in {wait_time}s")
+            time.sleep(wait_time)
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             break
@@ -107,13 +155,15 @@ def save_image(src_url: str, folder: Path) -> str:
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = scraper.get(src_url, timeout=SCRAPER_TIMEOUT)
+            headers = {"User-Agent": random.choice(USER_AGENTS)}
+            response = scraper.get(src_url, headers=headers, timeout=SCRAPER_TIMEOUT)
             response.raise_for_status()
             dest.write_bytes(response.content)
             return str(dest)
         except (ReqTimeout, RequestException) as e:
-            logger.warning(f"Error saving image {filename} (attempt {attempt}): {e}")
-            time.sleep(BASE_DELAY * 2 ** (attempt - 1))
+            wait_time = BASE_DELAY * 2 ** (attempt - 1)
+            logger.warning(f"Error saving image {filename} (attempt {attempt}): {e}, retry in {wait_time}s")
+            time.sleep(wait_time)
     
     raise RuntimeError(f"Failed to save image: {src_url}")
 
@@ -153,7 +203,12 @@ def parse_and_save(post: dict, translate_to: str, base_url: str) -> dict:
         
         # Перевод заголовка
         if translate_to:
-            title = translate_text(title, to_lang=translate_to)
+            for i in range(3):  # 3 попытки перевода
+                try:
+                    title = translate_text(title, to_lang=translate_to)
+                    break
+                except Exception:
+                    time.sleep(2)
         
         # Извлечение текста
         paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")]
@@ -212,7 +267,17 @@ def parse_and_save(post: dict, translate_to: str, base_url: str) -> dict:
         
         # Перевод контента (если требуется)
         if translate_to:
-            translated_paras = [translate_text(p, to_lang=translate_to) for p in paragraphs]
+            translated_paras = []
+            for p in paragraphs:
+                for i in range(3):  # 3 попытки перевода
+                    try:
+                        translated = translate_text(p, to_lang=translate_to)
+                        translated_paras.append(translated)
+                        break
+                    except Exception:
+                        time.sleep(2)
+                        translated_paras.append(p)  # Fallback на оригинал
+            
             translated_text = "\n\n".join(translated_paras)
             translated_path = art_dir / f"content.{translate_to}.txt"
             translated_path.write_text(f"**{title}**\n\n{translated_text}", encoding="utf-8")
@@ -247,10 +312,12 @@ def main():
         logger.info(f"Loaded {len(posted_ids)} posted article IDs")
         
         # Получение категории
+        logger.info(f"Fetching category ID for slug: {args.slug}")
         category_id = fetch_category_id(args.base_url, args.slug)
-        logger.info(f"Fetching posts for category ID: {category_id}")
+        logger.info(f"Found category ID: {category_id}")
         
         # Получение постов
+        logger.info(f"Fetching posts for category ID: {category_id}")
         posts = fetch_posts(args.base_url, category_id, per_page=args.limit or 50)
         logger.info(f"Found {len(posts)} posts to process")
         
