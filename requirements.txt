@@ -1,5 +1,5 @@
-# Исправленные зависимости без конфликтов
-requests==2.32.3  # Обновлено до версии, удовлетворяющей всем требованиям
+# requirements.txt
+requests==2.32.3
 beautifulsoup4==4.12.2
 cloudscraper==1.2.71
 translators==6.0.1
@@ -9,5 +9,6 @@ python-dotenv==1.0.0
 python-telegram-bot==20.3
 aiohttp==3.9.3
 asyncio==3.4.3
-tqdm==4.66.1
+tqdm==4.67.1  # Обновлено до версии, совместимой с translators
 loguru==0.7.2
+lxml==6.0.0   # Явно добавлена последняя версия для поддержки translators
