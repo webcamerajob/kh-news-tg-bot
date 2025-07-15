@@ -1,11 +1,10 @@
-# Убраны ненужные зависимости для обхода защиты
-requests==2.32.3
-beautifulsoup4==4.12.2
-feedparser==6.0.11
-Pillow==10.1.0
-python-telegram-bot==21.2.0
-aiohttp==3.9.3
-asyncio==3.4.3
-tqdm==4.67.1
-loguru==0.7.2
-lxml==6.0.0
+requests
+beautifulsoup4
+feedparser
+Pillow
+python-telegram-bot
+aiohttp
+asyncio
+tqdm
+loguru
+lxml
