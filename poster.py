@@ -298,7 +298,6 @@ async def main(
     posted_ids_old = load_posted_ids(state_file)
     logging.info("Loaded %d published IDs", len(posted_ids_old))
 
-    # соберём пары (meta-json, папка)
     parsed: List[Tuple[Dict[str, Any], Path]] = []
     for d in sorted(parsed_root.iterdir()):
         meta_file = d / "meta.json"
@@ -308,16 +307,15 @@ async def main(
                 parsed.append((art, d))
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
-                
+
     logging.info("🔍 Found %d folders with meta.json in %s", len(parsed), parsed_root)
-    # Распаковка метаданных для лога
     ids = [art.get("id") for art, _ in parsed]
     logging.info("🔍 Parsed IDs: %s", ids)
-    
+
     client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent    = 0
     new_ids: Set[int] = set()
-    
+
     for art, article_dir in parsed:
         aid = art.get("id")
         if aid in posted_ids_old:
@@ -330,16 +328,15 @@ async def main(
         if not validated:
             continue
 
-        _, text_path, images = validated  # игнорируем caption
+        _, text_path, images = validated
 
-        # Отправляем группу изображений без текста
         if not await send_media_group(client, token, chat_id, images):
             continue
 
-        # Отправляем текст по частям
         raw = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw)
         body = chunks[1:] if len(chunks) > 1 else chunks
+
         for part in body:
             await send_message(client, token, chat_id, part)
 
@@ -348,12 +345,13 @@ async def main(
         logging.info("✅ Posted ID=%s", aid)
         await asyncio.sleep(delay)
 
-await client.aclose()
+    # ✅ Закрытие клиента и обновление состояния ВНЕ цикла
+    await client.aclose()
 
-all_ids = posted_ids_old.union(new_ids)
-save_posted_ids(all_ids, state_file)
-logging.info("State updated with %d total IDs", len(all_ids))
-logging.info("📢 Done: sent %d articles", sent)
+    all_ids = posted_ids_old.union(new_ids)
+    save_posted_ids(all_ids, state_file)
+    logging.info("State updated with %d total IDs", len(all_ids))
+    logging.info("📢 Done: sent %d articles", sent)
 
 
 if __name__ == "__main__":
@@ -377,6 +375,8 @@ if __name__ == "__main__":
         help="максимальное число статей для отправки"
     )
     args = parser.parse_args()
+
+    import asyncio
     asyncio.run(main(
         parsed_dir=args.parsed_dir,
         state_path=args.state_file,
