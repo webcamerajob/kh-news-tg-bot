@@ -98,26 +98,30 @@ async def _post_with_retry(
     data: Dict[str, Any],
     files: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """
-    Выполняет HTTP-запрос с повторными попытками:
-      - 4xx ошибки без retry
-      - 5xx и таймауты с retry
-    """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = await client.request(
-                method, url, data=data, files=files, timeout=HTTPX_TIMEOUT
-            )
+            resp = await client.request(method, url, data=data, files=files, timeout=HTTPX_TIMEOUT)
             resp.raise_for_status()
             return True
+
         except ReadTimeout:
             logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
+
         except HTTPStatusError as e:
             code = e.response.status_code
+            text = e.response.text
+            if code == 429:
+                # Telegram присылает retry_after в JSON-параметрах
+                info = e.response.json().get("parameters", {})
+                wait = info.get("retry_after", RETRY_DELAY)
+                logging.warning("🐢 Rate limited %s/%s: retry after %s seconds", attempt, MAX_RETRIES, wait)
+                await asyncio.sleep(wait)
+                continue
             if 400 <= code < 500:
-                logging.error("❌ %s %s: %s", method, code, e.response.text)
+                logging.error("❌ %s %s: %s", method, code, text)
                 return False
             logging.warning("⚠️ %s %s, retry %s/%s", method, code, attempt, MAX_RETRIES)
+
         await asyncio.sleep(RETRY_DELAY)
 
     logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
