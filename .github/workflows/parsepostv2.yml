@@ -39,16 +39,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache APT lists & packages
-        uses: actions/cache@v3
-        with:
-          path: |
-            /var/lib/apt/lists
-            /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-cache
-          restore-keys: |
-            ${{ runner.os }}-apt-
-
       - name: Install parser requirements
         run: |
           if [ -f requirements-parser.txt ]; then
@@ -65,8 +55,7 @@ jobs:
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-
-          
+ 
       - name: 🧠 Run parser
         run: python3 main.py --lang ru
 
