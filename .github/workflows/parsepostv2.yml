@@ -1,4 +1,4 @@
-name: Parse & Post Articles
+name: Parse & Post Articles Продукт
 concurrency:
   group: post-articles
   cancel-in-progress: false
@@ -26,8 +26,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -41,12 +39,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Cache APT lists & packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            /var/lib/apt/lists
+            /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-cache
+          restore-keys: |
+            ${{ runner.os }}-apt-
+
       - name: Install parser requirements
         run: |
           if [ -f requirements-parser.txt ]; then
             pip install -r requirements-parser.txt
           fi
-
 
       - name: 🔐 Setup WireGuard & install jq
         run: |
