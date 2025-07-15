@@ -330,7 +330,92 @@ async def main(
 
         _, text_path, images = validated
 
-        if not await send_media_group(client, token, chat_id, images, caption=None):
+async def send_media_group(client, token, chat_id, image_paths, caption=None):
+    media = []
+    for i, path in enumerate(image_paths):
+        item = {
+            "type": "photo",
+            "media": f"attach://file{i}"
+        }
+        if i == 0 and isinstance(caption, str) and caption.strip():
+            item["caption"] = escape_markdown(caption)
+        media.append(item)
+
+    files = {
+        f"file{i}": open(path, "rb")
+        for i, path in enumerate(image_paths)
+    }
+
+    payload = {
+        "chat_id": chat_id,
+        "media": json.dumps(media),
+        "parse_mode": "MarkdownV2"
+    }
+
+    try:
+        response = await client.post(
+            f"https://api.telegram.org/bot{token}/sendMediaGroup",
+            data=payload,
+            files=files
+        )
+        return response.status_code == 200
+    except Exception as e:
+        logging.error("Failed to send media group: %s", e)
+        return False
+    finally:
+        for f in files.values():
+            f.close()
+
+async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHANNEL")
+    if not token or not chat_id:
+        logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
+        return
+
+    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+    parsed_root = Path(parsed_dir)
+    state_file = Path(state_path)
+
+    if not parsed_root.is_dir():
+        logging.error("Parsed directory %s does not exist", parsed_root)
+        return
+
+    posted_ids_old = load_posted_ids(state_file)
+    logging.info("Loaded %d published IDs", len(posted_ids_old))
+
+    parsed: List[Tuple[Dict[str, Any], Path]] = []
+    for d in sorted(parsed_root.iterdir()):
+        meta_file = d / "meta.json"
+        if d.is_dir() and meta_file.is_file():
+            try:
+                art = json.loads(meta_file.read_text(encoding="utf-8"))
+                parsed.append((art, d))
+            except Exception as e:
+                logging.warning("Cannot load meta %s: %s", d.name, e)
+
+    logging.info("🔍 Found %d folders with meta.json in %s", len(parsed), parsed_root)
+    ids = [art.get("id") for art, _ in parsed]
+    logging.info("🔍 Parsed IDs: %s", ids)
+
+    client = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
+    sent = 0
+    new_ids: Set[int] = set()
+
+    for art, article_dir in parsed:
+        aid = art.get("id")
+        if aid in posted_ids_old:
+            logging.info("Skipping already posted %s", aid)
+            continue
+        if limit and sent >= limit:
+            break
+
+        validated = validate_article(art, article_dir)
+        if not validated:
+            continue
+
+        _, text_path, images = validated
+        if not await send_media_group(client, token, chat_id, images):
             continue
 
         raw = text_path.read_text(encoding="utf-8")
@@ -345,7 +430,6 @@ async def main(
         logging.info("✅ Posted ID=%s", aid)
         await asyncio.sleep(delay)
 
-    # ✅ Закрытие клиента и обновление состояния ВНЕ цикла
     await client.aclose()
 
     all_ids = posted_ids_old.union(new_ids)
@@ -353,8 +437,8 @@ async def main(
     logging.info("State updated with %d total IDs", len(all_ids))
     logging.info("📢 Done: sent %d articles", sent)
 
-
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
     parser.add_argument(
         "--parsed-dir",
@@ -374,9 +458,8 @@ if __name__ == "__main__":
         default=None,
         help="максимальное число статей для отправки"
     )
-    args = parser.parse_args()
 
-    import asyncio
+    args = parser.parse_args()
     asyncio.run(main(
         parsed_dir=args.parsed_dir,
         state_path=args.state_file,
