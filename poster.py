@@ -330,14 +330,6 @@ async def main(
 
         if not await send_media_group(client, token, chat_id, images):  # не передаём caption
              continue
-        
-        validated = validate_article(art, article_dir)
-        if not validated:
-            continue
-        caption, text_path, images = validated
-
-        if not await send_media_group(client, token, chat_id, images, caption):
-            continue
 
         raw    = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw)
