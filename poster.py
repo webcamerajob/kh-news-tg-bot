@@ -350,11 +350,10 @@ for art, article_dir in parsed:
 
 await client.aclose()
 
-
-    all_ids = posted_ids_old.union(new_ids)
-    save_posted_ids(all_ids, state_file)
-    logging.info("State updated with %d total IDs", len(all_ids))
-    logging.info("📢 Done: sent %d articles", sent)
+all_ids = posted_ids_old.union(new_ids)
+save_posted_ids(all_ids, state_file)
+logging.info("State updated with %d total IDs", len(all_ids))
+logging.info("📢 Done: sent %d articles", sent)
 
 
 if __name__ == "__main__":
