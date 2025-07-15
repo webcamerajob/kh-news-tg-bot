@@ -338,7 +338,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             continue
 
         # 3.2) Подпись отдельным сообщением
-        await send_message(client, token, chat_id, caption)
+        # await send_message(client, token, chat_id, caption)
 
         # 3.3) Тело статьи по чанкам
         raw    = text_path.read_text(encoding="utf-8")
