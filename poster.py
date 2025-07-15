@@ -366,6 +366,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
 
     delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
     state_file = Path(state_path)
+    parsed_root = Path(parsed_dir)
 
     if not parsed_root.is_dir():
         logging.error("Parsed directory %s does not exist", parsed_root)
