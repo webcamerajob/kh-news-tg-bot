@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  POST_DELAY: 5
+  POST_DELAY: 600
   BATCH_LIMIT: 50
 
 jobs:
