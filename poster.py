@@ -336,8 +336,8 @@ async def send_media_group(client, token, chat_id, image_paths, caption=None):
         media.append(item)
 
     files = {
-        f"file{i}": open(path, "rb")
-        for i, path in enumerate(image_paths)
+    f"file{i}": ("watermarked.png", apply_watermark(path), "image/png")
+    for i, path in enumerate(image_paths)
     }
 
     payload = {
