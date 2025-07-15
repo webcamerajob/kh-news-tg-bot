@@ -99,24 +99,25 @@ async def _post_with_retry(
     files: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
-    HTTP POST с retry: 4xx — без retry, 5xx/timeout — retry.
+    Выполняет HTTP-запрос с повторными попытками:
+      - 4xx ошибки без retry
+      - 5xx и таймауты с retry
     """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = await client.request(method, url, data=data, files=files, timeout=HTTPX_TIMEOUT)
+            resp = await client.request(
+                method, url, data=data, files=files, timeout=HTTPX_TIMEOUT
+            )
             resp.raise_for_status()
             return True
-
         except ReadTimeout:
             logging.warning("⏱ Timeout %s/%s for %s", attempt, MAX_RETRIES, url)
-
         except HTTPStatusError as e:
             code = e.response.status_code
             if 400 <= code < 500:
                 logging.error("❌ %s %s: %s", method, code, e.response.text)
                 return False
-            logging.warning("⚠️ %s %s, retrying %s/%s", method, code, attempt, MAX_RETRIES)
-
+            logging.warning("⚠️ %s %s, retry %s/%s", method, code, attempt, MAX_RETRIES)
         await asyncio.sleep(RETRY_DELAY)
 
     logging.error("☠️ Failed %s after %s attempts", url, MAX_RETRIES)
@@ -127,24 +128,28 @@ async def send_media_group(
     client: httpx.AsyncClient,
     token: str,
     chat_id: str,
-    images: List[Path],
-    caption: str
+    images: List[Path]
 ) -> bool:
     """
-    Отправляет альбом фото в Telegram с подписью к первому фото.
+    Отправляет альбом фотографий без подписи.
+    Все изображения проходят через apply_watermark.
     """
-    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    media, files = [], {}
-    for idx, img in enumerate(images):
-        key = f"photo{idx}"
-        files[key] = (img.name, apply_watermark(img), "image/png")
-        item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0:
-            item["caption"] = escape_markdown(caption)
-            item["parse_mode"] = "MarkdownV2"
-        media.append(item)
+    url   = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+    media = []
+    files = {}
 
-    data = {"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)}
+    for idx, img in enumerate(images):
+        key = f"file{idx}"
+        files[key] = (img.name, apply_watermark(img), "image/png")
+        media.append({
+            "type": "photo",
+            "media": f"attach://{key}"
+        })
+
+    data = {
+        "chat_id": chat_id,
+        "media": json.dumps(media, ensure_ascii=False)
+    }
     return await _post_with_retry(client, "POST", url, data, files)
 
 
@@ -155,7 +160,7 @@ async def send_message(
     text: str
 ) -> bool:
     """
-    Отправляет текстовое сообщение в Telegram.
+    Отправляет текстовое сообщение с разбором MarkdownV2.
     """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {
@@ -165,72 +170,63 @@ async def send_message(
     }
     return await _post_with_retry(client, "POST", url, data)
 
+
 def validate_article(
     art: Dict[str, Any],
     article_dir: Path
 ) -> Optional[Tuple[str, Path, List[Path]]]:
     """
-    Ищем:
-      1) заголовок
-      2) текстовый .txt внутри article_dir
-      3) картинки внутри article_dir/images
-    Если meta.json даёт какие-то кривые пути — они будут отброшены.
+    Проверяет структуру статьи:
+      - title → caption
+      - наличе текстового файла
+      - сбор картинок
+    Возвращает (caption, text_path, images).
     """
-    aid       = art.get("id")
-    title     = art.get("title", "").strip()
-    txt_name  = art.get("text_file", "")
-    img_names = art.get("images", [])
+    aid      = art.get("id")
+    title    = art.get("title", "").strip()
+    txt_name = Path(art.get("text_file", "")).name
+    imgs     = art.get("images", [])
 
-    # 1) Title
     if not title:
-        logging.error("Invalid title in article %s", aid)
+        logging.error("Invalid title for %s", aid)
         return None
 
-    # 2) Text file: сначала basename из meta.json, потом scan *.txt
-    txt_basename = Path(txt_name).name
-    text_path    = article_dir / txt_basename
+    text_path = article_dir / txt_name
     if not text_path.is_file():
-        # fallback: любой .txt в корне article_dir
         candidates = list(article_dir.glob("*.txt"))
         if not candidates:
-            logging.error("No text file found in %s for article %s", article_dir, aid)
+            logging.error("No text file in %s for %s", article_dir, aid)
             return None
-        # берём первый (обычно content.txt или content.ru.txt)
         text_path = candidates[0]
 
-    # 3) Images: сначала пытаем из meta.json, потом scan папку images
     valid_imgs: List[Path] = []
-    for name in img_names:
-        img_basename = Path(name).name
-        # 3.1 пробуем прямо в корне
-        p = article_dir / img_basename
-        # 3.2 пробуем в подкаталоге images
+    for name in imgs:
+        p = article_dir / Path(name).name
         if not p.is_file():
-            p = article_dir / "images" / img_basename
+            p = article_dir / "images" / Path(name).name
         if p.is_file():
             valid_imgs.append(p)
 
     if not valid_imgs:
-        # fallback: все картинки из папки images/
         imgs_dir = article_dir / "images"
         if imgs_dir.is_dir():
-            valid_imgs = [p for p in imgs_dir.iterdir()
-                          if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+            valid_imgs = [
+                p for p in imgs_dir.iterdir()
+                if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+            ]
         if not valid_imgs:
-            logging.error("No valid images in %s for article %s", article_dir, aid)
+            logging.error("No images in %s for %s", article_dir, aid)
             return None
 
-    # 4) Caption
-    raw = title
-    cap = raw if len(raw) <= 1024 else raw[:1023] + "…"
+    cap = title if len(title) <= 1024 else title[:1023] + "…"
+    return cap, text_path, valid_imgs
 
-    return escape_markdown(cap), text_path, valid_imgs
 
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
     Читает state-файл и возвращает set опубликованных ID.
     Поддерживает:
-      - отсутствующий или пустой файл → пустой set
+      - отсутствующий или пустой файл
       - список чисел [1,2,3]
       - список объектов [{"id":1}, {"id":2}]
     """
@@ -267,91 +263,14 @@ def save_posted_ids(ids: Set[int], state_file: Path) -> None:
     """
     Сохраняет отсортированный список ID в state-файл.
     """
-    # Создаём папку, если её нет
     state_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Сортируем и пишем в файл
     arr = sorted(ids)
     state_file.write_text(
         json.dumps(arr, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-
     logging.info("Saved %d IDs to %s", len(arr), state_file)
 
-    delay        = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
-    parsed_root  = Path(parsed_dir)
-    state_file   = Path(state_path)
-
-    if not parsed_root.is_dir():
-        logging.error("Parsed directory %s does not exist", parsed_root)
-
-    posted_ids_old = load_posted_ids(state_file)
-    logging.info("Loaded %d published IDs", len(posted_ids_old))
-
-    parsed: List[Tuple[Dict[str, Any], Path]] = []
-    for d in sorted(parsed_root.iterdir()):
-        meta_file = d / "meta.json"
-        if d.is_dir() and meta_file.is_file():
-            try:
-                art = json.loads(meta_file.read_text(encoding="utf-8"))
-                parsed.append((art, d))
-            except Exception as e:
-                logging.warning("Cannot load meta %s: %s", d.name, e)
-
-    logging.info("🔍 Found %d folders with meta.json in %s", len(parsed), parsed_root)
-    ids = [art.get("id") for art, _ in parsed]
-    logging.info("🔍 Parsed IDs: %s", ids)
-
-    client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
-    sent    = 0
-    new_ids: Set[int] = set()
-
-    for art, article_dir in parsed:
-        aid = art.get("id")
-        if aid in posted_ids_old:
-            logging.info("Skipping already posted %s", aid)
-            continue
-        if limit and sent >= limit:
-            break
-
-        validated = validate_article(art, article_dir)
-        if not validated:
-            continue
-
-        _, text_path, images = validated
-
-async def send_media_group(
-    client: httpx.AsyncClient,
-    token: str,
-    chat_id: str,
-    images: List[Path],
-    caption: Optional[str] = None
-) -> bool:
-    url   = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    media = []
-    files = {}
-
-    for idx, img in enumerate(images):
-        key = f"file{idx}"
-        files[key] = (img.name, apply_watermark(img), "image/png")
-        item = {"type": "photo", "media": f"attach://{key}"}
-        if idx == 0 and isinstance(caption, str) and caption.strip():
-            item["caption"]    = escape_markdown(caption)
-            item["parse_mode"] = "MarkdownV2"
-        media.append(item)
-
-    data = {
-        "chat_id": chat_id,
-        "media": json.dumps(media, ensure_ascii=False)
-    }
-
-    try:
-        resp = await client.post(url, data=data, files=files)
-        return resp.status_code == 200
-    except Exception as e:
-        logging.error("Failed to send media group: %s", e)
-        return False
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     token       = os.getenv("TELEGRAM_TOKEN")
@@ -368,15 +287,17 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
         logging.error("Parsed directory %s does not exist", parsed_root)
         return
 
+    # 1) Загрузка уже опубликованных ID
     posted_ids_old = load_posted_ids(state_file)
     logging.info("Loaded %d published IDs", len(posted_ids_old))
 
+    # 2) Сбор папок со статьями
     parsed: List[Tuple[Dict[str, Any], Path]] = []
     for d in sorted(parsed_root.iterdir()):
-        meta_file = d / "meta.json"
-        if d.is_dir() and meta_file.is_file():
+        meta = d / "meta.json"
+        if d.is_dir() and meta.is_file():
             try:
-                art = json.loads(meta_file.read_text("utf-8"))
+                art = json.loads(meta.read_text(encoding="utf-8"))
                 parsed.append((art, d))
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
@@ -385,6 +306,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     sent     = 0
     new_ids: Set[int] = set()
 
+    # 3) Публикация каждой статьи
     for art, article_dir in parsed:
         aid = art.get("id")
         if aid in posted_ids_old:
@@ -397,13 +319,18 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             continue
 
         caption, text_path, images = validated
-        if not await send_media_group(client, token, chat_id, images, caption):
+
+        # 3.1) Альбом фото без подписи
+        if not await send_media_group(client, token, chat_id, images):
             continue
 
-        raw    = text_path.read_text("utf-8")
+        # 3.2) Подпись отдельным сообщением
+        await send_message(client, token, chat_id, caption)
+
+        # 3.3) Тело статьи по чанкам
+        raw    = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw)
-        body   = chunks[1:] if len(chunks) > 1 else chunks
-        for part in body:
+        for part in chunks:
             await send_message(client, token, chat_id, part)
 
         new_ids.add(aid)
@@ -413,6 +340,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
 
     await client.aclose()
 
+    # 4) Сохраняем обновлённый список ID
     all_ids = posted_ids_old.union(new_ids)
     save_posted_ids(all_ids, state_file)
     logging.info("State updated with %d total IDs", len(all_ids))
@@ -420,8 +348,9 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Poster: публикует статьи пакетами")
+    parser = argparse.ArgumentParser(
+        description="Poster: публикует статьи пакетами в Telegram"
+    )
     parser.add_argument(
         "--parsed-dir",
         type=str,
@@ -431,8 +360,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--state-file",
         type=str,
-        default="articles/catalog.json",
-        help="путь к state-файлу в репо"
+        default="articles/posted.json",
+        help="путь к state-файлу"
     )
     parser.add_argument(
         "-n", "--limit",
