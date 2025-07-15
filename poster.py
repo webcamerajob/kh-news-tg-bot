@@ -364,8 +364,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
         logging.error("TELEGRAM_TOKEN or TELEGRAM_CHANNEL not set")
         return
 
-    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
-    parsed_root = Path(parsed_dir)
+    delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY
     state_file = Path(state_path)
 
     if not parsed_root.is_dir():
