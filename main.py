@@ -23,11 +23,7 @@ BASE_DELAY  = 2.0
 
 OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-bad_re = re.compile(r"
-
-\[\s*.*?\]
-
-")
+bad_re = re.compile(r"\[\s*.*?\]")
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
 
