@@ -306,6 +306,15 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             except Exception as e:
                 logging.warning("Cannot load meta %s: %s", d.name, e)
 
+    # 2.1) Проверка: есть ли что публиковать?
+    new_candidates = [
+        art.get("id") for art, _ in parsed
+        if art.get("id") not in posted_ids_old
+    ]
+    if not new_candidates:
+        logging.info("🔍 No new articles to post (total known IDs: %d)", len(posted_ids_old))
+        return
+
     client   = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent     = 0
     new_ids: Set[int] = set()
