@@ -356,9 +356,6 @@ async def send_media_group(client, token, chat_id, image_paths, caption=None):
     except Exception as e:
         logging.error("Failed to send media group: %s", e)
         return False
-    finally:
-        for f in files.values():
-            f.close()
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     token = os.getenv("TELEGRAM_TOKEN")
