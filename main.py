@@ -6,30 +6,16 @@ import logging
 import re
 import hashlib
 import time
-import fcntl  # ADDED: для блокировки файла
+import fcntl
 
-import os
-os.environ["translators_default_region"] = "EN"
-import translators as ts
-
-from typing import Any, Dict, List, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cloudscraper
 from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
-# from deep_translator import GoogleTranslator
-# import translators as ts
 from bs4 import BeautifulSoup
-
-# списком — все фразы/слова, которые нужно вырезать
-bad_patterns = [
-    r"synopsis\s*:\s*",    # «Synopsis»
-    r"\(video inside\)",   # «(video inside)»
-    r"\bkhmer times\b"      # слово «khmer times»
-]
-# единое регулярное выражение с флагом IGNORECASE
-bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
+import translators as ts  # pip install translators
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -38,31 +24,36 @@ logging.basicConfig(
 )
 # ──────────────────────────────────────────────────────────────────────────────
 
-# cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
-SCRAPER_TIMEOUT = (10.0, 60.0)    # (connect_timeout, read_timeout) в секундах
-
+SCRAPER_TIMEOUT = (10.0, 60.0)
 MAX_RETRIES = 3
-BASE_DELAY  = 2.0                 # базовый интервал для backoff (сек)
+BASE_DELAY = 2.0
 
-OUTPUT_DIR   = Path("articles")
+OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-# ──────────────────────────────────────────────────────────────────────────────
 
-def extract_img_url(img_tag):
-    """Аналогично исходной версии"""
+# Фразы, которые нужно вырезать из текста
+bad_patterns = [
+    r"synopsis\s*:\s*",
+    r"\(video inside\)",
+    r"\bkhmer times\b"
+]
+bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
+
+
+def extract_img_url(img_tag) -> Optional[str]:
+    """Извлекает первую подходящую ссылку из атрибутов тега <img>."""
     for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
         if not val:
             continue
-        parts = val.split()
-        if parts:
-            return parts[0]
+        return val.split()[0]
     return None
 
+
 def fetch_category_id(base_url: str, slug: str) -> int:
-    """Аналогично исходной версии"""
-    endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
+    """Возвращает ID категории по её slug из WP REST API."""
+    endpoint = f"{base_url.rstrip('/')}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
@@ -70,42 +61,52 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             data = r.json()
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found")
-            return data[0]["id"]
+            return int(data[0]["id"])
         except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
-                attempt, MAX_RETRIES, e, delay
-            )
+            logging.warning("fetch_category_id try %s/%s failed: %s; retry in %.1fs",
+                            attempt, MAX_RETRIES, e, delay)
             time.sleep(delay)
         except json.JSONDecodeError as e:
-            logging.error("JSON decode error for categories: %s", e)
+            logging.error("JSON decode error in fetch_category_id: %s", e)
             break
     raise RuntimeError("Failed fetching category id")
 
-def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    """Аналогично исходной версии"""
-    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
-            r.raise_for_status()
-            return r.json()
-        except (ReqTimeout, RequestException) as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout fetching posts (try %s/%s): %s; retry in %.1fs",
-                attempt, MAX_RETRIES, e, delay
-            )
-            time.sleep(delay)
-        except json.JSONDecodeError as e:
-            logging.error("JSON decode error for posts: %s", e)
+
+def fetch_all_post_ids(base_url: str, cat_id: int, per_page: int = 100) -> List[int]:
+    """
+    Собирает все ID постов из категории, перебирая страницы WP REST API.
+    """
+    ids: List[int] = []
+    page = 1
+    while True:
+        url = (
+            f"{base_url.rstrip('/')}/wp-json/wp/v2/posts"
+            f"?categories={cat_id}"
+            f"&per_page={per_page}"
+            f"&page={page}"
+            f"&_fields=id"
+        )
+        r = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or not data:
             break
-    logging.error("Giving up fetching posts")
-    return []
+        ids.extend(int(item["id"]) for item in data)
+        page += 1
+    return ids
+
+
+def fetch_post_by_id(base_url: str, post_id: int) -> Dict[str, Any]:
+    """Запрашивает полный JSON одной статьи (с _embed для картинок)."""
+    url = f"{base_url.rstrip('/')}/wp-json/wp/v2/posts/{post_id}?_embed"
+    r = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
+
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
-    """Аналогично исходной версии"""
+    """Скачивает картинку и сохраняет в папке folder, возвращает локальный путь."""
     folder.mkdir(parents=True, exist_ok=True)
     fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
     dest = folder / fn
@@ -117,52 +118,40 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
             return str(dest)
         except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout saving image %s (try %s/%s): %s; retry in %.1fs",
-                fn, attempt, MAX_RETRIES, e, delay
-            )
+            logging.warning("save_image %s try %s/%s failed: %s; retry in %.1fs",
+                            fn, attempt, MAX_RETRIES, e, delay)
             time.sleep(delay)
     logging.error("Failed saving image %s after %s attempts", fn, MAX_RETRIES)
     return None
 
+
 def load_catalog() -> List[Dict[str, Any]]:
-    """CHANGED: Добавлена блокировка файла и валидация данных"""
+    """Читает catalog.json с разделяемой блокировкой, возвращает список записей."""
     if not CATALOG_PATH.exists():
         return []
     try:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_SH)  # Блокировка для чтения
+            fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
-            # Фильтруем некорректные записи
             return [item for item in data if isinstance(item, dict) and "id" in item]
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        logging.error("Catalog JSON decode error: %s", e)
+    except Exception as e:
+        logging.error("load_catalog error: %s", e)
         return []
-    except IOError as e:
-        logging.error("Catalog read error: %s", e)
-        return []
+
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
-    """
-    Сохраняет только минимальный набор полей для защиты от дублей:
-    id, hash, translated_to
-    """
+    """Сохраняет минимальные поля (id, hash, translated_to) с эксклюзивной блокировкой."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    # Фильтруем каждую запись
-    minimal = []
-    for item in catalog:
-        minimal.append({
-            "id": item["id"],
-            "hash": item["hash"],
-            "translated_to": item.get("translated_to", "")
-        })
-
+    minimal = [
+        {"id": itm["id"], "hash": itm["hash"], "translated_to": itm.get("translated_to", "")}
+        for itm in catalog
+    ]
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             json.dump(minimal, f, ensure_ascii=False, indent=2)
-    except IOError as e:
-        logging.error("Failed to save catalog: %s", e)
+    except Exception as e:
+        logging.error("save_catalog error: %s", e)
 
 # Добавляем адаптер-функцию translate_text()
 def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
