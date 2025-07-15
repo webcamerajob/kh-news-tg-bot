@@ -318,35 +318,35 @@ async def main(
     sent    = 0
     new_ids: Set[int] = set()
     
-for art, article_dir in parsed:
-    aid = art.get("id")
-    if aid in posted_ids_old:
-        logging.info("Skipping already posted %s", aid)
-        continue
-    if limit and sent >= limit:
-        break
+    for art, article_dir in parsed:
+        aid = art.get("id")
+        if aid in posted_ids_old:
+            logging.info("Skipping already posted %s", aid)
+            continue
+        if limit and sent >= limit:
+            break
 
-    validated = validate_article(art, article_dir)
-    if not validated:
-        continue
+        validated = validate_article(art, article_dir)
+        if not validated:
+            continue
 
-    _, text_path, images = validated  # игнорируем caption
+        _, text_path, images = validated  # игнорируем caption
 
-    # Отправляем группу изображений без текста
-    if not await send_media_group(client, token, chat_id, images):
-        continue
+        # Отправляем группу изображений без текста
+        if not await send_media_group(client, token, chat_id, images):
+            continue
 
-    # Отправляем текст по частям
-    raw = text_path.read_text(encoding="utf-8")
-    chunks = chunk_text(raw)
-    body = chunks[1:] if len(chunks) > 1 else chunks
-    for part in body:
-        await send_message(client, token, chat_id, part)
+        # Отправляем текст по частям
+        raw = text_path.read_text(encoding="utf-8")
+        chunks = chunk_text(raw)
+        body = chunks[1:] if len(chunks) > 1 else chunks
+        for part in body:
+            await send_message(client, token, chat_id, part)
 
-    new_ids.add(aid)
-    sent += 1
-    logging.info("✅ Posted ID=%s", aid)
-    await asyncio.sleep(delay)
+        new_ids.add(aid)
+        sent += 1
+        logging.info("✅ Posted ID=%s", aid)
+        await asyncio.sleep(delay)
 
 await client.aclose()
 
