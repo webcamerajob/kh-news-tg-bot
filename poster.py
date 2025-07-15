@@ -330,7 +330,7 @@ async def main(
 
         _, text_path, images = validated
 
-        if not await send_media_group(client, token, chat_id, images):
+        if not await send_media_group(client, token, chat_id, images, caption=None):
             continue
 
         raw = text_path.read_text(encoding="utf-8")
