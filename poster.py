@@ -326,10 +326,14 @@ async def main(
         if limit and sent >= limit:
             break
 
-        _, text_path, images = validated  # игнорируем caption
+    validated = validate_article(art, article_dir)
+    if validated:
+        _, text_path, images = validated
+        if not await send_media_group(client, token, chat_id, images):
+            continue
+    else:
+       continue
 
-        if not await send_media_group(client, token, chat_id, images):  # не передаём caption
-             continue
 
         raw    = text_path.read_text(encoding="utf-8")
         chunks = chunk_text(raw)
