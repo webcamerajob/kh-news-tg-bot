@@ -356,7 +356,7 @@ def main():
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 3)) # количество статей за один проход
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 30)) # количество статей за один проход
 
         catalog = load_catalog()
         existing_ids = {article["id"] for article in catalog}
