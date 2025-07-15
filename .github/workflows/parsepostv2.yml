@@ -1,4 +1,8 @@
 name: Parse & Post Articles
+concurrency:
+  group: post-articles
+  cancel-in-progress: false
+  
 permissions:
   contents: write
 on:
@@ -28,6 +32,14 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-parser.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install parser requirements
         run: |
@@ -90,8 +102,17 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-poster.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
       - name: Install poster requirements
-        run: pip install httpx pillow
+        run: |
+          pip install -r requirements-poster.txt
 
       - name: Download parsed-content
         uses: actions/download-artifact@v4
