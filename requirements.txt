@@ -1,17 +1,12 @@
-# Основные зависимости
 requests==2.31.0
 beautifulsoup4==4.12.2
 cloudscraper==1.2.71
 translators==6.0.1
-httpx==0.25.0
+httpx==0.28.1  # Обновлено до совместимой версии
 Pillow==10.1.0
 python-dotenv==1.0.0
 python-telegram-bot==20.3
-
-# Для асинхронных операций
 aiohttp==3.9.3
 asyncio==3.4.3
-
-# Утилиты
 tqdm==4.66.1
 loguru==0.7.2
