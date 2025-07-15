@@ -11,7 +11,6 @@ on:
   workflow_dispatch:
 
   schedule:
-   - cron: '0,30 22-4 * * *' # 5:00–16:30 ICT → 22:00–4:30 UTC
    - cron: '0 10 * * *'      # 17:00 ICT → 10:00 UTC
    - cron: '30 10 * * *'     # 17:30 ICT → 10:30 UTC
   
