@@ -275,12 +275,6 @@ def save_posted_ids(ids: Set[int], state_file: Path) -> None:
     )
     logging.info("Saved %d IDs to %s", len(arr), state_file)
 
-
-async def main(
-    parsed_dir: str,
-    state_path: str,
-    limit: Optional[int]
-):
     token   = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
     if not token or not chat_id:
