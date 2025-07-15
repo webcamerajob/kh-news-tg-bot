@@ -1,4 +1,3 @@
-# requirements.txt
 requests==2.32.3
 beautifulsoup4==4.12.2
 cloudscraper==1.2.71
@@ -6,10 +5,13 @@ translators==6.0.1
 httpx==0.28.1
 Pillow==10.1.0
 python-dotenv==1.0.0
-# Обновляем python-telegram-bot до версии, совместимой с httpx 0.28.1
 python-telegram-bot==21.2.0
 aiohttp==3.9.3
 asyncio==3.4.3
 tqdm==4.67.1
 loguru==0.7.2
 lxml==6.0.0
+httpcore==1.0.9
+anyio==4.3.0
+selenium==4.21.0  # Для расширенного обхода защиты
+webdriver-manager==4.0.1  # Для управления драйверами браузеров
