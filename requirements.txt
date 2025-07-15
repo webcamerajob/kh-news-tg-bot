@@ -1,9 +1,9 @@
-# Обновленный requirements.txt
-requests==2.31.0
+# Исправленные зависимости без конфликтов
+requests==2.32.3  # Обновлено до версии, удовлетворяющей всем требованиям
 beautifulsoup4==4.12.2
 cloudscraper==1.2.71
 translators==6.0.1
-httpx==0.28.1  # Обновлено до версии, совместимой с translators
+httpx==0.28.1
 Pillow==10.1.0
 python-dotenv==1.0.0
 python-telegram-bot==20.3
