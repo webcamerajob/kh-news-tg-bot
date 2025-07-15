@@ -317,36 +317,39 @@ async def main(
     client  = httpx.AsyncClient(timeout=HTTPX_TIMEOUT)
     sent    = 0
     new_ids: Set[int] = set()
-
-    for art, article_dir in parsed:
-        aid = art.get("id")
-        if aid in posted_ids_old:
-            logging.info("Skipping already posted %s", aid)
-            continue
-        if limit and sent >= limit:
-            break
+    
+for art, article_dir in parsed:
+    aid = art.get("id")
+    if aid in posted_ids_old:
+        logging.info("Skipping already posted %s", aid)
+        continue
+    if limit and sent >= limit:
+        break
 
     validated = validate_article(art, article_dir)
-    if validated:
-        _, text_path, images = validated
-        if not await send_media_group(client, token, chat_id, images):
-            continue
-    else:
-       continue
+    if not validated:
+        continue
 
+    _, text_path, images = validated  # игнорируем caption
 
-        raw    = text_path.read_text(encoding="utf-8")
-        chunks = chunk_text(raw)
-        body   = chunks[1:] if len(chunks) > 1 else chunks
-        for part in body:
-            await send_message(client, token, chat_id, part)
+    # Отправляем группу изображений без текста
+    if not await send_media_group(client, token, chat_id, images):
+        continue
 
-        new_ids.add(aid)
-        sent += 1
-        logging.info("✅ Posted ID=%s", aid)
-        await asyncio.sleep(delay)
+    # Отправляем текст по частям
+    raw = text_path.read_text(encoding="utf-8")
+    chunks = chunk_text(raw)
+    body = chunks[1:] if len(chunks) > 1 else chunks
+    for part in body:
+        await send_message(client, token, chat_id, part)
 
-    await client.aclose()
+    new_ids.add(aid)
+    sent += 1
+    logging.info("✅ Posted ID=%s", aid)
+    await asyncio.sleep(delay)
+
+await client.aclose()
+
 
     all_ids = posted_ids_old.union(new_ids)
     save_posted_ids(all_ids, state_file)
