@@ -1,104 +1,79 @@
-name: Parse & Post Articles
-permissions:
-  contents: write
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+# CONFIGURATION FOR KHMER TIMES SCRAPER
+version: 1.1
+last_updated: 2025-07-15
 
-env:
-  POST_DELAY: 5
-  BATCH_LIMIT: 50
-  PYTHON_VERSION: "3.10"
+scraper:
+  rss_feed: "https://news.google.com/rss/search?q=site:khmertimeskh.com+national&hl=en-US&gl=US&ceid=US:en"
+  max_articles: 10
+  timeout: 20
+  retries: 2
+  min_content_length: 300
 
-jobs:
-  parse:
-    name: RSS Parsing
-    runs-on: ubuntu-latest
+headers:
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+  Accept-Language: "en-US,en;q=0.9"
+  Referer: "https://www.khmertimeskh.com/"
+  DNT: "1"
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+content_extraction:
+  title_selector: "h1.entry-title"
+  date_selector: "time.entry-date"
+  date_attribute: "datetime"
+  content_selector: "div.td-post-content"
+  
+  remove_elements:
+    - "div"
+    - "script"
+    - "style"
+    - "ins"
+    - "figure"
+    - "aside"
+  
+  exclude_text:
+    - "READ ALSO"
+    - "Photo:"
+    - "Source:"
+    - "Sponsored"
+    - "ADVERTISEMENT"
 
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: 'requirements.txt'
+image_processing:
+  primary_sources:
+    - "json_ld"
+    - "og_image"
+  
+  fallback_selectors:
+    - "div.td-post-content img"
+    - "img.wp-post-image"
+  
+  exclude_keywords:
+    - "placeholder"
+    - "blank"
+    - "default"
+    - "logo"
+    - "watermark"
+  
+  size_filters:
+    min_width: 300
+    min_height: 200
+  
+  url_cleanup: true
+  max_images_per_article: 3
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+output:
+  format: "json"  # json, csv, or both
+  json_file: "khmer_news.json"
+  csv_file: "khmer_news.csv"
+  console_preview: true
+  preview_length: 500
+  
+  fields:
+    - "title"
+    - "url"
+    - "date"
+    - "content"
+    - "images"
 
-      - name: Run RSS parser
-        run: |
-          python3 rss_parser.py \
-            --rss-url "https://news.google.com/rss/search?q=site:khmertimeskh.com+national/" \
-            --limit $BATCH_LIMIT \
-            --posted-file articles/posted.json
-
-      - name: Upload parsed content
-        uses: actions/upload-artifact@v4
-        with:
-          name: parsed-content
-          path: articles/*
-
-  post:
-    name: Publishing
-    needs: parse
-    runs-on: ubuntu-latest
-    env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: 'requirements.txt'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download watermark
-        run: |
-          mkdir -p watermarks
-          # Скачивание водяного знака (замените на ваш URL)
-          curl -L -o watermark.png https://example.com/watermark.png
-
-      - name: Download parsed content
-        uses: actions/download-artifact@v4
-        with:
-          name: parsed-content
-          path: parsed_articles
-
-      - name: Run poster
-        run: |
-          python3 poster.py \
-            --parsed-dir parsed_articles \
-            --state-file articles/posted.json \
-            --limit $BATCH_LIMIT
-
-      - name: Update catalog
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add articles/posted.json
-          
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: update posted articles catalog"
-            git push
-          fi
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "scraper.log"
+  max_file_size: "10MB"
