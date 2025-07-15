@@ -37,7 +37,7 @@ jobs:
       - name: Run RSS parser
         run: |
           python3 rss_parser.py \
-            --rss-url "https://www.khmertimeskh.com/category/national/feed/" \
+            --rss-url "https://news.google.com/rss/search?q=site:khmertimeskh.com+national/" \
             --limit $BATCH_LIMIT \
             --posted-file articles/posted.json
 
