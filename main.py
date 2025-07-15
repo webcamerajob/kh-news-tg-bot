@@ -342,51 +342,51 @@ def main():
                        help="Translate to language code")
     args = parser.parse_args()
 
-try:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1) получаем ID категории и полный список ID
-    cid = fetch_category_id(args.base_url, args.slug)
-    all_ids = fetch_all_post_ids(args.base_url, cid)
-    logging.info("Found %d total IDs", len(all_ids))
+        # 1) получаем ID категории и полный список ID
+        cid = fetch_category_id(args.base_url, args.slug)
+        all_ids = fetch_all_post_ids(args.base_url, cid)
+        logging.info("Found %d total IDs", len(all_ids))
 
-    # 2) загружаем уже обработанные ID
-    catalog = load_catalog()
-    existing_ids = {item["id"] for item in catalog}
+        # 2) загружаем уже обработанные ID
+        catalog = load_catalog()
+        existing_ids = {item["id"] for item in catalog}
 
-    # 3) фильтруем только новые
-    new_ids = [aid for aid in all_ids if aid not in existing_ids]
-    if not new_ids:
-        logging.info("🔍 No new articles to download")
-        return
+        # 3) фильтруем только новые
+        new_ids = [aid for aid in all_ids if aid not in existing_ids]
+        if not new_ids:
+            logging.info("🔍 No new articles to download")
+            return
 
-    # 4) ограничиваем по args.limit (если указан)
-    to_process = new_ids[: args.limit] if args.limit else new_ids
-    logging.info("Will process %d new articles: %s", len(to_process), to_process)
+        # 4) ограничиваем по args.limit (если указан)
+        to_process = new_ids[: args.limit] if args.limit else new_ids
+        logging.info("Will process %d new articles: %s", len(to_process), to_process)
 
-    # 5) скачиваем, парсим и сохраняем только новые
-    new_count = 0
-    for aid in to_process:
-        try:
-            post = fetch_post_by_id(args.base_url, aid)
-            if meta := parse_and_save(post, args.lang, args.base_url):
-                catalog.append(meta)
-                existing_ids.add(aid)
-                new_count += 1
-                logging.info("✅ Processed ID=%s", aid)
-        except Exception:
-            logging.exception("❌ Failed processing ID=%s", aid)
+        # 5) скачиваем, парсим и сохраняем только новые
+        new_count = 0
+        for aid in to_process:
+            try:
+                post = fetch_post_by_id(args.base_url, aid)
+                if meta := parse_and_save(post, args.lang, args.base_url):
+                    catalog.append(meta)
+                    existing_ids.add(aid)
+                    new_count += 1
+                    logging.info("✅ Processed ID=%s", aid)
+            except Exception:
+                logging.exception("❌ Failed processing ID=%s", aid)
 
-    # 6) сохраняем каталог, если добавили что-то новое
-    if new_count:
-        save_catalog(catalog)
-        logging.info("Added %d new articles; total now %d", new_count, len(catalog))
-    else:
-        logging.info("No new articles were processed")
+        # 6) сохраняем каталог, если добавили что-то новое
+        if new_count:
+            save_catalog(catalog)
+            logging.info("Added %d new articles; total now %d", new_count, len(catalog))
+        else:
+            logging.info("No new articles were processed")
 
-except Exception:
-    logging.exception("Fatal error in main:")
-    exit(1)
+    except Exception:
+        logging.exception("Fatal error in main:")
+        exit(1)
 
 if __name__ == "__main__":
     main()
