@@ -503,29 +503,20 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
         
         posted_successfully = False
         try:
-            # 3.1) Отправляем изображения (если есть). Если нет или ошибка, переходим к тексту.
+            # 3.1) Отправляем изображения (если есть).
             if image_paths:
                 if not await send_media_group(client, token, chat_id, image_paths):
-                    logging.warning("Failed to send media group for ID=%s. Attempting to send title and text only.", aid)
-                    # Если медиагруппа не отправлена, отправляем заголовок как обычное сообщение
-                    if not await send_message(client, token, chat_id, f"*{caption}*"):
-                        logging.error("Failed to send title message for ID=%s. Skipping article.", aid)
-                        continue # Не удалось отправить даже заголовок, пропускаем статью
+                    logging.warning("Failed to send media group for ID=%s. Proceeding to send text only (title already in text).", aid)
+                    # Если медиагруппа не отправлена, пропускаем отправку отдельного заголовка.
+                    # Переходим сразу к отправке основного текста.
                 else:
-                    # Если медиагруппа отправлена, заголовок уже в подписи (хотя мы ее убрали из send_media_group),
-                    # отправляем заголовок как отдельное сообщение.
-                    # ОБНОВЛЕНИЕ: В предыдущем решении заголовок был частью send_media_group.
-                    # Теперь, когда подпись убрана из send_media_group,
-                    # заголовок всегда отправляется отдельным сообщением.
-                    if not await send_message(client, token, chat_id, f"*{caption}*"):
-                        logging.error("Failed to send title message after media group for ID=%s. Skipping article.", aid)
-                        continue
+                    # Если медиагруппа отправлена, здесь НЕ отправляем заголовок как отдельное сообщение.
+                    # Ничего не делаем, так как заголовок не должен отправляться отдельно.
+                    pass
             else:
-                # Если изображений нет совсем, отправляем заголовок как обычное сообщение
-                logging.info("No images for ID=%s. Sending title as text message.", aid)
-                if not await send_message(client, token, chat_id, f"*{caption}*"):
-                    logging.error("Failed to send title message for ID=%s (no images). Skipping article.", aid)
-                    continue
+                # Если изображений нет совсем, НЕ отправляем заголовок как отдельное сообщение.
+                logging.info("No images for ID=%s. Proceeding to send text only (title already in text).", aid)
+                # Переходим сразу к отправке основного текста.
             
             # 3.2) Тело статьи по чанкам
             raw_text = text_path.read_text(encoding="utf-8")
