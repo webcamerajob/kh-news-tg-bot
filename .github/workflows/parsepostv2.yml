@@ -170,11 +170,6 @@ jobs:
       # НОВЫЙ/ИЗМЕНЕННЫЙ БЛОК: Run poster
       # ====================================================================
 
-      - name: Debug extracted status
-        run: |
-          echo "Value of new_articles_found from parse_step: '${{ steps.parse_step.outputs.new_articles_found }}'"
-          echo "Comparison result: ${{ steps.parse_step.outputs.new_articles_found == 'true' }}"
-    
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true' # <-- ДОБАВЛЕНО: Условный запуск
         run: |
