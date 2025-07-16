@@ -358,29 +358,29 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     return meta
 
- def main():
+def main():
 
-     try:
-         # ... (весь ваш основной код функции main, включая загрузку/обработку статей) ...
-         catalog, fd = load_catalog_with_lock() # Пример, если функция load_catalog возвращает fd
+    try:
+     # ... (весь ваш основной код функции main, включая загрузку/обработку статей) ...
+        catalog, fd = load_catalog_with_lock() # Пример, если функция load_catalog возвращает fd
 
-         if new_articles_processed_in_run > 0:
-             print("NEW_ARTICLES_STATUS:true")
-         else:
-             print("NEW_ARTICLES_STATUS:false")
+        if new_articles_processed_in_run > 0:
+            print("NEW_ARTICLES_STATUS:true")
+        else:
+            print("NEW_ARTICLES_STATUS:false")
 
-     except Exception as e:
-         logging.exception("Fatal error in main:")
-         exit(1)
-     finally:
-         # Этот блок гарантирует, что fd будет закрыт, даже если произошла ошибка
-         if 'fd' in locals() and fd is not None:
-             try:
-                 fcntl.flock(fd, fcntl.LOCK_UN)
-             except Exception as e:
-                 logging.error(f"Error unlocking catalog.json: {e}")
-             finally:
-                 os.close(fd)
+    except Exception as e:
+        logging.exception("Fatal error in main:")
+        exit(1)
+    finally:
+        # Этот блок гарантирует, что fd будет закрыт, даже если произошла ошибка
+        if 'fd' in locals() and fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except Exception as e:
+                logging.error(f"Error unlocking catalog.json: {e}")
+            finally:
+                os.close(fd)
 
- if __name__ == "__main__":
+if __name__ == "__main__":
      main()
