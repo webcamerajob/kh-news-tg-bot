@@ -10,7 +10,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
   schedule:
-    - cron: '30 22 * * *'  # 5:30 UTC+7м
+    - cron: '30 22 * * *'  # 5:30 UTC+7
     - cron: '0 23 * * *'   # 6:00
     - cron: '30 23 * * *'  # 6:30
     - cron: '0 0 * * *'    # 7:00
@@ -169,7 +169,10 @@ jobs:
       # ====================================================================
       # НОВЫЙ/ИЗМЕНЕННЫЙ БЛОК: Run poster
       # ====================================================================
-
+      - name: Debug extracted status
+        run: |
+          echo "Value of new_articles_found from parse_step: '${{ steps.parse_step.outputs.new_articles_found }}'"
+          echo "Comparison result: ${{ steps.parse_step.outputs.new_articles_found == 'true' }}"
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true' # <-- ДОБАВЛЕНО: Условный запуск
         run: |
