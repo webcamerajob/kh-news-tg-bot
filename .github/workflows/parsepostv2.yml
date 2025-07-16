@@ -84,15 +84,14 @@ jobs:
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
  
-      - name: Run parser
+      - name: Run poster
+        if: steps.parse_step.outputs.new_articles_found == 'true' # Добавьте это условие
         run: |
-          echo "→ STARTING PARSER RUN" # Маркер начала работы парсера
-          python3 -u main.py \
-            --lang ${{ inputs.lang || 'ru' }} \
-            --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
-            --posted-state-file articles/posted.json
-          echo "→ PARSER RUN COMPLETE" # Маркер завершения работы парсера
-
+          echo "→ Running poster against parsed_articles"
+          python3 poster.py \
+            --parsed-dir parsed_articles \
+            --state-file articles/posted.json \
+            --limit $BATCH_LIMIT
         
       - name: 🛑 Teardown WireGuard
         if: always()
