@@ -1,6 +1,5 @@
 requests
 beautifulsoup4
 httpx
-deep-translator
 cloudscraper
 translators
