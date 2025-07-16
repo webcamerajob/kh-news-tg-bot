@@ -7,8 +7,8 @@ import re
 import hashlib
 import time
 import fcntl # ADDED: для блокировки файла
-
-os.environ["translators_default_region"] = "EN"import argparse
+import argparse
+os.environ["translators_default_region"] = "EN"
 import logging
 import json
 import hashlib
