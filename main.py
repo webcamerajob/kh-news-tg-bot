@@ -57,7 +57,7 @@ def load_posted_ids(state_file_path: Path) -> set[str]:
             with open(state_file_path, 'r', encoding='utf-8') as f:
                 # Добавлена блокировка для чтения, чтобы избежать конфликтов с другими процессами
                 fcntl.flock(f, fcntl.LOCK_SH)
-                return set(json.load(f))
+                return {str(item) for item in json.load(f)}
         return set()
     except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
         logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
