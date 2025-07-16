@@ -84,8 +84,14 @@ jobs:
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
  
-      - name: 🧠 Run parser
-        run: python3 main.py --lang ru
+      - name: Run parser
+        run: |
+          echo "→ STARTING PARSER RUN" # Добавлено: маркер начала
+          python3 -u main.py # Добавлено: флаг -u для небуферизованного вывода
+            --lang ${{ inputs.lang || 'ru' }}
+            --limit ${{ env.BATCH_LIMIT_PARSE || 10 }}
+            --posted-state-file articles/posted.json
+          echo "→ PARSER RUN COMPLETE" # Добавлено: маркер завершения 
 
         
       - name: 🛑 Teardown WireGuard
