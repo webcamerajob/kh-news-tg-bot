@@ -83,16 +83,28 @@ jobs:
           chmod 600 $HOME/wg/wg0.conf
           sudo wg-quick up $HOME/wg/wg0.conf
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
- 
-      - name: Run poster
-        if: steps.parse_step.outputs.new_articles_found == 'true' # Добавьте это условие
+  
+      # ====================================================================
+      # НОВЫЙ/ИЗМЕНЕННЫЙ БЛОК: Run parser
+      # ====================================================================
+      - name: Run parser
+        id: parse_step # <-- ДОБАВЛЕНО: ID для шага, чтобы к нему можно было обращаться
         run: |
-          echo "→ Running poster against parsed_articles"
-          python3 poster.py \
-            --parsed-dir parsed_articles \
-            --state-file articles/posted.json \
-            --limit $BATCH_LIMIT
-        
+          echo "→ STARTING PARSER RUN" # Маркер начала работы парсера
+          # Запускаем парсер, его логи идут напрямую в консоль и в файл
+          python3 -u main.py \
+            --lang ${{ inputs.lang || 'ru' }} \
+            --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
+            --posted-state-file articles/posted.json | tee parser_output.txt # <-- ИЗМЕНЕНО: Используем tee для захвата логов
+
+          echo "→ PARSER RUN COMPLETE" # Маркер завершения работы парсера
+          
+          # Извлекаем статус из файла вывода и устанавливаем его как выход шага
+          NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2) # <-- ДОБАВЛЕНО: Извлечение статуса
+          echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT # <-- ДОБАВЛЕНО: Установка выхода шага
+          echo "Extracted new_articles_found status: $NEW_ARTICLES_STATUS" # <-- ДОБАВЛЕНО: Для отладки
+      # ====================================================================
+
       - name: 🛑 Teardown WireGuard
         if: always()
         run: sudo wg-quick down $HOME/wg/wg0.conf || true
@@ -154,13 +166,18 @@ jobs:
           echo "→ Tree of parsed_articles/:"
           ls -R parsed_articles
 
+      # ====================================================================
+      # НОВЫЙ/ИЗМЕНЕННЫЙ БЛОК: Run poster
+      # ====================================================================
       - name: Run poster
+        if: steps.parse_step.outputs.new_articles_found == 'true' # <-- ДОБАВЛЕНО: Условный запуск
         run: |
           echo "→ Running poster against parsed_articles"
           python3 poster.py \
             --parsed-dir parsed_articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
+      # ====================================================================
 
       - name: Debug articles after poster
         run: |
