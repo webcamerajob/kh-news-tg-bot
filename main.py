@@ -28,7 +28,7 @@ bad_re = re.compile("|".join(bad_patterns), flags=re.IGNORECASE)
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO, # Вы можете временно изменить на logging.DEBUG для более подробных логов
+    level=logging.DEBUG, # Вы можете временно изменить на logging.DEBUG для более подробных логов
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 # ──────────────────────────────────────────────────────────────────────────────
