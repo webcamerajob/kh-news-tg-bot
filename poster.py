@@ -568,7 +568,7 @@ parser.add_argument(
     default="parsed_articles/posted.json", # Изменено на "parsed_articles/posted.json"
     help="путь к state-файлу"
 )
-    parser.add_argument(
+    args = parser.add_argument(
         "-n", "--limit",
         type=int,
         default=None,
