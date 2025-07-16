@@ -47,6 +47,9 @@ jobs:
   parse:
     name: Парсинг → артефакты (WireGuard)
     runs-on: ubuntu-latest
+    # ДОБАВЛЕНО: Секция outputs для джоба parse
+    outputs:
+      new_articles_found: ${{ steps.parse_step.outputs.new_articles_found }} # Передаем выход шага как выход джоба
     env:
       WG_CONFIG: ${{ secrets.WG_CONFIG }}
 
@@ -88,22 +91,22 @@ jobs:
       # НОВЫЙ/ИЗМЕНЕННЫЙ БЛОК: Run parser
       # ====================================================================
       - name: Run parser
-        id: parse_step # <-- ДОБАВЛЕНО: ID для шага, чтобы к нему можно было обращаться
+        id: parse_step # <-- ID для шага, чтобы к нему можно было обращаться
         run: |
           echo "→ STARTING PARSER RUN" # Маркер начала работы парсера
           # Запускаем парсер, его логи идут напрямую в консоль и в файл
           python3 -u main.py \
             --lang ${{ inputs.lang || 'ru' }} \
             --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
-            --posted-state-file articles/posted.json | tee parser_output.txt # <-- ИЗМЕНЕНО: Используем tee для захвата логов
+            --posted-state-file articles/posted.json | tee parser_output.txt
 
           echo "→ PARSER RUN COMPLETE" # Маркер завершения работы парсера
           
           # Извлекаем статус из файла вывода и устанавливаем его как выход шага
           # Используем `tr -d '[:space:]'` для удаления всех пробельных символов (включая новую строку)
-          NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]') # <-- ИЗМЕНЕНО
+          NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]') # <-- ДОБАВЛЕНО: tr -d '[:space:]'
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT # <-- Установка выхода шага
-          echo "Extracted new_articles_found status: '$NEW_ARTICLES_STATUS'" # <-- ИЗМЕНЕНО (добавил кавычки для наглядности)
+          echo "Extracted new_articles_found status: '$NEW_ARTICLES_STATUS'" # <-- Для отладки (добавил кавычки)
       # ====================================================================
 
       - name: 🛑 Teardown WireGuard
@@ -172,10 +175,12 @@ jobs:
       # ====================================================================
       - name: Debug extracted status
         run: |
-          echo "Value of new_articles_found from parse_step: '${{ steps.parse_step.outputs.new_articles_found }}'"
-          echo "Comparison result: ${{ steps.parse_step.outputs.new_articles_found == 'true' }}"
+          # ИЗМЕНЕНО: Теперь ссылаемся на needs.parse.outputs.new_articles_found
+          echo "Value of new_articles_found from parse_step: '${{ needs.parse.outputs.new_articles_found }}'"
+          echo "Comparison result: ${{ needs.parse.outputs.new_articles_found == 'true' }}"
       - name: Run poster
-        if: steps.parse_step.outputs.new_articles_found == 'true' # <-- ДОБАВЛЕНО: Условный запуск
+        # ИЗМЕНЕНО: Теперь ссылаемся на needs.parse.outputs.new_articles_found
+        if: needs.parse.outputs.new_articles_found == 'true' 
         run: |
           echo "→ Running poster against parsed_articles"
           python3 poster.py \
