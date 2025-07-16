@@ -20,13 +20,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
+# --- Константа для ограничения количества записей в posted.json ---
+MAX_POSTED_RECORDS = 200 # Максимальное количество ID в posted.json
 # ──────────────────────────────────────────────────────────────────────────────
-
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 10.0
-
 
 def escape_markdown(text: str) -> str:
     """
@@ -263,17 +263,65 @@ def load_posted_ids(state_file: Path) -> Set[int]:
     return ids
 
 
-def save_posted_ids(ids: Set[int], state_file: Path) -> None:
+def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     """
-    Сохраняет отсортированный список ID в state-файл.
+    Сохраняет список опубликованных ID статей в файл состояния.
+    Сохраняет максимум MAX_POSTED_RECORDS, добавляя новые в начало и вытесняя старые в конце.
     """
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    arr = sorted(ids)
-    state_file.write_text(
-        json.dumps(arr, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-    logging.info("Saved %d IDs to %s", len(arr), state_file)
+    state_file.parent.mkdir(parents=True, exist_ok=True) # Убедимся, что директория существует
+
+    # 1. Загружаем текущие ID из файла (для сохранения порядка и избегания дубликатов)
+    current_ids_list: deque = deque()
+    if state_file.exists():
+        try:
+            with state_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    # Извлекаем только ID, игнорируя старые форматы с объектами
+                    for item in data:
+                        if isinstance(item, dict) and "id" in item:
+                            current_ids_list.append(item["id"])
+                        elif isinstance(item, int):
+                            current_ids_list.append(item)
+                else:
+                    logging.warning(f"State file {state_file} has unexpected format. Starting with fresh records.")
+        except json.JSONDecodeError:
+            logging.warning(f"State file {state_file} is corrupted. Starting with fresh records.")
+        except Exception as e:
+            logging.error(f"Error reading existing state file {state_file}: {e}. Starting with fresh records.")
+
+    # 2. Создаем Set из текущих ID для быстрого поиска
+    current_ids_set = set(current_ids_list)
+
+    # 3. Объединяем новые ID с текущими, добавляя новые в начало
+    # Используем deque для эффективного добавления в начало и ограничения размера
+    temp_ids_deque = deque(maxlen=MAX_POSTED_RECORDS)
+
+    # Сначала добавляем новые ID, которых не было ранее
+    # Сортируем новые ID в убывающем порядке, чтобы более новые ID (если они последовательные)
+    # попадали в начало очереди первыми, если их было несколько в текущем батче.
+    for aid in sorted(list(all_ids_to_save - current_ids_set), reverse=True):
+        temp_ids_deque.appendleft(aid)
+
+    # Затем добавляем старые ID, которые уже были в файле и не были только что добавлены
+    # Проходим по старым ID в том порядке, в котором они были в файле
+    for aid in current_ids_list:
+        if aid in all_ids_to_save: # Убедимся, что ID должен быть в итоговом списке (т.е. не отброшен)
+            if aid not in temp_ids_deque: # Избегаем дублирования, если новый ID совпадает со старым
+                temp_ids_deque.append(aid)
+
+    # temp_ids_deque автоматически обрезает размер до MAX_POSTED_RECORDS,
+    # удаляя элементы с конца при добавлении в начало.
+
+    # 4. Сохраняем список ID в файл
+    try:
+        # Преобразуем deque обратно в list для сохранения
+        final_list_to_save = list(temp_ids_deque)
+        with state_file.open("w", encoding="utf-8") as f:
+            json.dump(final_list_to_save, f, ensure_ascii=False, indent=2)
+        logging.info(f"Saved {len(final_list_to_save)} IDs to state file {state_file} (max {MAX_POSTED_RECORDS}).")
+    except Exception as e:
+        logging.error(f"Failed to save state file {state_file}: {e}")
 
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
