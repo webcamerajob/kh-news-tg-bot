@@ -10,7 +10,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
   schedule:
-    - cron: '30 22 * * *'  # 5:30 UTC+7
+    - cron: '30 22 * * *'  # 5:30 UTC+7м
     - cron: '0 23 * * *'   # 6:00
     - cron: '30 23 * * *'  # 6:30
     - cron: '0 0 * * *'    # 7:00
