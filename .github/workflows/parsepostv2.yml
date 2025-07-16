@@ -11,12 +11,13 @@ on:
   workflow_dispatch:
 
   schedule:
-   - cron: '0 10 * * *'      # 17:00 ICT → 10:00 UTC
-   - cron: '30 10 * * *'     # 17:30 ICT → 10:30 UTC
+    - cron: '30 22-11 * * *'  # вместо '30 5-18'
+    - cron: '0 23-11 * * *'   # вместо '0 6-18'
+
   
 env:
   POST_DELAY: 10
-  BATCH_LIMIT: 10
+  BATCH_LIMIT: 30
 
 jobs:
 
