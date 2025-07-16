@@ -6,13 +6,16 @@ import logging
 import re
 import hashlib
 import time
-import fcntl  # ADDED: для блокировки файла
+import fcntl # ADDED: для блокировки файла
+
 import os
 os.environ["translators_default_region"] = "EN"
 import translators as ts
+
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import cloudscraper
 from requests.exceptions import ReadTimeout as ReqTimeout, RequestException
 from bs4 import BeautifulSoup
@@ -35,14 +38,31 @@ logging.basicConfig(
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
-SCRAPER_TIMEOUT = (10.0, 60.0)    # (connect_timeout, read_timeout) в секундах
+SCRAPER_TIMEOUT = (10.0, 60.0)     # (connect_timeout, read_timeout) в секундах
 
 MAX_RETRIES = 3
-BASE_DELAY  = 2.0                 # базовый интервал для backoff (сек)
+BASE_DELAY  = 2.0                # базовый интервал для backoff (сек)
 
 OUTPUT_DIR   = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 # ──────────────────────────────────────────────────────────────────────────────
+
+# ADDED: Функция для загрузки ID опубликованных статей из файла состояния posted.json
+def load_posted_ids(state_file_path: Path) -> set[str]:
+    """
+    Загружает множество ID из файла состояния (например, posted.json).
+    Используется блокировка файла для безопасного чтения.
+    """
+    try:
+        if state_file_path.exists():
+            with open(state_file_path, 'r', encoding='utf-8') as f:
+                # Добавлена блокировка для чтения, чтобы избежать конфликтов с другими процессами
+                fcntl.flock(f, fcntl.LOCK_SH) 
+                return set(json.load(f))
+        return set()
+    except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
+        logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
+        return set()
 
 def extract_img_url(img_tag):
     """Аналогично исходной версии"""
@@ -146,15 +166,19 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     # Фильтруем каждую запись
     minimal = []
     for item in catalog:
-        minimal.append({
-            "id": item["id"],
-            "hash": item["hash"],
-            "translated_to": item.get("translated_to", "")
-        })
+        # Убедимся, что item является словарем и содержит 'id'
+        if isinstance(item, dict) and "id" in item:
+            minimal.append({
+                "id": item["id"],
+                "hash": item.get("hash", ""), # Используем .get() на случай отсутствия ключа
+                "translated_to": item.get("translated_to", "")
+            })
+        else:
+            logging.warning(f"Skipping malformed catalog entry: {item}")
 
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
+            fcntl.flock(f, fcntl.LOCK_EX) # Блокировка для записи
             json.dump(minimal, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
@@ -224,11 +248,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             current_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
+            # Проверяем, изменился ли контент или язык перевода
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
-                logging.info(f"Skipping unchanged article ID={aid}")
+                logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
                 return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logging.warning(f"Failed to read existing meta for ID={aid}: {e}")
+            logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
 
     # Остальная логика функции остается без изменений
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
@@ -281,7 +306,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 images.append(path)
 
     if not images:
-        logging.warning("No images for ID=%s; skipping", aid)
+        logging.warning("No images for ID=%s; skipping article parsing and saving.", aid)
         return None
 
     meta = {
@@ -338,14 +363,21 @@ def main():
     """CHANGED: Полностью переработанная логика обработки"""
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
-                       default="https://www.khmertimeskh.com",
-                       help="WP site base URL")
+                        default="https://www.khmertimeskh.com",
+                        help="WP site base URL")
     parser.add_argument("--slug", type=str, default="national",
-                       help="Category slug")
+                        help="Category slug")
     parser.add_argument("-n", "--limit", type=int, default=None,
-                       help="Max posts to parse")
+                        help="Max posts to parse")
     parser.add_argument("-l", "--lang", type=str, default="",
-                       help="Translate to language code")
+                        help="Translate to language code")
+    # ADDED: Аргумент для указания файла состояния с опубликованными ID
+    parser.add_argument(
+        "--posted-state-file",
+        type=str,
+        default="articles/posted.json", # Путь по умолчанию к файлу, который ведет постер
+        help="Путь к файлу состояния с ID уже опубликованных статей (только для чтения)"
+    )
     args = parser.parse_args()
 
     try:
@@ -354,26 +386,48 @@ def main():
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10)) # количество статей за один проход
 
         catalog = load_catalog()
-        existing_ids = {article["id"] for article in catalog}
-        new_articles = 0
+        existing_ids_in_catalog = {article["id"] for article in catalog}
+        
+        # ADDED: Загружаем ID статей, которые уже были опубликованы (из файла posted.json)
+        # Это позволяет парсеру не обрабатывать статьи, которые уже прошли через постер.
+        posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
+
+        new_articles_processed_in_run = 0
 
         for post in posts[:args.limit or len(posts)]:
-            post_id = post["id"]
-            if post_id in existing_ids:
-                logging.debug(f"Skipping existing article ID={post_id}")
+            post_id = str(post["id"]) # Убедитесь, что ID строковый для согласованности
+
+            # ADDED: Пропускаем статьи, если их ID уже есть в файле опубликованных статей (posted.json)
+            if post_id in posted_ids_from_repo:
+                logging.debug(f"Skipping already posted article ID={post_id} based on {args.posted_state_file}.")
                 continue
 
-            if meta := parse_and_save(post, args.lang, args.base_url):
-                catalog.append(meta)
-                existing_ids.add(post_id)
-                new_articles += 1
-                logging.info(f"Processed new article ID={post_id}")
+            # Проверяем, существует ли статья в локальном каталоге.
+            # `parse_and_save` сам решит, нужно ли перезаписывать, если контент изменился.
+            is_in_local_catalog = post_id in existing_ids_in_catalog
 
-        if new_articles > 0:
+            if is_in_local_catalog:
+                logging.debug(f"Article ID={post_id} found in local catalog ({CATALOG_PATH}). Checking for content updates.")
+            
+            # Пытаемся парсить и сохранять. parse_and_save вернет meta только если есть новые данные
+            # или если статья была изменена (и ее нужно обновить).
+            if meta := parse_and_save(post, args.lang, args.base_url):
+                if is_in_local_catalog:
+                    # Если статья уже была в каталоге, удаляем старую запись и добавляем новую, чтобы обновить
+                    catalog = [item for item in catalog if item["id"] != post_id]
+                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
+                else:
+                    new_articles_processed_in_run += 1
+                    logging.info(f"Processed new article ID={post_id} and added to local catalog.")
+                
+                catalog.append(meta) # Добавляем (или обновляем) в список
+                existing_ids_in_catalog.add(post_id) # Убеждаемся, что ID в наборе для будущих проверок
+
+        if new_articles_processed_in_run > 0:
             save_catalog(catalog)
-            logging.info(f"Added {new_articles} new articles. Total: {len(catalog)}")
+            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed articles in catalog: {len(catalog)}")
         else:
-            logging.info("No new articles found")
+            logging.info("No new articles found or processed that are not already in posted.json or local catalog.")
 
     except Exception as e:
         logging.exception("Fatal error in main:")
