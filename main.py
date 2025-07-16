@@ -662,8 +662,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
 
     try:
-     # ... (весь ваш основной код функции main, включая загрузку/обработку статей) ...
-        catalog, fd = load_catalog_with_lock() # Пример, если функция load_catalog возвращает fd
+        
+        catalog = load_catalog()
 
         if new_articles_processed_in_run > 0:
             print("NEW_ARTICLES_STATUS:true")
