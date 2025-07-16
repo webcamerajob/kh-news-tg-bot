@@ -267,7 +267,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     images: List[str] = []
     srcs = []
 
-    for img in soup.find_all("img"):
+    for img in soup.find_all("img")[:10]:
         url = extract_img_url(img)
         if url:
             srcs.append(url)
