@@ -556,18 +556,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Poster: публикует статьи пакетами в Telegram"
     )
-    parser.add_argument(
-        "--parsed-dir",
-        type=str,
-        default="articles",
-        help="директория с распарсенными статьями"
-    )
-    parser.add_argument(
-        "--state-file",
-        type=str,
-        default="articles/posted.json",
-        help="путь к state-файлу"
-    )
+parser.add_argument(
+    "--parsed-dir",
+    type=str,
+    default="parsed_articles", # Изменено на "parsed_articles"
+    help="директория с распарсенными статьями"
+)
+parser.add_argument(
+    "--state-file",
+    type=str,
+    default="parsed_articles/posted.json", # Изменено на "parsed_articles/posted.json"
+    help="путь к state-файлу"
+)
     parser.add_argument(
         "-n", "--limit",
         type=int,
