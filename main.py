@@ -51,7 +51,7 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
     """Извлекает URL изображения из тега <img>."""
-    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
+    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src", "data-brsrcset"):
         val = img_tag.get(attr)
         if not val:
             continue
