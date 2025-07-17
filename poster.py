@@ -218,7 +218,7 @@ def save_posted_ids(ids: List[str], state_file_path: Path) -> None:
 
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def main_poster(parsed_dir: str, state_file: str, bot_token: str, chat_id: str,
+async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id: str, # Изменено: parsed_dir теперь типа Path
                       delay: float = DEFAULT_DELAY, limit: Optional[int] = None):
     """
     Основная асинхронная функция для публикации статей.
@@ -235,7 +235,7 @@ async def main_poster(parsed_dir: str, state_file: str, bot_token: str, chat_id:
     # Используем Set для быстрого поиска по уже загруженным ID.
     posted_ids_old_set = set(posted_ids_old) 
     
-    for art_dir in Path(parsed_dir).iterdir():
+    for art_dir in parsed_dir.iterdir(): # Итерируем по переданному объекту Path
         if art_dir.is_dir():
             meta_path = art_dir / "meta.json"
             if meta_path.exists():
@@ -268,18 +268,41 @@ async def main_poster(parsed_dir: str, state_file: str, bot_token: str, chat_id:
         logging.info("Attempting to post ID=%s...", aid)
 
         # 1) Отправка изображения с заголовком.
-        main_image_path = Path(article["images"][0]) if article["images"] else None
+        main_image_path = None
+        if article.get("images") and article["images"]: # Проверяем, что список images не пуст
+            original_image_path_str = article["images"][0] # Например, "articles/1719029_.../images/17072509.jpg"
+            
+            # Удаляем префикс "articles/" и строим путь относительно parsed_dir
+            if original_image_path_str.startswith("articles/"):
+                relative_path_from_articles_root = original_image_path_str[len("articles/"):]
+            else:
+                relative_path_from_articles_root = original_image_path_str
+            
+            main_image_path = parsed_dir / relative_path_from_articles_root
+        
+        posted_successfully = False
         if main_image_path and main_image_path.exists():
             # Заголовок статьи берется из метаданных.
             posted_successfully = await client.send_photo(main_image_path, caption=article["title"])
         else:
-            logging.warning("No main image found or image path invalid for ID=%s. Skipping article.", aid)
+            logging.warning("No main image found or image path invalid for ID=%s (path tried: %s). Skipping article.", aid, main_image_path)
             continue # Пропускаем статью, если нет главного изображения.
 
         # 2) Отправка текста статьи.
         if posted_successfully:
-            text_file_path = Path(article["text_file"])
-            if text_file_path.exists():
+            text_file_path = None
+            if article.get("text_file"): # Проверяем, что ключ text_file существует
+                original_text_path_str = article["text_file"] # Например, "articles/ID_SLUG/content.ru.txt"
+                
+                # Удаляем префикс "articles/" и строим путь относительно parsed_dir
+                if original_text_path_str.startswith("articles/"):
+                    relative_path_from_articles_root = original_text_path_str[len("articles/"):]
+                else:
+                    relative_path_from_articles_root = original_text_path_str
+                
+                text_file_path = parsed_dir / relative_path_from_articles_root
+
+            if text_file_path and text_file_path.exists():
                 try:
                     text_content = text_file_path.read_text(encoding="utf-8")
                     # Разбиваем текст на чанки, так как Telegram имеет лимит на размер сообщения.
@@ -297,7 +320,7 @@ async def main_poster(parsed_dir: str, state_file: str, bot_token: str, chat_id:
                     logging.error(f"An unexpected error occurred reading text file for ID={aid}: {e}. Skipping text.")
                     posted_successfully = False
             else:
-                logging.warning("Text file not found for ID=%s. Skipping text.", aid)
+                logging.warning("Text file not found for ID=%s (path tried: %s). Skipping text.", aid, text_file_path)
                 # Если текстовый файл не найден, это тоже считается неудачей.
                 posted_successfully = False
 
@@ -342,8 +365,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--parsed-dir",
-        type=str,
-        default="articles", # Директория, где находятся распарсенные статьи.
+        type=Path, # ИЗМЕНЕНО: теперь принимает объект Path
+        default=Path("articles"), # ИЗМЕНЕНО: значение по умолчанию теперь объект Path
         help="директория с распарсенными статьями"
     )
     parser.add_argument(
@@ -380,7 +403,7 @@ if __name__ == "__main__":
 
     # Запускаем асинхронную основную функцию.
     asyncio.run(main_poster(
-        parsed_dir=args.parsed_dir,
+        parsed_dir=args.parsed_dir, # args.parsed_dir теперь уже является объектом Path
         state_file=args.state_file,
         bot_token=args.bot_token,
         chat_id=args.chat_id,
