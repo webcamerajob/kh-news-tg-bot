@@ -32,6 +32,30 @@ BASE_DELAY = 1.0 # Базовая задержка для ретраев
 SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)      # (connect_timeout, read_timeout) в секундах
 
+# --- НОВЫЕ КОНСТАНТЫ И ФУНКЦИИ ДЛЯ ФИЛЬТРАЦИИ СЛОВ ---
+# Список слов для фильтрации (добавьте сюда свои слова)
+# Слова будут заменены на звездочки. Используйте re.escape() если слово содержит спецсимволы.
+WORDS_TO_FILTER = ["(VIDEO)", "VIDEO:","Synopsis:","AKP"] # Ваши запрещенные слова
+
+def filter_text(text: str, filter_words: List[str]) -> str:
+    """
+    Фильтрует текст, заменяя слова из filter_words на звездочки.
+    Удаляет множественные пробелы, оставшиеся после замены.
+    """
+    if not text:
+        return ""
+    cleaned_text = text
+    for word in filter_words:
+        if word: # Пропускаем пустые слова
+            # Используем re.sub для замены слова, учитывая регистр и границы слова.
+            # Заменяем на пробел, чтобы потом схлопнуть множественные пробелы.
+            cleaned_text = re.sub(r'\b' + re.escape(word) + r'\b', ' ', cleaned_text, flags=re.IGNORECASE)
+    
+    # Удаляем множественные пробелы и пробелы в начале/конце
+    cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
+    return cleaned_text
+# --- КОНЕЦ НОВЫХ КОНСТАНТ И ФУНКЦИЙ ---
+
 
 # --- Вспомогательные функции (реальные реализации из нашего обсуждения) ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
@@ -47,11 +71,13 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
     except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
         logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
+    except Exception as e:
+        logging.warning(f"An unexpected error occurred loading posted IDs: {e}. Assuming empty set.")
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
     """Извлекает URL изображения из тега <img>."""
-    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src", "data-brsrcset"):
+    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
         if not val:
             continue
@@ -72,7 +98,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found")
             return data[0]["id"]
-        except (ReqTimeout, RequestException) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e: # Использовать requests.exceptions если cloudscraper возвращает их
             delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
@@ -93,7 +119,7 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
             return r.json()
-        except (ReqTimeout, RequestException) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e: # Использовать requests.exceptions если cloudscraper возвращает их
             delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout fetching posts (try %s/%s): %s; retry in %.1fs",
@@ -118,7 +144,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
             r.raise_for_status()
             dest.write_bytes(r.content)
             return str(dest)
-        except (ReqTimeout, RequestException) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e: # Использовать requests.exceptions если cloudscraper возвращает их
             delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout saving image %s (try %s/%s): %s; retry in %.1fs",
@@ -143,6 +169,9 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
     except IOError as e:
         logging.error("Catalog read error: %s", e)
+        return []
+    except Exception as e:
+        logging.error("An unexpected error occurred loading catalog: %s", e)
         return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
@@ -170,6 +199,9 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
             json.dump(minimal, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
+    except Exception as e:
+        logging.error("An unexpected error occurred saving catalog: %s", e)
+
 
 def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
     """
@@ -210,14 +242,21 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
+        except Exception as e:
+            logging.warning(f"An unexpected error occurred reading existing meta for ID={aid}: {e}. Reparsing.")
 
+
+    # 1. Фильтрация оригинального заголовка
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = orig_title
+    orig_title = filter_text(orig_title, WORDS_TO_FILTER) # <-- Применяем фильтр к оригинальному заголовку
+    title = orig_title # Заголовок для использования далее (может быть переведенным)
 
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
+                # Переводим УЖЕ ОТФИЛЬТРОВАННЫЙ оригинальный заголовок
                 title = translate_text(orig_title, to_lang=translate_to, provider="yandex")
+                # ! НЕ ФИЛЬТРУЕМ ЗДЕСЬ ПЕРЕВЕДЕННЫЙ ЗАГОЛОВОК, ТАК КАК ЗАПРОС "ТОЛЬКО ПЕРЕД ПЕРЕВОДОМ"
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
@@ -234,24 +273,33 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = bad_re.sub("", raw_text)
     raw_text = re.sub(r"[ \t]+", " ", raw_text)
     raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+    
+    # 2. Фильтрация основного текста перед сохранением и использованием для перевода
+    raw_text = filter_text(raw_text, WORDS_TO_FILTER) # <-- Применяем фильтр к основному тексту
 
-    # Вставка заголовка в начало
+    # Вставка заголовка в начало (заголовок уже отфильтрован, если это оригинал, или переведен из отфильтрованного оригинала)
     raw_text = f"**{title}**\n\n{raw_text}"
 
     img_dir = art_dir / "images"
     images: List[str] = []
     srcs = []
 
-    for img in soup.find_all("img")[:10]:
-        url = extract_img_url(img)
-        if url:
-            srcs.append(url)
-
+    # Используем ThreadPoolExecutor для параллельной загрузки изображений
     with ThreadPoolExecutor(max_workers=5) as ex:
+        # Собираем URL'ы изображений из тегов <img>, ограничиваясь 10 первыми
+        for img in soup.find_all("img")[:10]:
+            url = extract_img_url(img)
+            if url:
+                srcs.append(url)
+
         futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
         for fut in as_completed(futures):
-            if path := fut.result():
-                images.append(path)
+            try:
+                if path := fut.result():
+                    images.append(path)
+            except Exception as e:
+                logging.warning(f"Error saving image: {e}")
+
 
     if not images and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
@@ -267,7 +315,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     meta = {
         "id": aid, "slug": slug,
         "date": post.get("date"), "link": post.get("link"),
-        "title": title,
+        "title": title, # Используем title, который уже обработан
         "text_file": str(art_dir / "content.txt"),
         "images": images, "posted": False,
         "hash": hashlib.sha256(raw_text.encode()).hexdigest()
@@ -282,16 +330,26 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 old = json.loads(meta_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 pass
+            except Exception as e:
+                logging.warning(f"An unexpected error occurred reading old meta for ID={aid}: {e}. Skipping comparison.")
+
 
         if old.get("hash") != h or old.get("translated_to") != translate_to:
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    clean_paras = [bad_re.sub("", p) for p in paras]
-                    trans = [translate_text(p, to_lang=translate_to, provider="yandex") for p in clean_paras]
+                    # Получаем параграфы из оригинального контента
+                    original_paras_for_translation = [p.get_text(strip=True) for p in BeautifulSoup(post["content"]["rendered"], "html.parser").find_all("p")]
+                    # Очищаем и фильтруем каждый параграф ПЕРЕД переводом
+                    clean_and_filtered_paras_for_translation = [filter_text(bad_re.sub("", p), WORDS_TO_FILTER) for p in original_paras_for_translation]
+                    
+                    # Переводим ОТФИЛЬТРОВАННЫЕ параграфы
+                    trans = [translate_text(p, to_lang=translate_to, provider="yandex") for p in clean_and_filtered_paras_for_translation]
+                    
+                    # ! НЕ ФИЛЬТРУЕМ ПЕРЕВЕДЕННЫЙ ТЕКСТ ЗДЕСЬ, ТАК КАК ЗАПРОС "ТОЛЬКО ПЕРЕД ПЕРЕВОДОМ"
 
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     trans_txt = "\n\n".join(trans)
-                    header_t = f"{title}\n\n\n"
+                    header_t = f"**{title}**\n\n" # title уже обработан
                     txt_t.write_text(header_t + trans_txt, encoding="utf-8")
 
                     meta.update({
@@ -306,7 +364,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                     delay = BASE_DELAY * 2 ** (attempt - 1)
                     logging.warning("Translate try %s failed: %s; retry in %.1fs", attempt, e, delay)
                     time.sleep(delay)
-            else: # Это `else` относится к `for` циклу, если не было `break`
+            else:
                 logging.warning("Translation failed after max retries for ID=%s.", aid)
         else:
             logging.info("Using cached translation %s for ID=%s", translate_to, aid)
@@ -320,14 +378,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
-                        default="https://www.khmertimeskh.com",
-                        help="WP site base URL")
+                         default="https://www.khmertimeskh.com",
+                         help="WP site base URL")
     parser.add_argument("--slug", type=str, default="national",
-                        help="Category slug")
+                         help="Category slug")
     parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="Max posts to parse")
+                         help="Max posts to parse")
     parser.add_argument("-l", "--lang", type=str, default="",
-                        help="Translate to language code")
+                         help="Translate to language code")
     parser.add_argument(
         "--posted-state-file",
         type=str,
@@ -364,16 +422,37 @@ def main():
 
             # Обработка статьи (парсинг и сохранение)
             if meta := parse_and_save(post, args.lang, args.base_url):
-                if is_in_local_catalog:
-                    # Если статья уже в каталоге, удаляем старую запись
-                    catalog = [item for item in catalog if item["id"] != post_id]
-                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
-                else:
+                # parse_and_save уже проверяет, изменился ли контент, и возвращает старые метаданные, если нет.
+                # Поэтому здесь нужно только обновить каталог, если это новая статья или измененная.
+                # Если parse_and_save вернул метаданные, это значит, что статья либо новая, либо обновленная.
+                
+                # Удаляем старую запись, если статья уже была в каталоге
+                catalog = [item for item in catalog if item["id"] != meta["id"]]
+                catalog.append(meta) # Добавляем новую/обновленную запись
+                existing_ids_in_catalog.add(meta["id"]) # Обновляем множество ID
+
+                # Проверяем, действительно ли это новая статья (не только обновленная)
+                # Это можно сделать, сравнив до и после обработки parse_and_save.
+                # Сейчас логика такая: если meta возвращается, и article_id не был в posted_ids_from_repo,
+                # и это не дубликат в текущем каталоге, то это новая статья.
+                # Так как мы удаляем из каталога и добавляем, нам нужно более тонкое условие для 'newly processed'.
+                # Самый простой способ - если hash изменился или это полностью новый ID.
+
+                # Для целей логирования NEW_ARTICLES_STATUS, нам нужно знать,
+                # были ли добавлены статьи, которых не было ни в posted.json, ни в текущем catalog.json.
+                # Но так как posted.json обрабатывается в poster.py, а catalog.json - здесь,
+                # нам просто нужно отслеживать, сколько уникальных новых статей было обработано.
+                if post_id not in posted_ids_from_repo and not is_in_local_catalog:
                     new_articles_processed_in_run += 1
                     logging.info(f"Processed new article ID={post_id} and added to local catalog.")
-
-                catalog.append(meta)
-                existing_ids_in_catalog.add(post_id)
+                elif post_id in posted_ids_from_repo and not is_in_local_catalog:
+                    # Это случай, когда статья была в posted.json, но не в catalog.json
+                    # (например, catalog.json был удален или устарел).
+                    # Мы ее обрабатываем, но не считаем "новой" для статуса.
+                    logging.info(f"Re-processed article ID={post_id} (found in posted.json, not in local catalog).")
+                elif is_in_local_catalog:
+                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
+                
 
         # Сохранение каталога и вывод статуса
         if new_articles_processed_in_run > 0:
