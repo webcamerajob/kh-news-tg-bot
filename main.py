@@ -80,47 +80,7 @@ def extract_main_image_url(html_content: str) -> Optional[str]:
         logging.info(f"Main image found via og:image: {image_url}")
         return image_url
 
-    # 2. Если og:image не найден, попробуйте twitter:image
-    twitter_image_meta = soup.find('meta', {'name': 'twitter:image'})
-    if twitter_image_meta and twitter_image_meta.get('content'):
-        image_url = twitter_image_meta['content']
-        logging.info(f"Main image found via twitter:image: {image_url}")
-        return image_url
-
-    # 3. Если ни один из них не найден, попробуйте найти первое изображение в Schema.org JSON-LD
-    schema_script = soup.find('script', {'type': 'application/ld+json'})
-    if schema_script and schema_script.string:
-        try:
-            schema_data = json.loads(schema_script.string)
-            # Schema.org может быть массивом или одиночным объектом
-            if isinstance(schema_data, list):
-                for item in schema_data:
-                    if isinstance(item, dict) and item.get('@type') == 'Article' and 'image' in item:
-                        image_info = item['image']
-                        if isinstance(image_info, dict) and 'url' in image_info:
-                            image_url = image_info['url']
-                            logging.info(f"Main image found via Schema.org (@graph list): {image_url}")
-                            return image_url
-            elif isinstance(schema_data, dict) and '@graph' in schema_data:
-                for item in schema_data['@graph']:
-                    if isinstance(item, dict) and item.get('@type') == 'Article' and 'image' in item:
-                        image_info = item['image']
-                        if isinstance(image_info, dict) and 'url' in image_info:
-                            image_url = image_info['url']
-                            logging.info(f"Main image found via Schema.org (@graph): {image_url}")
-                            return image_url
-            elif isinstance(schema_data, dict) and schema_data.get('@type') == 'Article' and 'image' in schema_data:
-                 image_info = schema_data['image']
-                 if isinstance(image_info, dict) and 'url' in image_info:
-                     image_url = image_info['url']
-                     logging.info(f"Main image found via Schema.org (direct): {image_url}")
-                     return image_url
-        except json.JSONDecodeError:
-            logging.warning("JSON decode error from Schema.org script.")
-        except Exception as e:
-            logging.warning(f"An unexpected error occurred parsing Schema.org: {e}")
-
-    logging.info("Main image not found via og:image, twitter:image, or Schema.org.")
+    logging.info("Main image not found via og:image")
     return None
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
