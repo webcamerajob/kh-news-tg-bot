@@ -23,7 +23,7 @@ os.environ["translators_default_region"] = "EN"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Предполагаемые константы
-OUTPUT_DIR = Path("parsed_articles") # Переименовано для ясности, articles/parsed_articles
+OUTPUT_DIR = Path("articles") # Возвращаем к исходной директории
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0 # Базовая задержка для ретраев
