@@ -33,13 +33,8 @@ def escape_markdown(text: str) -> str:
     """
     Экранирует специальные символы для форматирования MarkdownV2 в Telegram,
     которые не должны интерпретироваться как часть форматирования.
-    Применяется только к *содержимому* текста, а не к самим символам форматирования.
     """
-    # Список символов, которые нужно экранировать.
-    # Обратите внимание: `*` и `_` экранируются, так как текст должен быть уже подготовлен
-    # и обёрнут в форматирующие символы (`*text*`) снаружи этой функции.
-    
-    markdown_chars_to_escape = r'\_*[]()~`>#+-=|{}.!' # Список символов, которые нужно экранировать.
+    markdown_chars_to_escape = r'\_*[]()~`>#+-=|{}.!'
     return re.sub(r'([%s])' % re.escape(markdown_chars_to_escape), r'\\\1', text)
 
 
@@ -108,9 +103,6 @@ class TelegramAPI:
             json_resp = resp.json()
             if not json_resp.get("ok"):
                 logging.error(f"Telegram API error for {method}: {json_resp.get('description', 'Unknown error')}")
-                # Для некоторых ошибок, например, слишком длинного текста, может быть полезно не повторять.
-                # Но для сетевых ошибок повторы важны.
-                # Если это ошибка, которую можно исправить повтором, можно продолжить, иначе поднять исключение
                 if json_resp.get("error_code") in [429, 500, 502, 503, 504]: # Retry for common transient errors
                     logging.warning(
                         "Telegram API returned non-OK (attempt %s/%s): %s. Retrying in %.1fs...",
@@ -132,7 +124,7 @@ class TelegramAPI:
         """
         payload = {
             "chat_id": self.chat_id,
-            "text": text, # Используем текст напрямую, так как он уже должен быть подготовлен для MarkdownV2.
+            "text": text,
             "parse_mode": "MarkdownV2"
         }
         try:
@@ -146,7 +138,6 @@ class TelegramAPI:
         """
         Отправляет фотографию в Telegram-канал с подписью.
         Подпись (caption) также форматируется жирным и экранируется для MarkdownV2.
-        Эта функция используется для отправки ОДИНОЧНЫХ фотографий, не входящих в альбом.
         """
         if not photo_path.exists():
             logging.error("Photo file not found: %s", photo_path)
@@ -180,9 +171,8 @@ class TelegramAPI:
             "parse_mode": "MarkdownV2"
         }
         
-        # Если есть подпись, форматируем ее как жирный текст и экранируем.
         if caption:
-            payload["caption"] = caption # Предполагаем, что caption уже отформатирован/экранирован
+            payload["caption"] = caption
             
         try:
             resp = await self._send_request("sendPhoto", files=files, data=payload)
@@ -191,26 +181,22 @@ class TelegramAPI:
             logging.error("Failed to send photo: %s", e)
             return False
 
-    async def send_media_group(self, media_items: List[Dict[str, Any]]) -> bool:
+    async def send_media_group(self, photo_paths: List[Path], caption: Optional[str] = None) -> bool:
         """
         Отправляет группу фотографий (альбом) в Telegram-канал.
-        Максимум 10 фотографий за раз.
-        `media_items` - список словарей, где каждый словарь содержит 'type' и 'media_path' (Path object).
+        Максимум 10 фотографий в группе.
+        Первая фотография может иметь подпись.
         """
-        if not media_items:
-            logging.warning("No media items provided for send_media_group.")
+        if not photo_paths:
+            logging.warning("No photo paths provided for media group.")
             return False
 
-        files = {}
-        telegram_media = []
+        media_items = []
+        files_to_send = {}
         
-        # Подготавливаем файлы и объекты media для API Telegram
-        for i, item in enumerate(media_items):
-            media_type = item.get("type")
-            photo_path = item.get("media_path") # Это кастомный ключ для передачи Path объекта
-            
-            if media_type != "photo" or not photo_path or not photo_path.exists():
-                logging.warning(f"Invalid or non-existent media item {i} (path: {photo_path}). Skipping.")
+        for i, photo_path in enumerate(photo_paths):
+            if not photo_path.exists():
+                logging.warning(f"Photo file not found for media group: {photo_path}. Skipping.")
                 continue
 
             try:
@@ -223,40 +209,39 @@ class TelegramAPI:
                 img.save(bio, format="JPEG", quality=85)
                 bio.seek(0)
 
-                if bio.tell() > 10 * 1024 * 1024: # Проверка размера файла > 10MB
-                    logging.warning(f"Compressed image {photo_path} for media group too large (>10MB). Skipping.")
+                if bio.tell() > 10 * 1024 * 1024:
+                    logging.warning(f"Compressed image for media group too large (>10MB): {photo_path}. Skipping.")
                     continue
                 
-                # Прикрепляем файл к словарю 'files' с уникальным именем
-                file_id = f"attach{i}"
-                files[file_id] = (photo_path.name, bio, "image/jpeg")
-                
-                # Формируем объект InputMediaPhoto для Telegram API
-                telegram_media_item = {
+                # Используем уникальное имя файла для multipart/form-data
+                file_name = f"photo_{i}_{photo_path.name}"
+                files_to_send[file_name] = (photo_path.name, bio, "image/jpeg")
+
+                media_item = {
                     "type": "photo",
-                    "media": f"attach://{file_id}"
+                    "media": f"attach://{file_name}", # Ссылка на файл в multipart/form-data
                 }
-                # Подпись для медиа-группы может быть только у первого элемента,
-                # но по вашему требованию, текст и заголовок не входят в группу фото,
-                # поэтому здесь caption не добавляем.
+                if i == 0 and caption: # Только первое фото может иметь подпись для группы
+                    media_item["caption"] = caption
+                    media_item["parse_mode"] = "MarkdownV2" # Подпись должна быть в MarkdownV2
                 
-                telegram_media.append(telegram_media_item)
+                media_items.append(media_item)
 
             except Exception as e:
                 logging.error(f"Error processing image {photo_path} for media group: {e}. Skipping.")
                 continue
         
-        if not telegram_media:
-            logging.warning("No valid photo items to send in the media group.")
+        if not media_items:
+            logging.warning("No valid images left to send in media group after processing.")
             return False
 
         payload = {
             "chat_id": self.chat_id,
-            "media": json.dumps(telegram_media) # Массив media должен быть JSON-строкой
+            "media": json.dumps(media_items) # Список объектов InputMedia
         }
 
         try:
-            resp = await self._send_request("sendMediaGroup", files=files, data=payload)
+            resp = await self._send_request("sendMediaGroup", files=files_to_send, data=payload)
             return resp.get("ok", False)
         except Exception as e:
             logging.error("Failed to send media group: %s", e)
@@ -358,129 +343,103 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
     for article in articles_to_post:
         aid = str(article["id"])
         logging.info("Attempting to post ID=%s...", aid)
-
-        # 1) Подготовка и отправка группы изображений (альбома).
-        images_for_media_group: List[Path] = []
         
-        # Собираем все пути к изображениям из meta.json
-        if article.get("images") and article["images"]:
-            seen_full_paths = set()
+        posted_successfully = True # Assume success unless an error occurs
 
-            # Обрабатываем главное изображение первым (из article["images"][0])
-            if len(article["images"]) > 0:
-                main_image_path_str = article["images"][0]
+        # 1) Отправка группы изображений (до 10 штук), первое - главное
+        image_paths_to_send: List[Path] = []
+        if article.get("images"):
+            # Берем главное фото, если оно указано, или первое в списке
+            main_image_path_str = article.get("main_image_path")
+            if main_image_path_str:
                 if main_image_path_str.startswith("articles/"):
-                    relative_path = main_image_path_str[len("articles/"):]
+                    main_image_path = parsed_dir / main_image_path_str[len("articles/"):]
                 else:
-                    relative_path = main_image_path_str
-                
-                full_path = parsed_dir / relative_path
-                if full_path.exists():
-                    images_for_media_group.append(full_path)
-                    seen_full_paths.add(full_path)
+                    main_image_path = parsed_dir / main_image_path_str
+                if main_image_path.exists():
+                    image_paths_to_send.append(main_image_path)
                 else:
-                    logging.warning(f"Main image file not found for ID={aid} at path: {full_path}. It will be skipped.")
-            
-            # Собираем до 9 дополнительных изображений (всего 10)
-            aux_images_count = 0
-            for i, img_path_str in enumerate(article["images"]):
-                if i == 0: # Пропускаем главное изображение, оно уже обработано
+                    logging.warning(f"Main image file not found: {main_image_path} for ID={aid}.")
+                    main_image_path = None # Сбрасываем, если файл не найден
+
+            # Добавляем остальные изображения, избегая дублирования главного и соблюдая лимит в 10
+            for img_path_str in article["images"]:
+                if img_path_str.startswith("articles/"):
+                    full_path = parsed_dir / img_path_str[len("articles/"):]
+                else:
+                    full_path = parsed_dir / img_path_str
+
+                # Пропускаем, если это главное фото (уже добавлено) или если достигнут лимит
+                if full_path in image_paths_to_send or len(image_paths_to_send) >= 10:
                     continue
                 
-                if aux_images_count >= 9: # Ограничиваем до 10 фотографий всего (1 главная + 9 дополнительных)
-                    logging.info(f"Limiting media group to 10 images for ID={aid}. Skipping further auxiliary images.")
-                    break
-
-                if img_path_str.startswith("articles/"):
-                    relative_path = img_path_str[len("articles/"):]
+                if full_path.exists():
+                    image_paths_to_send.append(full_path)
                 else:
-                    relative_path = img_path_str
-                
-                full_path = parsed_dir / relative_path
-                
-                if full_path.exists() and full_path not in seen_full_paths:
-                    images_for_media_group.append(full_path)
-                    seen_full_paths.add(full_path)
-                    aux_images_count += 1
-                elif not full_path.exists():
-                    logging.warning(f"Auxiliary image file not found for ID={aid} at path: {full_path}. Skipping this image.")
+                    logging.warning(f"Additional image file not found: {full_path} for ID={aid}. Skipping this image.")
         
-        posted_successfully = False
-        if images_for_media_group:
-            media_group_items = []
-            for img_path in images_for_media_group:
-                media_group_items.append({
-                    "type": "photo",
-                    "media_path": img_path # Кастомный ключ для передачи объекта Path
-                    # Нет подписи, согласно вашему требованию
-                })
-            
-            logging.info(f"Attempting to send media group with {len(media_group_items)} photos for ID={aid}...")
-            posted_successfully = await client.send_media_group(media_group_items)
-            if not posted_successfully:
-                logging.error("Failed to send photo group for ID=%s. Skipping article.", aid)
-                continue # Если не удалось отправить группу фото, пропускаем всю статью
+        if not image_paths_to_send:
+            logging.warning("No valid images found for ID=%s to send in media group. Skipping article.", aid)
+            continue # Пропускаем статью, если нет изображений
+
+        logging.info(f"Sending media group with {len(image_paths_to_send)} images for ID={aid}.")
+        
+        # Подготовка подписи для первого фото в группе (заголовок статьи)
+        escaped_title_content = escape_markdown(article['title'])
+        formatted_title_for_caption = f"*{escaped_title_content}*"
+
+        if not await client.send_media_group(image_paths_to_send, caption=formatted_title_for_caption):
+            logging.error(f"Failed to send media group for ID={aid}.")
+            posted_successfully = False
         else:
-            logging.info("No valid images found for ID=%s to form a group. Proceeding with text only.", aid)
-            # Если изображений нет, этот шаг считается "успешным", чтобы продолжить отправку текста.
-            posted_successfully = True
+            logging.info(f"Successfully sent media group for ID={aid}.")
+            await asyncio.sleep(1) # Небольшая задержка после отправки медиагруппы
 
-        # 2) Отправка текста статьи, включая заголовок в начале.
-        if posted_successfully: # Текст отправляется только если предыдущий шаг (фото) был успешен или если фото не было
-            text_file_path = None
-            if article.get("text_file"): # Проверяем, что ключ text_file существует
-                original_text_path_str = article["text_file"] # Например, "articles/ID_SLUG/content.ru.txt"
-                
-                # Удаляем префикс "articles/" и строим путь относительно parsed_dir
-                if original_text_path_str.startswith("articles/"):
-                    relative_path_from_articles_root = original_text_path_str[len("articles/"):]
-                else:
-                    relative_path_from_articles_root = original_text_path_str
-                
-                text_file_path = parsed_dir / relative_path_from_articles_root
+        if not posted_successfully:
+            continue # Переходим к следующей статье, если медиагруппа не отправлена
 
-            if text_file_path and text_file_path.exists():
-                try:
-                    text_content = text_file_path.read_text(encoding="utf-8")
-                    
-                    # Экранируем только содержимое заголовка
-                    escaped_title_content = escape_markdown(article['title'])
-                    
-                    # Форматируем заголовок как жирный текст для MarkdownV2, используя одинарные звездочки.
-                    # Звездочки *не экранируются*, так как send_message теперь ожидает готовый Markdown.
-                    formatted_title = f"*{escaped_title_content}*"
-                    
-                    # Экранируем основной текст, чтобы любые спецсимволы в нем не интерпретировались как Markdown
-                    escaped_text_content = escape_markdown(text_content)
-
-                    # Объединяем отформатированный заголовок и экранированный основной текст
-                    full_text_to_send = f"{formatted_title}\n\n{escaped_text_content}"
-
-                    # Разбиваем текст на чанки, так как Telegram имеет лимит на размер сообщения.
-                    text_chunks = chunk_text(full_text_to_send)
-                    for i, chunk in enumerate(text_chunks):
-                        if not await client.send_message(chunk): # Отправка каждого чанка.
-                            logging.error("Failed to send text chunk %d/%d for ID=%s.", i+1, len(text_chunks), aid)
-                            posted_successfully = False # Если чанк не отправлен, вся статья считается неудачной.
-                            break
-                        await asyncio.sleep(1) # Небольшая задержка между чанками.
-                except (IOError, UnicodeDecodeError) as e:
-                    logging.error(f"Failed to read text file {text_file_path} for ID={aid}: {e}. Skipping text.")
-                    posted_successfully = False
-                except Exception as e:
-                    logging.error(f"An unexpected error occurred reading text file for ID={aid}: {e}. Skipping text.")
-                    posted_successfully = False
+        # 2) Отправка текста статьи (без заголовка, так как он в подписи фото)
+        text_file_path = None
+        if article.get("text_file"):
+            original_text_path_str = article["text_file"]
+            if original_text_path_str.startswith("articles/"):
+                relative_path_from_articles_root = original_text_path_str[len("articles/"):]
             else:
-                logging.warning("Text file not found for ID=%s (path tried: %s). Skipping text.", aid, text_file_path)
-                # Если текстовый файл не найден, это тоже считается неудачей.
+                relative_path_from_articles_root = original_text_path_str
+            text_file_path = parsed_dir / relative_path_from_articles_root
+
+        if text_file_path and text_file_path.exists():
+            try:
+                text_content = text_file_path.read_text(encoding="utf-8")
+                
+                escaped_text_content = escape_markdown(text_content)
+                
+                text_chunks = chunk_text(escaped_text_content) # Отправляем только текст, без заголовка
+                for i, chunk in enumerate(text_chunks):
+                    if not await client.send_message(chunk):
+                        logging.error("Failed to send text chunk %d/%d for ID=%s.", i+1, len(text_chunks), aid)
+                        posted_successfully = False
+                        break
+                    await asyncio.sleep(1)
+            except (IOError, UnicodeDecodeError) as e:
+                logging.error(f"Failed to read text file {text_file_path} for ID={aid}: {e}. Skipping text.")
                 posted_successfully = False
+            except Exception as e:
+                logging.error(f"An unexpected error occurred reading text file for ID={aid}: {e}. Skipping text.")
+                posted_successfully = False
+        else:
+            logging.warning("Text file not found for ID=%s (path tried: %s). Skipping text.", aid, text_file_path)
+            posted_successfully = False
+
+        if not posted_successfully:
+            continue # Переходим к следующей статье, если текст не отправлен
 
         # 3) Обновляем список опубликованных ID, если статья была успешно отправлена.
         if posted_successfully:
             new_ids_this_run.append(aid) # Добавляем в список новых успешно опубликованных ID.
             sent += 1
             logging.info("✅ Posted ID=%s", aid)
-            
+        
         await asyncio.sleep(delay) # Задержка перед отправкой следующей статьи.
 
     await client.aclose() # Закрываем HTTPX клиент.
@@ -490,20 +449,18 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
     seen_ids: Set[str] = set()
 
     # Добавляем новые ID из текущего запуска в начало списка.
-    # Они уже в нужном порядке благодаря .append(aid) в цикле выше.
     for aid in new_ids_this_run:
         if aid not in seen_ids:
             combined_ids.append(aid)
             seen_ids.add(aid)
-            
+    
     # Добавляем старые ID, которые еще не были добавлены, до достижения лимита.
-    # Это гарантирует, что старые записи будут в конце, а новые — в начале.
     for aid in posted_ids_old:
         if aid not in seen_ids and len(combined_ids) < POSTED_IDS_LIMIT:
             combined_ids.append(aid)
             seen_ids.add(aid)
 
-    # Обрезаем список до POSTED_IDS_LIMIT, если он все равно превышает его (например, если new_ids_this_run > 200).
+    # Обрезаем список до POSTED_IDS_LIMIT, если он все равно превышает его.
     final_ids_list_to_save = combined_ids[:POSTED_IDS_LIMIT]
 
     save_posted_ids(final_ids_list_to_save, Path(state_file))
