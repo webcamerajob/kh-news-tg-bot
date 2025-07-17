@@ -6,20 +6,16 @@ import hashlib
 import time
 import re
 import os
+import base64 # Import base64 for decoding
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Убедитесь, что эти импорты у вас есть.
-# bs4 для парсинга HTML.
 from bs4 import BeautifulSoup
-# cloudscraper для обхода защиты Cloudflare при HTTP-запросах.
 import cloudscraper
-# translators для перевода текста.
 import translators as ts
-# fcntl для блокировки файлов, чтобы предотвратить одновременную запись/чтение.
 import fcntl
-# requests для обработки исключений HTTP-запросов, используемых cloudscraper.
 import requests
 
 # Настройка переменной окружения для translators (должна быть в начале, один раз)
@@ -40,8 +36,6 @@ SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)
 
 # --- КОНСТАНТЫ И ФУНКЦИИ ДЛЯ ФИЛЬТРАЦИИ СЛОВ ---
-# Список слов, которые будут заменены на пробелы в тексте и заголовках.
-# Используйте re.escape() для слов, содержащих специальные символы регулярных выражений.
 WORDS_TO_FILTER = ["(VIDEO)", "VIDEO:", "Synopsis:", "AKP"]
 
 def filter_text(text: str, filter_words: List[str]) -> str:
@@ -53,12 +47,9 @@ def filter_text(text: str, filter_words: List[str]) -> str:
         return ""
     cleaned_text = text
     for word in filter_words:
-        if word: # Пропускаем пустые слова, чтобы избежать ошибок re.escape().
-            # Заменяем слово, учитывая границы слова (\b) и игнорируя регистр (re.IGNORECASE).
-            # Замена на пробел позволяет затем схлопнуть множественные пробелы.
+        if word:
             cleaned_text = re.sub(r'\b' + re.escape(word) + r'\b', ' ', cleaned_text, flags=re.IGNORECASE)
     
-    # Удаляем множественные пробелы и пробелы в начале/конце строки.
     cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
     return cleaned_text
 # --- КОНЕЦ КОНСТАНТ И ФУНКЦИЙ ФИЛЬТРАЦИИ ---
@@ -73,26 +64,22 @@ def extract_main_image_url(html_content: str) -> Optional[str]:
     """
     soup = BeautifulSoup(html_content, 'html.parser')
 
-    # 1. Поиск по og:image (Open Graph Image) - самый надежный способ для главной картинки
     og_image_meta = soup.find('meta', property='og:image')
     if og_image_meta and og_image_meta.get('content'):
         image_url = og_image_meta['content']
         logging.info(f"Main image found via og:image: {image_url}")
         return image_url
 
-    # 2. Если og:image не найден, попробуйте twitter:image
     twitter_image_meta = soup.find('meta', {'name': 'twitter:image'})
     if twitter_image_meta and twitter_image_meta.get('content'):
         image_url = twitter_image_meta['content']
         logging.info(f"Main image found via twitter:image: {image_url}")
         return image_url
 
-    # 3. Если ни один из них не найден, попробуйте найти первое изображение в Schema.org JSON-LD
     schema_script = soup.find('script', {'type': 'application/ld+json'})
     if schema_script and schema_script.string:
         try:
             schema_data = json.loads(schema_script.string)
-            # Schema.org может быть массивом или одиночным объектом
             if isinstance(schema_data, list):
                 for item in schema_data:
                     if isinstance(item, dict) and item.get('@type') == 'Article' and 'image' in item:
@@ -132,44 +119,87 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
         val = img_tag.get(attr)
         if not val:
             continue
-        parts = val.split() # Обработка srcset, где URL может быть с дескриптором ширины.
+        parts = val.split()
         if parts:
             return parts[0]
     return None
 
+def get_extension_from_mime(mime_type: str) -> str:
+    """Returns a common file extension for a given MIME type."""
+    if 'jpeg' in mime_type or 'jpg' in mime_type:
+        return 'jpg'
+    elif 'png' in mime_type:
+        return 'png'
+    elif 'gif' in mime_type:
+        return 'gif'
+    elif 'svg' in mime_type:
+        return 'svg'
+    elif 'webp' in mime_type:
+        return 'webp'
+    return 'bin' # Default to .bin for unknown types
+
+
 def save_image(src_url: str, folder: Path, post_id: int) -> Optional[str]:
     """
     Сохраняет изображение по URL в указанную папку на локальном диске.
-    Включает логику повторных попыток.
+    Включает логику повторных попыток и обработку Data URIs.
     Возвращает относительный путь к сохраненному файлу, если успешно.
     """
     logging.info(f"Saving image from {src_url} to {folder} for post {post_id}...")
-    folder.mkdir(parents=True, exist_ok=True) # Создаем папку, если ее нет.
-    # Извлекаем имя файла из URL, убирая параметры запроса.
-    fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
-    # Добавляем ID поста к имени файла, чтобы избежать коллизий имен изображений из разных статей
-    # и сделать имя файла уникальным и связанным со статьей.
-    dest = folder / f"{post_id}_{fn}"
-    
-    for attempt in range(1, MAX_RETRIES + 1):
+    folder.mkdir(parents=True, exist_ok=True)
+
+    if src_url.startswith("data:"):
         try:
-            r = SCRAPER.get(src_url, timeout=SCRAPER_TIMEOUT)
-            r.raise_for_status()
-            dest.write_bytes(r.content) # Сохраняем содержимое изображения.
-            logging.info(f"Successfully saved image {dest} for post {post_id}.")
-            return str(dest.relative_to(OUTPUT_DIR)) # Возвращаем относительный путь
-        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(
-                "Timeout saving image %s (post %s) (try %s/%s): %s; retry in %.1fs",
-                fn, post_id, attempt, MAX_RETRIES, e, delay
-            )
-            time.sleep(delay)
+            # Парсим Data URI
+            match = re.match(r"data:(?P<mime>[^;]+);base64,(?P<data>.+)", src_url)
+            if not match:
+                logging.warning(f"Invalid Data URI format for post {post_id}: {src_url[:100]}...")
+                return None
+
+            mime_type = match.group("mime")
+            base64_data = match.group("data")
+
+            decoded_data = base64.b64decode(base64_data)
+            extension = get_extension_from_mime(mime_type)
+            
+            # Создаем уникальное имя файла для Data URI
+            # Используем хэш содержимого для уникальности имени файла
+            data_hash = hashlib.sha256(decoded_data).hexdigest()[:10]
+            dest = folder / f"{post_id}_{data_hash}.{extension}"
+
+            dest.write_bytes(decoded_data)
+            logging.info(f"Successfully saved Data URI image {dest} for post {post_id}.")
+            return str(dest.relative_to(OUTPUT_DIR))
+
         except Exception as e:
-            logging.error(f"An unexpected error occurred while saving image {fn} (post {post_id}): {e}")
-            break # Прерываем ретраи при неожиданных ошибках
-    logging.error("Failed saving image %s (post %s) after %s attempts", fn, post_id, MAX_RETRIES)
-    return None
+            logging.error(f"Error saving Data URI image for post {post_id}: {e}")
+            return None
+    else:
+        # Оригинальная логика для HTTP/HTTPS URL
+        # Извлекаем имя файла из URL, убирая параметры запроса.
+        fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
+        # Добавляем ID поста к имени файла.
+        dest = folder / f"{post_id}_{fn}"
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                r = SCRAPER.get(src_url, timeout=SCRAPER_TIMEOUT)
+                r.raise_for_status()
+                dest.write_bytes(r.content)
+                logging.info(f"Successfully saved image {dest} for post {post_id}.")
+                return str(dest.relative_to(OUTPUT_DIR))
+            except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
+                delay = BASE_DELAY * 2 ** (attempt - 1)
+                logging.warning(
+                    "Timeout saving image %s (post %s) (try %s/%s): %s; retry in %.1fs",
+                    fn, post_id, attempt, MAX_RETRIES, e, delay
+                )
+                time.sleep(delay)
+            except Exception as e:
+                logging.error(f"An unexpected error occurred while saving image {fn} (post {post_id}): {e}")
+                break
+        logging.error("Failed saving image %s (post %s) after %s attempts", fn, post_id, MAX_RETRIES)
+        return None
 
 # --- Вспомогательные функции (продолжение) ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
@@ -180,7 +210,7 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
         if state_file_path.exists():
             with open(state_file_path, 'r', encoding='utf-8') as f:
-                fcntl.flock(f, fcntl.LOCK_SH) # Блокировка для чтения (разделяемая блокировка).
+                fcntl.flock(f, fcntl.LOCK_SH)
                 return {str(item) for item in json.load(f)}
         return set()
     except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
@@ -201,13 +231,13 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
-            r.raise_for_status() # Вызывает исключение для плохих статусов HTTP (4xx, 5xx).
+            r.raise_for_status()
             data = r.json()
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found")
             return data[0]["id"]
         except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1) # Экспоненциальная задержка.
+            delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
                 attempt, MAX_RETRIES, e, delay
@@ -215,7 +245,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             time.sleep(delay)
         except json.JSONDecodeError as e:
             logging.error("JSON decode error for categories: %s", e)
-            break # Выход из цикла повторных попыток при ошибке JSON.
+            break
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
@@ -252,9 +282,8 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
     try:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_SH) # Блокировка для чтения.
+            fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
-            # Валидация данных: фильтруем некорректные записи, чтобы убедиться, что они словари с "id".
             return [item for item in data if isinstance(item, dict) and "id" in item]
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logging.error("Catalog JSON decode error: %s", e)
@@ -272,8 +301,7 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     Использует блокировку файла для безопасной записи.
     Сохраняет только минимальный набор полей (id, hash, translated_to, main_image_path) для экономии места и безопасности.
     """
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True) # Убедимся, что выходная директория существует.
-    # Фильтруем каждую запись, оставляя только необходимые поля.
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     minimal = []
     for item in catalog:
         if isinstance(item, dict) and "id" in item:
@@ -281,15 +309,15 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
                 "id": item["id"],
                 "hash": item.get("hash", ""),
                 "translated_to": item.get("translated_to", ""),
-                "main_image_path": item.get("main_image_path", "") # Добавляем main_image_path
+                "main_image_path": item.get("main_image_path", "")
             })
         else:
             logging.warning(f"Skipping malformed catalog entry: {item}")
 
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX) # Эксклюзивная блокировка для записи.
-            json.dump(minimal, f, ensure_ascii=False, indent=2) # Запись в JSON с форматированием.
+            fcntl.flock(f, fcntl.LOCK_EX)
+            json.dump(minimal, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
     except Exception as e:
@@ -311,7 +339,7 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
         logging.warning("Translator returned non-str for text: %s", text[:50])
     except Exception as e:
         logging.warning("Translation error [%s → %s]: %s", provider, to_lang, e)
-    return text # Возвращаем оригинальный текст в случае ошибки.
+    return text
 
 # Регулярные выражения для очистки текста от невидимых/лишних символов.
 bad_re = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
@@ -319,46 +347,39 @@ bad_re = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 # Функция parse_and_save - основная логика обработки одной статьи.
 def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
     """Парсит, фильтрует, переводит и сохраняет статью, включая загрузку изображений."""
-    aid, slug = post["id"], post["slug"] # ID и slug статьи.
-    post_url = post["link"] # URL статьи для получения полного HTML
-    art_dir = OUTPUT_DIR / f"{aid}_{slug}" # Директория для конкретной статьи.
-    art_dir.mkdir(parents=True, exist_ok=True) # Создаем директорию.
+    aid, slug = post["id"], post["slug"]
+    post_url = post["link"]
+    art_dir = OUTPUT_DIR / f"{aid}_{slug}"
+    art_dir.mkdir(parents=True, exist_ok=True)
 
-    # 0. Загружаем полный HTML статьи для поиска og:image
     html_content = ""
     try:
         logging.info(f"Fetching full HTML for article ID={aid} from {post_url}")
         response = SCRAPER.get(post_url, timeout=SCRAPER_TIMEOUT)
-        response.raise_for_status() # Вызывает исключение для ошибок HTTP
+        response.raise_for_status()
         html_content = response.text
     except requests.exceptions.RequestException as e:
         logging.error(f"Error fetching HTML for article ID={aid}: {e}")
-        return None # Не можем продолжить без HTML
+        return None
 
-    # Проверяем, существует ли уже метаданные для этой статьи и не изменился ли контент/язык перевода.
     meta_path = art_dir / "meta.json"
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            # Убедитесь, что `post["content"]["rendered"]` всегда содержит исходный HTML-контент статьи,
-            # а не измененный или очищенный текст, чтобы хэш был стабильным для оригинального контента.
             current_post_content_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
             
-            # Если хэш контента и язык перевода совпадают, пропускаем перепарсинг.
             if existing_meta.get("hash") == current_post_content_hash and \
                existing_meta.get("translated_to", "") == translate_to:
                 logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
-                # Убедимся, что возвращаемые метаданные содержат main_image_path, если он был.
                 if "main_image_path" in existing_meta:
                     return existing_meta
-                else: # Если main_image_path почему-то нет в старых метаданных, попробуем его найти
+                else:
                     extracted_main_img_url = extract_main_image_url(html_content)
                     if extracted_main_img_url:
                         img_dir_for_cache = art_dir / "images"
                         saved_path = save_image(extracted_main_img_url, img_dir_for_cache, aid)
                         if saved_path:
                             existing_meta["main_image_path"] = saved_path
-                            # Обновим meta.json, чтобы сохранить main_image_path
                             with open(meta_path, "w", encoding="utf-8") as f:
                                 json.dump(existing_meta, f, ensure_ascii=False, indent=2)
                             logging.info(f"Updated cached meta for ID={aid} with main_image_path.")
@@ -368,20 +389,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         except Exception as e:
             logging.warning(f"An unexpected error occurred reading existing meta for ID={aid}: {e}. Reparsing.")
 
-
-    # 1. Фильтрация оригинального заголовка статьи.
-    # Извлекаем чистый текст заголовка из HTML.
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    orig_title = filter_text(orig_title, WORDS_TO_FILTER) # Применяем фильтр к оригинальному заголовку.
-    title = orig_title # Инициализируем 'title', которое может быть переведено позже.
+    orig_title = filter_text(orig_title, WORDS_TO_FILTER)
+    title = orig_title
 
-    # Если требуется перевод, переводим заголовок.
     if translate_to:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                # Переводим УЖЕ ОТФИЛЬТРОВАННЫЙ оригинальный заголовок.
                 title = translate_text(orig_title, to_lang=translate_to, provider="yandex")
-                # Важно: ПЕРЕВЕДЕННЫЙ заголовок НЕ ФИЛЬТРУЕТСЯ СНОВА, согласно требованию "только перед переводом".
                 break
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
@@ -390,39 +405,26 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 )
                 time.sleep(delay)
 
-    # Парсинг основного содержимого статьи.
-    # Используем уже загруженный html_content для BeautifulSoup
-    soup = BeautifulSoup(html_content, "html.parser") # Здесь используем html_content, а не post["content"]["rendered"]
+    soup = BeautifulSoup(html_content, "html.parser")
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ: Ограничиваем поиск элементов основным контентом статьи ---
-    # Для khmertimeskh.com основной контент часто находится в div с классом "td-post-content"
     article_content_element = soup.find("div", class_="td-post-content")
     if not article_content_element:
         logging.warning(f"Could not find main content div (class='td-post-content') for article ID={aid}. Extracting paragraphs and images from full HTML, which may include non-content elements.")
-        # Fallback на всю страницу, если основной div не найден.
-        # Это может снова привести к "мусорным" изображениям/тексту, но статья хотя бы будет обработана.
-        article_content_element = soup # Используем весь суп, если основной контент не найден
+        article_content_element = soup
     
-    # Извлечение параграфов из основного контента статьи.
     paras = [p.get_text(strip=True) for p in article_content_element.find_all("p")]
     
     raw_text = "\n\n".join(paras)
-    raw_text = bad_re.sub("", raw_text) # Удаление невидимых символов.
-    raw_text = re.sub(r"[ \t]+", " ", raw_text) # Схлопывание множественных пробелов.
-    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text) # Схлопывание множественных пустых строк.
+    raw_text = bad_re.sub("", raw_text)
+    raw_text = re.sub(r"[ \t]+", " ", raw_text)
+    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
     
-    # 2. Фильтрация основного текста статьи.
-    raw_text = filter_text(raw_text, WORDS_TO_FILTER) # Применяем фильтр к основному тексту.
+    raw_text = filter_text(raw_text, WORDS_TO_FILTER)
 
-    # !!! ВАЖНО: Заголовок НЕ добавляется к raw_text здесь.
-    # Он будет отправлен отдельно и отформатирован 'poster.py'.
-    # Это предотвращает дублирование и проблемы с экранированием Markdown.
+    img_dir = art_dir / "images"
+    images: List[str] = []
+    main_image_path: Optional[str] = None
 
-    img_dir = art_dir / "images" # Директория для изображений статьи.
-    images: List[str] = [] # Список путей к сохраненным изображениям.
-    main_image_path: Optional[str] = None # Для сохранения пути к главному изображению
-
-    # --- Поиск и сохранение главного изображения (og:image / twitter:image / Schema.org) ---
     logging.info(f"Attempting to find main image for article ID={aid}...")
     extracted_main_img_url = extract_main_image_url(html_content)
     if extracted_main_img_url:
@@ -430,52 +432,43 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         saved_main_img_path = save_image(extracted_main_img_url, img_dir, aid)
         if saved_main_img_path:
             images.append(saved_main_img_path)
-            main_image_path = saved_main_img_path # Сохраняем путь к главному изображению
+            main_image_path = saved_main_img_path
             logging.info(f"Main image saved successfully: {main_image_path}")
         else:
             logging.warning(f"Failed to save main image from {extracted_main_img_url} for ID={aid}.")
     else:
         logging.info(f"No main image found via meta tags for ID={aid}.")
 
-    srcs = [] # Временный список URL изображений из тегов <img> для параллельной загрузки.
+    srcs = []
 
-    # Вычисляем, сколько дополнительных изображений нам еще нужно для достижения лимита в 10 фото.
-    # `images` на этом этапе содержит либо 0, либо 1 элемент (если главное изображение было найдено).
     max_aux_images_to_collect = 10 - len(images)
     
-    if max_aux_images_to_collect > 0: # Собираем изображения, только если нам еще нужны
-        # Собираем URL'ы изображений из тегов <img> ТОЛЬКО из `article_content_element`.
-        for img in article_content_element.find_all("img"): # *** Ключевое изменение здесь ***
+    if max_aux_images_to_collect > 0:
+        for img in article_content_element.find_all("img"):
             url = extract_img_url(img)
             
-            # Дополнительная фильтрация: пропускаем изображения, если их URL содержит "logo", "icon", "ad", "spacer"
             if url and any(keyword in url.lower() for keyword in ["logo", "icon", "ad", "spacer", "pixel.gif"]):
                 logging.debug(f"Skipping image with suspected logo/icon/ad/spacer URL: {url}")
                 continue
             
-            if url and url != extracted_main_img_url: # Избегаем дублирования, если URL главного изображения уже найден
-                if url not in srcs: # Избегаем дублирования URL в списке для загрузки
+            if url and url != extracted_main_img_url:
+                if url not in srcs:
                     if len(srcs) < max_aux_images_to_collect:
                         srcs.append(url)
                     else:
                         logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
-                        break # Останавливаем сбор, если достигли лимита
+                        break
         
-        # --- ИСПРАВЛЕНИЕ: Инициализация ThreadPoolExecutor здесь ---
-        # Отправляем задачи на загрузку изображений в пул потоков.
-        with ThreadPoolExecutor(max_workers=5) as ex: # Вы можете настроить max_workers
+        with ThreadPoolExecutor(max_workers=5) as ex:
             futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs}
-            # Ждем завершения задач и собираем результаты.
             for fut in as_completed(futures):
                 try:
-                    if path := fut.result(): # Python 3.8+ "моржовый оператор" (walrus operator).
-                        if path not in images: # Убедимся, что не добавляем дубликаты сохраненных путей
+                    if path := fut.result():
+                        if path not in images:
                             images.append(path)
                 except Exception as e:
                     logging.warning(f"Error saving content image: {e}")
 
-    # Если после всех попыток (og:image, img tags из контента) все еще нет изображений,
-    # пытаемся найти рекомендуемое медиа (_embedded) как ПОСЛЕДНИЙ ЗАПАСНОЙ ВАРИАНТ.
     if not images and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
         if media and media[0].get("source_url"):
@@ -484,116 +477,90 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             path = save_image(fallback_img_url, img_dir, aid)
             if path:
                 images.append(path)
-                # Если это единственное изображение, оно становится главным
                 if not main_image_path:
                     main_image_path = path
             else:
                 logging.warning(f"Failed to save _embedded featured media for ID={aid}.")
 
-    # Если по-прежнему нет изображений, пропускаем статью.
     if not images:
         logging.warning("No images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
         return None
 
-    # --- ГАРАНТИЯ: Главное изображение всегда первое и общий лимит 10 ---
     final_images_list = []
     if main_image_path and main_image_path in images:
         final_images_list.append(main_image_path)
     
-    # Добавляем остальные изображения, исключая те, что уже добавлены, и поддерживая лимит.
     for img_path in images:
         if img_path not in final_images_list and len(final_images_list) < 10:
             final_images_list.append(img_path)
     
-    # Обрезаем список до 10 изображений для meta.json, постер всё равно возьмёт только первые 10.
     final_images_list = final_images_list[:10]
 
-    # Если main_image_path был установлен, но по какой-то причине не попал в final_images_list
-    # (что маловероятно после вышеуказанной логики), или если images был пуст, но _embedded
-    # сработало, то нужно убедиться, что main_image_path корректно отражает первое изображение.
     if not main_image_path and final_images_list:
         main_image_path = final_images_list[0]
-    elif not final_images_list: # Если список все еще пуст
+    elif not final_images_list:
         main_image_path = None
 
 
-    # Формирование метаданных статьи.
     meta = {
         "id": aid,
         "slug": slug,
         "date": post.get("date"),
         "link": post.get("link"),
-        "title": title, # Используем отфильтрованный/переведенный заголовок.
-        # Путь к файлу с основным текстом статьи (не переведенным, пока не произойдет перевод)
+        "title": title,
         "text_file": str(art_dir / "content.txt"), 
-        "images": final_images_list, # Список относительных путей ко всем сохраненным изображениям (до 10).
+        "images": final_images_list,
         "main_image_path": main_image_path,
-        "posted": False, # Флаг, указывающий, была ли статья опубликована в Telegram.
-        # Хэш основного текста для определения изменений (используем уже отфильтрованный raw_text)
+        "posted": False,
         "hash": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() 
     }
-    # Сохраняем основной текст статьи в файл.
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
 
-    # Если требуется перевод основного текста.
     if translate_to:
-        current_hash = meta["hash"] # Хэш текущего состояния необработанного текста.
+        current_hash = meta["hash"]
         old_meta = {}
-        # Пробуем загрузить старые метаданные для сравнения.
         if meta_path.exists():
             try:
                 old_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, Exception):
-                pass # Игнорируем ошибки чтения старых метаданных.
+                pass
 
-        # Если контент изменился или язык перевода другой, переводим текст.
         if old_meta.get("hash") != current_hash or old_meta.get("translated_to") != translate_to:
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
-                    # Получаем параграфы из оригинального HTML-контента статьи для перевода.
-                    # Здесь используем `article_content_element` для более точного извлечения текста.
                     original_paras_for_translation = [
                         p.get_text(strip=True) for p in article_content_element.find_all("p")
                     ]
-                    # Очищаем и фильтруем каждый параграф ПЕРЕД переводом.
                     clean_and_filtered_paras_for_translation = [
                         filter_text(bad_re.sub("", p), WORDS_TO_FILTER) for p in original_paras_for_translation
                     ]
                     
-                    # Переводим ОТФИЛЬТРОВАННЫЕ параграфы.
                     trans = [
                         translate_text(p, to_lang=translate_to, provider="yandex") 
                         for p in clean_and_filtered_paras_for_translation
                     ]
                     
-                    # Важно: ПЕРЕВЕДЕННЫЙ текст НЕ ФИЛЬТРУЕТСЯ СНОВА.
-
-                    # Сохраняем переведенный текст в отдельный файл.
                     txt_t = art_dir / f"content.{translate_to}.txt"
                     trans_txt = "\n\n".join(trans)
-                    # !!! ВАЖНО: Заголовок НЕ добавляется к переведенному тексту здесь.
                     txt_t.write_text(trans_txt, encoding="utf-8")
 
-                    # Обновляем метаданные с информацией о переводе.
                     meta.update({
                         "translated_to": translate_to,
                         "translated_paras": trans,
                         "translated_file": str(txt_t),
-                        "text_file": str(txt_t) # Теперь 'text_file' указывает на переведенный файл.
+                        "text_file": str(txt_t)
                     })
-                    break # Выход из цикла повторных попыток после успешного перевода.
+                    break
                 except Exception as e:
                     delay = BASE_DELAY * 2 ** (attempt - 1)
                     logging.warning(f"Translation try {attempt}/{MAX_RETRIES} failed: {e}; retry in {delay:.1f}s")
                     time.sleep(delay)
-            else: # Если все попытки перевода провалились.
+            else:
                 logging.warning("Translation failed after max retries for ID=%s. Using original text.", aid)
-                # Если перевод не удался, убедимся, что text_file указывает на оригинальный
                 meta["text_file"] = str(art_dir / "content.txt")
         else:
             logging.info("Using cached translation %s for ID=%s", translate_to, aid)
 
-    # Сохраняем окончательные метаданные статьи в meta.json.
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
@@ -602,20 +569,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 # --- Основная функция main() ---
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
-    # Аргумент для базового URL сайта WordPress.
     parser.add_argument("--base-url", type=str,
                         default="https://www.khmertimeskh.com",
                         help="WP site base URL")
-    # Аргумент для slug категории.
     parser.add_argument("--slug", type=str, default="national",
                         help="Category slug")
-    # Аргумент для ограничения количества парсируемых постов.
     parser.add_argument("-n", "--limit", type=int, default=None,
                         help="Max posts to parse")
-    # Аргумент для языка перевода (например, "ru" для русского).
     parser.add_argument("-l", "--lang", type=str, default="",
                         help="Translate to language code")
-    # Аргумент для пути к файлу состояния уже опубликованных статей.
     parser.add_argument(
         "--posted-state-file",
         type=str,
@@ -624,51 +586,41 @@ def main():
     )
     args = parser.parse_args()
 
-    # Флаг для отслеживания, были ли найдены новые статьи в этом запуске
     new_articles_found_status = False
 
     try:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True) # Убеждаемся, что выходная директория существует.
-        cid = fetch_category_id(args.base_url, args.slug) # Получаем ID категории.
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        cid = fetch_category_id(args.base_url, args.slug)
         
-        # Получаем последние посты, если --limit не указан, берем 10 по умолчанию.
-        # Если --limit указан, берем его значение.
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit if args.limit is not None else 30))
 
-        catalog = load_catalog() # Загружаем существующий локальный каталог статей.
-        existing_ids_in_catalog = {article["id"] for article in catalog} # Множество ID статей в текущем каталоге.
+        catalog = load_catalog()
+        existing_ids_in_catalog = {article["id"] for article in catalog}
 
-        # Загружаем ID статей, которые уже были опубликованы (из файла, который ведет poster.py).
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
 
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug(f"Posted IDs: {posted_ids_from_repo}")
 
-        new_articles_processed_in_run = 0 # Счетчик новых статей, обработанных в этом запуске.
+        new_articles_processed_in_run = 0
         
-        # Итерируем по полученным постам.
         for post in posts:
-            aid = str(post["id"]) # Убедимся, что ID строковый для сравнения с set
+            aid = str(post["id"])
             
-            # Пропускаем, если статья уже была опубликована
             if aid in posted_ids_from_repo:
                 logging.info(f"Skipping article ID={aid} as it's already in {args.posted_state_file}.")
                 continue
             
-            # Если статья новая или её нужно обновить (не в posted_ids_from_repo, или hash/lang не совпадают)
             logging.info(f"Processing article ID={aid}...")
             
-            # Внимание: parse_and_save теперь возвращает существующие метаданные, если статья неизменна.
             if meta := parse_and_save(post, args.lang, args.base_url):
-                # Добавляем статью в каталог, если она новая, или обновляем существующую
                 if aid not in existing_ids_in_catalog:
                     catalog.append(meta)
                     new_articles_processed_in_run += 1
-                    new_articles_found_status = True # Обновляем статус, если есть новая статья
+                    new_articles_found_status = True
                     logging.info(f"Article ID={aid} added to catalog.")
                 else:
-                    # Если статья уже в каталоге, обновляем её данные
                     for i, item in enumerate(catalog):
                         if item["id"] == aid:
                             catalog[i] = meta
@@ -677,7 +629,6 @@ def main():
             else:
                 logging.warning(f"Failed to parse or save article ID={aid}. Skipping.")
 
-        # Сохраняем обновленный каталог в конце
         if new_articles_processed_in_run > 0:
             save_catalog(catalog)
             logging.info(f"Saved updated catalog.json with {new_articles_processed_in_run} new/updated articles.")
@@ -686,13 +637,12 @@ def main():
 
     except RuntimeError as e:
         logging.critical(f"A critical error occurred: {e}")
-        new_articles_found_status = False # В случае критической ошибки считаем, что новых статей не найдено
+        new_articles_found_status = False
     except Exception as e:
         logging.critical(f"An unhandled error occurred in main: {e}", exc_info=True)
         new_articles_found_status = False
 
     finally:
-        # Выводим финальный статус, который может быть использован внешними скриптами
         print(f"NEW_ARTICLES_STATUS:{str(new_articles_found_status).lower()}")
         print("→ PARSER RUN COMPLETE")
 
