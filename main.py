@@ -620,7 +620,7 @@ def main():
     parser.add_argument("-l", "--lang", type=str, default="",
                          help="Translate to language code")
     parser.add_argument(
-        --posted-state-file",
+        --posted-state-file,
         type=str,
         default="articles/posted.json",
         help="Путь к файлу состояния с ID уже опубликованных статей (только для чтения)"
