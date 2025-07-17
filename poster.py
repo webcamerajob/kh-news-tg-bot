@@ -559,17 +559,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Poster: публикует статьи пакетами в Telegram"
     )
-    # Эти вызовы 'parser.add_argument' должны быть с отступом в 4 пробела от 'parser ='
     parser.add_argument(
         "--parsed-dir",
         type=str,
-        default="parsed_articles",
+        default="articles", # Возвращаем к исходной директории
         help="директория с распарсенными статьями"
     )
     parser.add_argument(
         "--state-file",
         type=str,
-        default="parsed_articles/posted.json",
+        default="articles/posted.json", # Возвращаем к исходному файлу состояния
         help="путь к state-файлу"
     )
     parser.add_argument(
