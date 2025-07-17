@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 OUTPUT_DIR = Path("articles") # Директория для сохранения распарсенных статей.
 CATALOG_PATH = OUTPUT_DIR / "catalog.json" # Путь к файлу каталога статей.
 MAX_RETRIES = 3 # Максимальное количество попыток для HTTP-запросов и переводов.
-BASE_DELAY = 1.0 # Базовая задержка в секундах для экспоненциальной задержки при ретраях.
+BASE_DELAY = 1.0 # Базовая задержка в секунду для экспоненциальной задержки при ретраях.
 
 # Инициализация cloudscraper для обхода Cloudflare.
 SCRAPER = cloudscraper.create_scraper()
@@ -110,11 +110,11 @@ def extract_main_image_url(html_content: str) -> Optional[str]:
                             logging.info(f"Main image found via Schema.org (@graph): {image_url}")
                             return image_url
             elif isinstance(schema_data, dict) and schema_data.get('@type') == 'Article' and 'image' in schema_data:
-                 image_info = schema_data['image']
-                 if isinstance(image_info, dict) and 'url' in image_info:
-                     image_url = image_info['url']
-                     logging.info(f"Main image found via Schema.org (direct): {image_url}")
-                     return image_url
+                image_info = schema_data['image']
+                if isinstance(image_info, dict) and 'url' in image_info:
+                    image_url = image_info['url']
+                    logging.info(f"Main image found via Schema.org (direct): {image_url}")
+                    return image_url
         except json.JSONDecodeError:
             logging.warning("JSON decode error from Schema.org script.")
         except Exception as e:
@@ -340,6 +340,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            # Убедитесь, что `post["content"]["rendered"]` всегда содержит исходный HTML-контент статьи,
+            # а не измененный или очищенный текст, чтобы хэш был стабильным для оригинального контента.
             current_post_content_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
             
             # Если хэш контента и язык перевода совпадают, пропускаем перепарсинг.
@@ -379,8 +381,18 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     # Используем уже загруженный html_content для BeautifulSoup
     soup = BeautifulSoup(html_content, "html.parser") # Здесь используем html_content, а не post["content"]["rendered"]
 
-    # Извлечение параграфов и объединение их в один необработанный текст.
-    paras = [p.get_text(strip=True) for p in soup.find_all("p")]
+    # --- НАЧАЛО ИЗМЕНЕНИЙ: Ограничиваем поиск элементов основным контентом статьи ---
+    # Для khmertimeskh.com основной контент часто находится в div с классом "td-post-content"
+    article_content_element = soup.find("div", class_="td-post-content")
+    if not article_content_element:
+        logging.warning(f"Could not find main content div (class='td-post-content') for article ID={aid}. Extracting paragraphs and images from full HTML, which may include non-content elements.")
+        # Fallback на всю страницу, если основной div не найден.
+        # Это может снова привести к "мусорным" изображениям/тексту, но статья хотя бы будет обработана.
+        article_content_element = soup 
+    
+    # Извлечение параграфов из основного контента статьи.
+    paras = [p.get_text(strip=True) for p in article_content_element.find_all("p")]
+    
     raw_text = "\n\n".join(paras)
     raw_text = bad_re.sub("", raw_text) # Удаление невидимых символов.
     raw_text = re.sub(r"[ \t]+", " ", raw_text) # Схлопывание множественных пробелов.
@@ -412,32 +424,45 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     else:
         logging.info(f"No main image found via meta tags for ID={aid}.")
 
-
     srcs = [] # Временный список URL изображений из тегов <img> для параллельной загрузки.
 
-    # Загрузка дополнительных изображений из тела статьи параллельно с использованием ThreadPoolExecutor.
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        # Собираем URL'ы изображений из тегов <img>.
-        # Ограничение до 10 изображений (плюс возможное главное изображение).
-        # Пропускаем изображения, которые могут быть дубликатами главного изображения.
-        for img in soup.find_all("img"):
+    # Вычисляем, сколько дополнительных изображений нам еще нужно для достижения лимита в 10 фото.
+    # `images` на этом этапе содержит либо 0, либо 1 элемент (если главное изображение было найдено).
+    max_aux_images_to_collect = 10 - len(images) 
+    
+    if max_aux_images_to_collect > 0: # Собираем изображения, только если нам еще нужны
+        # Собираем URL'ы изображений из тегов <img> ТОЛЬКО из `article_content_element`.
+        for img in article_content_element.find_all("img"): # *** Ключевое изменение здесь ***
             url = extract_img_url(img)
-            if url and url != extracted_main_img_url: # Избегаем дублирования, если main_image_url уже найден
-                srcs.append(url)
-        
+            
+            # Дополнительная фильтрация (можно расширить при необходимости):
+            # Пропускаем изображения, если их URL содержит "logo", "icon" (часто мусорные)
+            if url and ("logo" in url.lower() or "icon" in url.lower()):
+                logging.debug(f"Skipping image with suspected logo/icon URL: {url}")
+                continue
+            
+            if url and url != extracted_main_img_url: # Избегаем дублирования, если URL главного изображения уже найден
+                if url not in srcs: # Избегаем дублирования URL в списке для загрузки
+                    if len(srcs) < max_aux_images_to_collect:
+                        srcs.append(url)
+                    else:
+                        logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
+                        break # Останавливаем сбор, если достигли лимита
+
         # Отправляем задачи на загрузку изображений в пул потоков.
-        futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs[:10]} # Ограничиваем до 10 дополнительных
+        futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs} # `srcs` уже содержит ограниченное количество URL
         # Ждем завершения задач и собираем результаты.
         for fut in as_completed(futures):
             try:
                 if path := fut.result(): # Python 3.8+ "моржовый оператор" (walrus operator).
-                    if path not in images: # Убедимся, что не добавляем дубликаты
+                    if path not in images: # Убедимся, что не добавляем дубликаты сохраненных путей
                         images.append(path)
             except Exception as e:
                 logging.warning(f"Error saving content image: {e}")
 
-    # Если после всех попыток (og:image, img tags) все еще нет изображений,
+    # Если после всех попыток (og:image, img tags из контента) все еще нет изображений,
     # пытаемся найти рекомендуемое медиа (_embedded) как ПОСЛЕДНИЙ ЗАПАСНОЙ ВАРИАНТ.
+    # Этот блок остается как есть.
     if not images and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
         if media and media[0].get("source_url"):
@@ -457,6 +482,22 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         logging.warning("No images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
         return None
 
+    # --- НАЧАЛО ИЗМЕНЕНИЙ: Гарантируем, что главное изображение всегда первое и общий лимит 10 ---
+    final_images_list = []
+    if main_image_path and main_image_path in images:
+        final_images_list.append(main_image_path)
+        # Добавляем остальные изображения, исключая главное, если оно уже добавлено.
+        for img_path in images:
+            if img_path != main_image_path and img_path not in final_images_list:
+                final_images_list.append(img_path)
+    else:
+        # Если явное главное изображение не было установлено (например, только из _embedded)
+        # или его не было в списке собранных, используем собранные изображения как есть.
+        final_images_list = images[:] # Копируем список
+
+    # Обрезаем список до 10 изображений для meta.json, постер всё равно возьмёт только первые 10.
+    final_images_list = final_images_list[:10]
+
     # Формирование метаданных статьи.
     meta = {
         "id": aid,
@@ -464,9 +505,11 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         "date": post.get("date"),
         "link": post.get("link"),
         "title": title, # Используем отфильтрованный/переведенный заголовок.
-        "text_file": str(art_dir / "content.txt"), # Путь к файлу с основным текстом статьи (не переведенным).
-        "images": images, # Список относительных путей ко всем сохраненным изображениям.
-        "main_image_path": main_image_path, # Относительный путь к главному изображению.
+        # Путь к файлу с основным текстом статьи (не переведенным, пока не произойдет перевод)
+        "text_file": str(art_dir / "content.txt"), 
+        "images": final_images_list, # Список относительных путей ко всем сохраненным изображениям (до 10).
+        # Обновляем main_image_path на основе окончательного списка, чтобы избежать несоответствий.
+        "main_image_path": main_image_path if main_image_path in final_images_list else (final_images_list[0] if final_images_list else None),
         "posted": False, # Флаг, указывающий, была ли статья опубликована в Telegram.
         "hash": hashlib.sha256(raw_text.encode()).hexdigest() # Хэш основного текста для определения изменений.
     }
@@ -489,9 +532,9 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     # Получаем параграфы из оригинального HTML-контента статьи для перевода.
-                    # Здесь используем post["content"]["rendered"], т.к. это HTML-фрагмент, а не весь документ.
+                    # Здесь используем `article_content_element` для более точного извлечения текста.
                     original_paras_for_translation = [
-                        p.get_text(strip=True) for p in BeautifulSoup(post["content"]["rendered"], "html.parser").find_all("p")
+                        p.get_text(strip=True) for p in article_content_element.find_all("p")
                     ]
                     # Очищаем и фильтруем каждый параграф ПЕРЕД переводом.
                     clean_and_filtered_paras_for_translation = [
@@ -540,17 +583,17 @@ def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     # Аргумент для базового URL сайта WordPress.
     parser.add_argument("--base-url", type=str,
-                        default="https://www.khmertimeskh.com",
-                        help="WP site base URL")
+                         default="https://www.khmertimeskh.com",
+                         help="WP site base URL")
     # Аргумент для slug категории.
     parser.add_argument("--slug", type=str, default="national",
-                        help="Category slug")
+                         help="Category slug")
     # Аргумент для ограничения количества парсируемых постов.
     parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="Max posts to parse")
+                         help="Max posts to parse")
     # Аргумент для языка перевода (например, "ru" для русского).
     parser.add_argument("-l", "--lang", type=str, default="",
-                        help="Translate to language code")
+                         help="Translate to language code")
     # Аргумент для пути к файлу состояния уже опубликованных статей.
     parser.add_argument(
         "--posted-state-file",
@@ -617,12 +660,13 @@ def main():
             print("NEW_ARTICLES_STATUS:true") # Статус для внешних скриптов.
         else:
             logging.info("No new articles found or processed that are not already in posted.json or local catalog.")
-            print("NEW_ARTICLES_STATUS:false") # Статус для внешних скриптов.
 
+    except RuntimeError as e:
+        logging.error("Parser runtime error: %s", e)
+        print("NEW_ARTICLES_STATUS:false") # В случае ошибки - false.
     except Exception as e:
-        logging.exception("Fatal error in main:") # Логирование критических ошибок.
-        exit(1) # Выход с кодом ошибки.
+        logging.critical("An unhandled error occurred in main: %s", e, exc_info=True)
+        print("NEW_ARTICLES_STATUS:false") # В случае ошибки - false.
 
-# Точка входа в скрипт.
 if __name__ == "__main__":
     main()
