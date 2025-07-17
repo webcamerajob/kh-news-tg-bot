@@ -66,29 +66,12 @@ def filter_text(text: str, filter_words: List[str]) -> str:
 
 # --- Вспомогательные функции для извлечения изображений ---
 
-def extract_main_image_url(html_content: str) -> Optional[str]:
-    """
-    Извлекает URL основного изображения из HTML-содержимого статьи.
-    Приоритет: og:image, затем twitter:image, затем Schema.org (JSON-LD).
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    # 1. Поиск по og:image (Open Graph Image) - самый надежный способ для главной картинки
-    og_image_meta = soup.find('meta', property='og:image')
-    if og_image_meta and og_image_meta.get('content'):
-        image_url = og_image_meta['content']
-        logging.info(f"Main image found via og:image: {image_url}")
-        return image_url
-
-    logging.info("Main image not found via og:image")
-    return None
-
 def extract_img_url(img_tag: Any) -> Optional[str]:
     """
     Извлекает URL изображения из HTML-тега <img>.
     Проверяет различные атрибуты, в которых может храниться URL изображения.
     """
-    for attr in ("data-breeze", "data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
+    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
         if not val:
             continue
