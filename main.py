@@ -278,7 +278,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = filter_text(raw_text, WORDS_TO_FILTER) # <-- Применяем фильтр к основному тексту
 
     # Вставка заголовка в начало (заголовок уже отфильтрован, если это оригинал, или переведен из отфильтрованного оригинала)
-    raw_text = f"**{title}**\n\n{raw_text}"
+    raw_text = f"{title}\n\n{raw_text}"
 
     img_dir = art_dir / "images"
     images: List[str] = []
