@@ -348,7 +348,21 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             if existing_meta.get("hash") == current_post_content_hash and \
                existing_meta.get("translated_to", "") == translate_to:
                 logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
-                return existing_meta
+                # Убедимся, что возвращаемые метаданные содержат main_image_path, если он был.
+                if "main_image_path" in existing_meta:
+                    return existing_meta
+                else: # Если main_image_path почему-то нет в старых метаданных, попробуем его найти
+                    extracted_main_img_url = extract_main_image_url(html_content)
+                    if extracted_main_img_url:
+                        img_dir_for_cache = art_dir / "images"
+                        saved_path = save_image(extracted_main_img_url, img_dir_for_cache, aid)
+                        if saved_path:
+                            existing_meta["main_image_path"] = saved_path
+                            # Обновим meta.json, чтобы сохранить main_image_path
+                            with open(meta_path, "w", encoding="utf-8") as f:
+                                json.dump(existing_meta, f, ensure_ascii=False, indent=2)
+                            logging.info(f"Updated cached meta for ID={aid} with main_image_path.")
+                    return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
         except Exception as e:
@@ -372,8 +386,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             except Exception as e:
                 delay = BASE_DELAY * 2 ** (attempt - 1)
                 logging.warning(
-                    "Translate title attempt %s failed: %s; retry in %.1fs",
-                    attempt, MAX_RETRIES, e, delay
+                    f"Translate title attempt {attempt}/{MAX_RETRIES} failed: {e}; retry in {delay:.1f}s"
                 )
                 time.sleep(delay)
 
@@ -388,7 +401,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         logging.warning(f"Could not find main content div (class='td-post-content') for article ID={aid}. Extracting paragraphs and images from full HTML, which may include non-content elements.")
         # Fallback на всю страницу, если основной div не найден.
         # Это может снова привести к "мусорным" изображениям/тексту, но статья хотя бы будет обработана.
-        article_content_element = soup 
+        article_content_element = soup # Используем весь суп, если основной контент не найден
     
     # Извлечение параграфов из основного контента статьи.
     paras = [p.get_text(strip=True) for p in article_content_element.find_all("p")]
@@ -428,17 +441,16 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     # Вычисляем, сколько дополнительных изображений нам еще нужно для достижения лимита в 10 фото.
     # `images` на этом этапе содержит либо 0, либо 1 элемент (если главное изображение было найдено).
-    max_aux_images_to_collect = 10 - len(images) 
+    max_aux_images_to_collect = 10 - len(images)
     
     if max_aux_images_to_collect > 0: # Собираем изображения, только если нам еще нужны
         # Собираем URL'ы изображений из тегов <img> ТОЛЬКО из `article_content_element`.
         for img in article_content_element.find_all("img"): # *** Ключевое изменение здесь ***
             url = extract_img_url(img)
             
-            # Дополнительная фильтрация (можно расширить при необходимости):
-            # Пропускаем изображения, если их URL содержит "logo", "icon" (часто мусорные)
-            if url and ("logo" in url.lower() or "icon" in url.lower()):
-                logging.debug(f"Skipping image with suspected logo/icon URL: {url}")
+            # Дополнительная фильтрация: пропускаем изображения, если их URL содержит "logo", "icon", "ad", "spacer"
+            if url and any(keyword in url.lower() for keyword in ["logo", "icon", "ad", "spacer", "pixel.gif"]):
+                logging.debug(f"Skipping image with suspected logo/icon/ad/spacer URL: {url}")
                 continue
             
             if url and url != extracted_main_img_url: # Избегаем дублирования, если URL главного изображения уже найден
@@ -448,21 +460,22 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                     else:
                         logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
                         break # Останавливаем сбор, если достигли лимита
-
+        
+        # --- ИСПРАВЛЕНИЕ: Инициализация ThreadPoolExecutor здесь ---
         # Отправляем задачи на загрузку изображений в пул потоков.
-        futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs} # `srcs` уже содержит ограниченное количество URL
-        # Ждем завершения задач и собираем результаты.
-        for fut in as_completed(futures):
-            try:
-                if path := fut.result(): # Python 3.8+ "моржовый оператор" (walrus operator).
-                    if path not in images: # Убедимся, что не добавляем дубликаты сохраненных путей
-                        images.append(path)
-            except Exception as e:
-                logging.warning(f"Error saving content image: {e}")
+        with ThreadPoolExecutor(max_workers=5) as ex: # Вы можете настроить max_workers
+            futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs}
+            # Ждем завершения задач и собираем результаты.
+            for fut in as_completed(futures):
+                try:
+                    if path := fut.result(): # Python 3.8+ "моржовый оператор" (walrus operator).
+                        if path not in images: # Убедимся, что не добавляем дубликаты сохраненных путей
+                            images.append(path)
+                except Exception as e:
+                    logging.warning(f"Error saving content image: {e}")
 
     # Если после всех попыток (og:image, img tags из контента) все еще нет изображений,
     # пытаемся найти рекомендуемое медиа (_embedded) как ПОСЛЕДНИЙ ЗАПАСНОЙ ВАРИАНТ.
-    # Этот блок остается как есть.
     if not images and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
         if media and media[0].get("source_url"):
@@ -482,21 +495,27 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         logging.warning("No images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
         return None
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ: Гарантируем, что главное изображение всегда первое и общий лимит 10 ---
+    # --- ГАРАНТИЯ: Главное изображение всегда первое и общий лимит 10 ---
     final_images_list = []
     if main_image_path and main_image_path in images:
         final_images_list.append(main_image_path)
-        # Добавляем остальные изображения, исключая главное, если оно уже добавлено.
-        for img_path in images:
-            if img_path != main_image_path and img_path not in final_images_list:
-                final_images_list.append(img_path)
-    else:
-        # Если явное главное изображение не было установлено (например, только из _embedded)
-        # или его не было в списке собранных, используем собранные изображения как есть.
-        final_images_list = images[:] # Копируем список
-
+    
+    # Добавляем остальные изображения, исключая те, что уже добавлены, и поддерживая лимит.
+    for img_path in images:
+        if img_path not in final_images_list and len(final_images_list) < 10:
+            final_images_list.append(img_path)
+    
     # Обрезаем список до 10 изображений для meta.json, постер всё равно возьмёт только первые 10.
     final_images_list = final_images_list[:10]
+
+    # Если main_image_path был установлен, но по какой-то причине не попал в final_images_list
+    # (что маловероятно после вышеуказанной логики), или если images был пуст, но _embedded
+    # сработало, то нужно убедиться, что main_image_path корректно отражает первое изображение.
+    if not main_image_path and final_images_list:
+        main_image_path = final_images_list[0]
+    elif not final_images_list: # Если список все еще пуст
+        main_image_path = None
+
 
     # Формирование метаданных статьи.
     meta = {
@@ -508,10 +527,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         # Путь к файлу с основным текстом статьи (не переведенным, пока не произойдет перевод)
         "text_file": str(art_dir / "content.txt"), 
         "images": final_images_list, # Список относительных путей ко всем сохраненным изображениям (до 10).
-        # Обновляем main_image_path на основе окончательного списка, чтобы избежать несоответствий.
-        "main_image_path": main_image_path if main_image_path in final_images_list else (final_images_list[0] if final_images_list else None),
+        "main_image_path": main_image_path,
         "posted": False, # Флаг, указывающий, была ли статья опубликована в Telegram.
-        "hash": hashlib.sha256(raw_text.encode()).hexdigest() # Хэш основного текста для определения изменений.
+        # Хэш основного текста для определения изменений (используем уже отфильтрованный raw_text)
+        "hash": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() 
     }
     # Сохраняем основной текст статьи в файл.
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
@@ -565,10 +584,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                     break # Выход из цикла повторных попыток после успешного перевода.
                 except Exception as e:
                     delay = BASE_DELAY * 2 ** (attempt - 1)
-                    logging.warning("Translate try %s failed: %s; retry in %.1fs", attempt, e, delay)
+                    logging.warning(f"Translation try {attempt}/{MAX_RETRIES} failed: {e}; retry in {delay:.1f}s")
                     time.sleep(delay)
             else: # Если все попытки перевода провалились.
-                logging.warning("Translation failed after max retries for ID=%s.", aid)
+                logging.warning("Translation failed after max retries for ID=%s. Using original text.", aid)
+                # Если перевод не удался, убедимся, что text_file указывает на оригинальный
+                meta["text_file"] = str(art_dir / "content.txt")
         else:
             logging.info("Using cached translation %s for ID=%s", translate_to, aid)
 
@@ -583,17 +604,17 @@ def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     # Аргумент для базового URL сайта WordPress.
     parser.add_argument("--base-url", type=str,
-                         default="https://www.khmertimeskh.com",
-                         help="WP site base URL")
+                        default="https://www.khmertimeskh.com",
+                        help="WP site base URL")
     # Аргумент для slug категории.
     parser.add_argument("--slug", type=str, default="national",
-                         help="Category slug")
+                        help="Category slug")
     # Аргумент для ограничения количества парсируемых постов.
     parser.add_argument("-n", "--limit", type=int, default=None,
-                         help="Max posts to parse")
+                        help="Max posts to parse")
     # Аргумент для языка перевода (например, "ru" для русского).
     parser.add_argument("-l", "--lang", type=str, default="",
-                         help="Translate to language code")
+                        help="Translate to language code")
     # Аргумент для пути к файлу состояния уже опубликованных статей.
     parser.add_argument(
         "--posted-state-file",
@@ -603,10 +624,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # Флаг для отслеживания, были ли найдены новые статьи в этом запуске
+    new_articles_found_status = False
+
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True) # Убеждаемся, что выходная директория существует.
         cid = fetch_category_id(args.base_url, args.slug) # Получаем ID категории.
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10)) # Получаем последние посты.
+        
+        # Получаем последние посты, если --limit не указан, берем 10 по умолчанию.
+        # Если --limit указан, берем его значение.
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit if args.limit is not None else 30))
 
         catalog = load_catalog() # Загружаем существующий локальный каталог статей.
         existing_ids_in_catalog = {article["id"] for article in catalog} # Множество ID статей в текущем каталоге.
@@ -619,54 +646,55 @@ def main():
             logging.debug(f"Posted IDs: {posted_ids_from_repo}")
 
         new_articles_processed_in_run = 0 # Счетчик новых статей, обработанных в этом запуске.
-
+        
         # Итерируем по полученным постам.
-        for post in posts[:args.limit or len(posts)]:
-            post_id = str(post["id"])
-
-            # Проверяем, был ли пост уже опубликован (избегаем повторной публикации).
-            if post_id in posted_ids_from_repo:
-                logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
+        for post in posts:
+            aid = str(post["id"]) # Убедимся, что ID строковый для сравнения с set
+            
+            # Пропускаем, если статья уже была опубликована
+            if aid in posted_ids_from_repo:
+                logging.info(f"Skipping article ID={aid} as it's already in {args.posted_state_file}.")
                 continue
-
-            is_in_local_catalog = post_id in existing_ids_in_catalog # Проверяем, есть ли статья в локальном каталоге.
-
-            # Обработка статьи (парсинг и сохранение метаданных и содержимого).
+            
+            # Если статья новая или её нужно обновить (не в posted_ids_from_repo, или hash/lang не совпадают)
+            logging.info(f"Processing article ID={aid}...")
+            
+            # Внимание: parse_and_save теперь возвращает существующие метаданные, если статья неизменна.
             if meta := parse_and_save(post, args.lang, args.base_url):
-                # parse_and_save возвращает meta, если статья новая или обновленная (изменен контент/перевод).
-                
-                # Удаляем старую запись статьи из каталога, если она уже там есть.
-                catalog = [item for item in catalog if item["id"] != meta["id"]]
-                catalog.append(meta) # Добавляем новую или обновленную запись в каталог.
-                existing_ids_in_catalog.add(meta["id"]) # Обновляем множество ID в памяти.
-
-                # Логика для подсчета "действительно новых" статей, которые не были ни опубликованы, ни в локальном каталоге ранее.
-                if post_id not in posted_ids_from_repo and not is_in_local_catalog:
+                # Добавляем статью в каталог, если она новая, или обновляем существующую
+                if aid not in existing_ids_in_catalog:
+                    catalog.append(meta)
                     new_articles_processed_in_run += 1
-                    logging.info(f"Processed new article ID={post_id} and added to local catalog.")
-                elif post_id in posted_ids_from_repo and not is_in_local_catalog:
-                    # Случай, когда статья была в posted.json, но по какой-то причине исчезла из catalog.json.
-                    # Мы ее обрабатываем, но не считаем "новой" для индикатора статуса.
-                    logging.info(f"Re-processed article ID={post_id} (found in posted.json, not in local catalog).")
-                elif is_in_local_catalog:
-                    # Случай, когда статья уже была в локальном каталоге, но ее контент или перевод изменились.
-                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
-                
+                    new_articles_found_status = True # Обновляем статус, если есть новая статья
+                    logging.info(f"Article ID={aid} added to catalog.")
+                else:
+                    # Если статья уже в каталоге, обновляем её данные
+                    for i, item in enumerate(catalog):
+                        if item["id"] == aid:
+                            catalog[i] = meta
+                            logging.info(f"Article ID={aid} updated in catalog.")
+                            break
+            else:
+                logging.warning(f"Failed to parse or save article ID={aid}. Skipping.")
 
-        # Сохранение обновленного каталога и вывод статуса для CI/CD пайплайнов.
+        # Сохраняем обновленный каталог в конце
         if new_articles_processed_in_run > 0:
-            save_catalog(catalog) # Сохраняем каталог, если были новые статьи.
-            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed articles in catalog: {len(catalog)}")
-            print("NEW_ARTICLES_STATUS:true") # Статус для внешних скриптов.
+            save_catalog(catalog)
+            logging.info(f"Saved updated catalog.json with {new_articles_processed_in_run} new/updated articles.")
         else:
-            logging.info("No new articles found or processed that are not already in posted.json or local catalog.")
+            logging.info("No new articles processed or catalog updates needed in this run.")
 
     except RuntimeError as e:
-        logging.error("Parser runtime error: %s", e)
-        print("NEW_ARTICLES_STATUS:false") # В случае ошибки - false.
+        logging.critical(f"A critical error occurred: {e}")
+        new_articles_found_status = False # В случае критической ошибки считаем, что новых статей не найдено
     except Exception as e:
-        logging.critical("An unhandled error occurred in main: %s", e, exc_info=True)
-        print("NEW_ARTICLES_STATUS:false") # В случае ошибки - false.
+        logging.critical(f"An unhandled error occurred in main: {e}", exc_info=True)
+        new_articles_found_status = False
+
+    finally:
+        # Выводим финальный статус, который может быть использован внешними скриптами
+        print(f"NEW_ARTICLES_STATUS:{str(new_articles_found_status).lower()}")
+        print("→ PARSER RUN COMPLETE")
 
 if __name__ == "__main__":
     main()
