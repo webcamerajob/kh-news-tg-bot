@@ -24,8 +24,8 @@ logging.basicConfig(
 
 # Константы для HTTPX (HTTP-клиент).
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0) # Тайм-ауты для различных операций.
-MAX_RETRIES   = 3 # Максимальное количество повторных попыток при сетевых ошибках.
-RETRY_DELAY   = 5.0 # Задержка между повторными попытками.
+MAX_RETRIES     = 3 # Максимальное количество повторных попыток при сетевых ошибках.
+RETRY_DELAY     = 5.0 # Задержка между повторными попытками.
 DEFAULT_DELAY = 10.0 # Задержка между отправкой статей.
 POSTED_IDS_LIMIT = 200 # Новый лимит для количества записей в posted.json
 
@@ -36,20 +36,8 @@ def escape_markdown(text: str) -> str:
     Применяется только к *содержимому* текста, а не к самим символам форматирования.
     """
     # Список символов, которые нужно экранировать.
-    # Обратите внимание: * и _ остаются, так как они могут быть частью форматирования.
-    # Если они должны быть буквальными, они должны быть экранированы вручную при составлении форматированного текста,
-    # или функция должна быть более контекстно-зависимой.
-    # Для простоты, здесь мы экранируем все специальные символы, кроме тех, что используются для жирного текста (*).
-    # Но для MarkdownV2 *должны быть экранированы* если они не для форматирования.
-    # Текущая реализация escape_markdown экранирует `*` и `_`.
-    # Для целей этой задачи, чтобы * и _ работали как форматирование,
-    # мы должны убрать их из списка экранируемых символов в этой функции,
-    # так как text уже должен быть подготовлен.
-    # НЕТ, это не так. Пользователь просил, чтобы *заголовок* был жирным.
-    # Это означает, что сам заголовок (если в нем есть спецсимволы) должен быть экранирован,
-    # а затем обернут в * для жирного.
-    # Значит, функция escape_markdown должна экранировать *все* спецсимволы, как и раньше.
-    # А форматирование *...* должно добавляться уже после экранирования содержимого.
+    # Обратите внимание: `*` и `_` экранируются, так как текст должен быть уже подготовлен
+    # и обёрнут в форматирующие символы (`*text*`) снаружи этой функции.
     
     markdown_chars_to_escape = r'\_*[]()~`>#+-=|{}.!' # Список символов, которые нужно экранировать.
     return re.sub(r'([%s])' % re.escape(markdown_chars_to_escape), r'\\\1', text)
@@ -158,6 +146,7 @@ class TelegramAPI:
         """
         Отправляет фотографию в Telegram-канал с подписью.
         Подпись (caption) также форматируется жирным и экранируется для MarkdownV2.
+        Эта функция используется для отправки ОДИНОЧНЫХ фотографий, не входящих в альбом.
         """
         if not photo_path.exists():
             logging.error("Photo file not found: %s", photo_path)
@@ -193,11 +182,6 @@ class TelegramAPI:
         
         # Если есть подпись, форматируем ее как жирный текст и экранируем.
         if caption:
-            # Важно: здесь `caption` уже должен быть подготовлен для MarkdownV2,
-            # но для подписи мы еще можем использовать старую логику, если она нужна.
-            # Однако, согласно новым требованиям, подпись к фото не используется.
-            # Если бы использовалась и была бы жирной, потребовалось бы такое же изменение,
-            # как для основного текста: escape_markdown(caption_content) и затем f"*{escaped_caption_content}*".
             payload["caption"] = caption # Предполагаем, что caption уже отформатирован/экранирован
             
         try:
@@ -205,6 +189,77 @@ class TelegramAPI:
             return resp.get("ok", False)
         except Exception as e:
             logging.error("Failed to send photo: %s", e)
+            return False
+
+    async def send_media_group(self, media_items: List[Dict[str, Any]]) -> bool:
+        """
+        Отправляет группу фотографий (альбом) в Telegram-канал.
+        Максимум 10 фотографий за раз.
+        `media_items` - список словарей, где каждый словарь содержит 'type' и 'media_path' (Path object).
+        """
+        if not media_items:
+            logging.warning("No media items provided for send_media_group.")
+            return False
+
+        files = {}
+        telegram_media = []
+        
+        # Подготавливаем файлы и объекты media для API Telegram
+        for i, item in enumerate(media_items):
+            media_type = item.get("type")
+            photo_path = item.get("media_path") # Это кастомный ключ для передачи Path объекта
+            
+            if media_type != "photo" or not photo_path or not photo_path.exists():
+                logging.warning(f"Invalid or non-existent media item {i} (path: {photo_path}). Skipping.")
+                continue
+
+            try:
+                img = Image.open(photo_path)
+                max_dim = 1280
+                if img.width > max_dim or img.height > max_dim:
+                    img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+                
+                bio = BytesIO()
+                img.save(bio, format="JPEG", quality=85)
+                bio.seek(0)
+
+                if bio.tell() > 10 * 1024 * 1024: # Проверка размера файла > 10MB
+                    logging.warning(f"Compressed image {photo_path} for media group too large (>10MB). Skipping.")
+                    continue
+                
+                # Прикрепляем файл к словарю 'files' с уникальным именем
+                file_id = f"attach{i}"
+                files[file_id] = (photo_path.name, bio, "image/jpeg")
+                
+                # Формируем объект InputMediaPhoto для Telegram API
+                telegram_media_item = {
+                    "type": "photo",
+                    "media": f"attach://{file_id}"
+                }
+                # Подпись для медиа-группы может быть только у первого элемента,
+                # но по вашему требованию, текст и заголовок не входят в группу фото,
+                # поэтому здесь caption не добавляем.
+                
+                telegram_media.append(telegram_media_item)
+
+            except Exception as e:
+                logging.error(f"Error processing image {photo_path} for media group: {e}. Skipping.")
+                continue
+        
+        if not telegram_media:
+            logging.warning("No valid photo items to send in the media group.")
+            return False
+
+        payload = {
+            "chat_id": self.chat_id,
+            "media": json.dumps(telegram_media) # Массив media должен быть JSON-строкой
+        }
+
+        try:
+            resp = await self._send_request("sendMediaGroup", files=files, data=payload)
+            return resp.get("ok", False)
+        except Exception as e:
+            logging.error("Failed to send media group: %s", e)
             return False
 
     async def aclose(self):
@@ -263,14 +318,14 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
     client = TelegramAPI(bot_token, chat_id) # Инициализация Telegram клиента.
     
     # Загружаем уже опубликованные ID как список для сохранения порядка.
-    posted_ids_old: List[str] = load_posted_ids(Path(state_file)) 
+    posted_ids_old: List[str] = load_posted_ids(Path(state_file))    
     new_ids_this_run: List[str] = [] # Множество для ID, успешно опубликованных в этом запуске (в порядке их публикации).
     sent = 0 # Счетчик отправленных статей.
 
     # Собираем все метаданные статей, которые еще не были опубликованы.
     articles_to_post = []
     # Используем Set для быстрого поиска по уже загруженным ID.
-    posted_ids_old_set = set(posted_ids_old) 
+    posted_ids_old_set = set(posted_ids_old)    
     
     for art_dir in parsed_dir.iterdir(): # Итерируем по переданному объекту Path
         if art_dir.is_dir():
@@ -304,29 +359,74 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
         aid = str(article["id"])
         logging.info("Attempting to post ID=%s...", aid)
 
-        # 1) Отправка изображения. Подпись теперь не используется.
-        main_image_path = None
-        if article.get("images") and article["images"]: # Проверяем, что список images не пуст
-            original_image_path_str = article["images"][0] # Например, "articles/1719029_.../images/17072509.jpg"
+        # 1) Подготовка и отправка группы изображений (альбома).
+        images_for_media_group: List[Path] = []
+        
+        # Собираем все пути к изображениям из meta.json
+        if article.get("images") and article["images"]:
+            seen_full_paths = set()
+
+            # Обрабатываем главное изображение первым (из article["images"][0])
+            if len(article["images"]) > 0:
+                main_image_path_str = article["images"][0]
+                if main_image_path_str.startswith("articles/"):
+                    relative_path = main_image_path_str[len("articles/"):]
+                else:
+                    relative_path = main_image_path_str
+                
+                full_path = parsed_dir / relative_path
+                if full_path.exists():
+                    images_for_media_group.append(full_path)
+                    seen_full_paths.add(full_path)
+                else:
+                    logging.warning(f"Main image file not found for ID={aid} at path: {full_path}. It will be skipped.")
             
-            # Удаляем префикс "articles/" и строим путь относительно parsed_dir
-            if original_image_path_str.startswith("articles/"):
-                relative_path_from_articles_root = original_image_path_str[len("articles/"):]
-            else:
-                relative_path_from_articles_root = original_image_path_str
-            
-            main_image_path = parsed_dir / relative_path_from_articles_root
+            # Собираем до 9 дополнительных изображений (всего 10)
+            aux_images_count = 0
+            for i, img_path_str in enumerate(article["images"]):
+                if i == 0: # Пропускаем главное изображение, оно уже обработано
+                    continue
+                
+                if aux_images_count >= 9: # Ограничиваем до 10 фотографий всего (1 главная + 9 дополнительных)
+                    logging.info(f"Limiting media group to 10 images for ID={aid}. Skipping further auxiliary images.")
+                    break
+
+                if img_path_str.startswith("articles/"):
+                    relative_path = img_path_str[len("articles/"):]
+                else:
+                    relative_path = img_path_str
+                
+                full_path = parsed_dir / relative_path
+                
+                if full_path.exists() and full_path not in seen_full_paths:
+                    images_for_media_group.append(full_path)
+                    seen_full_paths.add(full_path)
+                    aux_images_count += 1
+                elif not full_path.exists():
+                    logging.warning(f"Auxiliary image file not found for ID={aid} at path: {full_path}. Skipping this image.")
         
         posted_successfully = False
-        if main_image_path and main_image_path.exists():
-            # Отправляем фото БЕЗ подписи
-            posted_successfully = await client.send_photo(main_image_path, caption=None) 
+        if images_for_media_group:
+            media_group_items = []
+            for img_path in images_for_media_group:
+                media_group_items.append({
+                    "type": "photo",
+                    "media_path": img_path # Кастомный ключ для передачи объекта Path
+                    # Нет подписи, согласно вашему требованию
+                })
+            
+            logging.info(f"Attempting to send media group with {len(media_group_items)} photos for ID={aid}...")
+            posted_successfully = await client.send_media_group(media_group_items)
+            if not posted_successfully:
+                logging.error("Failed to send photo group for ID=%s. Skipping article.", aid)
+                continue # Если не удалось отправить группу фото, пропускаем всю статью
         else:
-            logging.warning("No main image found or image path invalid for ID=%s (path tried: %s). Skipping article.", aid, main_image_path)
-            continue # Пропускаем статью, если нет главного изображения.
+            logging.info("No valid images found for ID=%s to form a group. Proceeding with text only.", aid)
+            # Если изображений нет, этот шаг считается "успешным", чтобы продолжить отправку текста.
+            posted_successfully = True
 
         # 2) Отправка текста статьи, включая заголовок в начале.
-        if posted_successfully:
+        if posted_successfully: # Текст отправляется только если предыдущий шаг (фото) был успешен или если фото не было
             text_file_path = None
             if article.get("text_file"): # Проверяем, что ключ text_file существует
                 original_text_path_str = article["text_file"] # Например, "articles/ID_SLUG/content.ru.txt"
@@ -380,7 +480,7 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
             new_ids_this_run.append(aid) # Добавляем в список новых успешно опубликованных ID.
             sent += 1
             logging.info("✅ Posted ID=%s", aid)
-        
+            
         await asyncio.sleep(delay) # Задержка перед отправкой следующей статьи.
 
     await client.aclose() # Закрываем HTTPX клиент.
@@ -395,7 +495,7 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
         if aid not in seen_ids:
             combined_ids.append(aid)
             seen_ids.add(aid)
-    
+            
     # Добавляем старые ID, которые еще не были добавлены, до достижения лимита.
     # Это гарантирует, что старые записи будут в конце, а новые — в начале.
     for aid in posted_ids_old:
