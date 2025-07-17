@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from io import BytesIO
+import httpx
+from httpx import HTTPStatusError, ReadTimeout, Timeout
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
