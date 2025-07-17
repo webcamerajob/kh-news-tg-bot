@@ -10,8 +10,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from io import BytesIO
+
 import httpx
 from httpx import HTTPStatusError, ReadTimeout, Timeout
+from PIL import Image
 
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -139,6 +141,11 @@ class TelegramAPI:
         if not photo_path.exists():
             logging.error("Photo file not found: %s", photo_path)
             return False
+        
+        # Проверка расширения файла: поддерживаются только JPG и JPEG.
+        if photo_path.suffix.lower() not in ['.jpg', '.jpeg']:
+            logging.warning(f"Skipping unsupported image format: {photo_path}. Only JPG/JPEG are supported for single photo uploads.")
+            return False
 
         # Открываем изображение и сжимаем его, если оно слишком большое.
         try:
@@ -150,7 +157,7 @@ class TelegramAPI:
             
             bio = BytesIO()
             # Сохраняем в JPEG с умеренным качеством для уменьшения размера.
-            img.save(bio, format="JPEG", quality=85)
+            img.save(bio, format="JPEG", quality=85) # Всегда сохраняем в JPEG
             bio.seek(0)
             
             if bio.tell() > 10 * 1024 * 1024: # Проверка размера файла > 10MB
@@ -161,7 +168,7 @@ class TelegramAPI:
             logging.error("Error processing image %s: %s", photo_path, e)
             return False
 
-        files = {"photo": (photo_path.name, bio, "image/jpeg")}
+        files = {"photo": (photo_path.name, bio, "image/jpeg")} # Всегда указываем image/jpeg
         
         payload: Dict[str, Any] = {
             "chat_id": self.chat_id,
@@ -196,6 +203,11 @@ class TelegramAPI:
                 logging.warning(f"Photo file not found for media group: {photo_path}. Skipping.")
                 continue
 
+            # Проверка расширения файла: поддерживаются только JPG и JPEG.
+            if photo_path.suffix.lower() not in ['.jpg', '.jpeg']:
+                logging.warning(f"Skipping unsupported image format for media group: {photo_path}. Only JPG/JPEG are supported.")
+                continue # Пропускаем это изображение и переходим к следующему
+
             try:
                 img = Image.open(photo_path)
                 max_dim = 1280
@@ -203,7 +215,7 @@ class TelegramAPI:
                     img.thumbnail((max_dim, max_dim), Image.LANCZOS)
                 
                 bio = BytesIO()
-                img.save(bio, format="JPEG", quality=85)
+                img.save(bio, format="JPEG", quality=85) # Всегда сохраняем в JPEG
                 bio.seek(0)
 
                 if bio.tell() > 10 * 1024 * 1024:
@@ -211,7 +223,7 @@ class TelegramAPI:
                     continue
                 
                 file_name = f"photo_{i}_{photo_path.name}"
-                files_to_send[file_name] = (photo_path.name, bio, "image/jpeg")
+                files_to_send[file_name] = (photo_path.name, bio, "image/jpeg") # Всегда указываем image/jpeg
 
                 media_item = {
                     "type": "photo",
@@ -351,10 +363,11 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
             else:
                 main_image_full_path = parsed_dir / main_image_path_str
             
-            if main_image_full_path.exists():
+            # Проверяем наличие и поддерживаемый формат (только JPG/JPEG)
+            if main_image_full_path.exists() and main_image_full_path.suffix.lower() in ['.jpg', '.jpeg']:
                 image_paths_to_send.append(main_image_full_path)
             else:
-                logging.warning(f"Main image file not found: {main_image_full_path} for ID={aid}. Skipping it as main.")
+                logging.warning(f"Main image file not found or unsupported format: {main_image_full_path} for ID={aid}. Only JPG/JPEG are supported. Skipping it as main.")
         
         # Добавляем остальные изображения, избегая дублирования и соблюдая лимит в 10
         # Проходим по списку article["images"], чтобы добавить остальные фото
@@ -366,17 +379,23 @@ async def main_poster(parsed_dir: Path, state_file: str, bot_token: str, chat_id
                     full_path = parsed_dir / img_path_str
 
                 # Пропускаем, если это уже добавленное главное фото, или если достигнут лимит в 10
-                if full_path in image_paths_to_send or len(image_paths_to_send) >= 10:
+                # Также пропускаем, если файл не существует или формат не поддерживается (только JPG/JPEG)
+                if (full_path in image_paths_to_send or 
+                    len(image_paths_to_send) >= 10 or
+                    not full_path.exists() or
+                    full_path.suffix.lower() not in ['.jpg', '.jpeg']):
+                    
+                    if not full_path.exists():
+                        logging.warning(f"Additional image file not found: {full_path} for ID={aid}. Skipping.")
+                    elif full_path.suffix.lower() not in ['.jpg', '.jpeg']:
+                        logging.warning(f"Unsupported image format for additional image: {full_path} for ID={aid}. Only JPG/JPEG are supported. Skipping.")
                     continue
                 
-                if full_path.exists():
-                    image_paths_to_send.append(full_path)
-                else:
-                    logging.warning(f"Additional image file not found: {full_path} for ID={aid}. Skipping this image.")
+                image_paths_to_send.append(full_path)
         
         if not image_paths_to_send:
-            logging.warning("No valid images found for ID=%s to send in media group. Skipping article.", aid)
-            continue # Пропускаем статью, если нет изображений
+            logging.warning("No valid JPG/JPEG images found for ID=%s to send in media group. Skipping article.", aid)
+            continue # Пропускаем статью, если нет поддерживаемых изображений
 
         logging.info(f"Sending media group with {len(image_paths_to_send)} images for ID={aid}.")
         
