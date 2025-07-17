@@ -184,8 +184,8 @@ jobs:
         run: |
           echo "→ Running poster against parsed_articles"
           python3 poster.py \
-            --bot-token ${{ secrets.TELEGRAM_BOT_TOKEN }} \
-            --chat-id ${{ secrets.TELEGRAM_CHAT_ID }} \
+            --bot-token ${{ secrets.TELEGRAM_TOKEN }} \
+            --chat-id ${{ secrets.TELEGRAM_CHANNEL }} \
             --parsed-dir parsed_articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
