@@ -204,3 +204,4 @@ jobs:
             git push
           else
             echo "✅ posted.json unchanged"
+          fi
