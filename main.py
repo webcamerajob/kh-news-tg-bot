@@ -385,28 +385,90 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             if existing_meta.get("hash") == current_post_content_hash and \
                existing_meta.get("translated_to", "") == translate_to:
                 logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
-                if "main_image_path" in existing_meta:
-                    return existing_meta
-                else:
+                # Убедимся, что images также присутствует, если его нет
+                if "images" not in existing_meta or not existing_meta["images"]:
+                    logging.info(f"Cached meta for ID={aid} missing 'images' or empty, re-extracting images.")
+                    # Fallback to re-extracting images if missing in cache
+                    # This section should ideally also ensure only JPGs are saved/linked
+                    img_dir_for_cache = art_dir / "images"
+                    img_dir_for_cache.mkdir(parents=True, exist_ok=True)
+                    re_extracted_images = []
+                    re_extracted_main_image_path = None
+
+                    # Try to re-extract main image first
                     extracted_main_img_url = extract_main_image_url(html_content)
                     if extracted_main_img_url:
-                        # Добавим проверку на JPG здесь для кешированных статей
                         file_extension = Path(extracted_main_img_url.split('?', 1)[0]).suffix.lower()
-                        if extracted_main_img_url.startswith("data:"):
-                            # Для Data URI, предположим, что mime-тип будет проверен в save_image
-                            saved_path = save_image(extracted_main_img_url, art_dir / "images", aid)
-                        elif file_extension in ['.jpg', '.jpeg']:
-                            saved_path = save_image(extracted_main_img_url, art_dir / "images", aid)
+                        if extracted_main_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                            saved_path = save_image(extracted_main_img_url, img_dir_for_cache, aid)
+                            if saved_path:
+                                re_extracted_images.append(saved_path)
+                                re_extracted_main_image_path = saved_path
+                                logging.info(f"Re-extracted and saved main image: {saved_path}")
                         else:
-                            logging.warning(f"Skipping cached main image {extracted_main_img_url} for ID={aid} as it's not a JPG/JPEG.")
-                            saved_path = None
-                        
-                        if saved_path:
-                            existing_meta["main_image_path"] = saved_path
-                            with open(meta_path, "w", encoding="utf-8") as f:
-                                json.dump(existing_meta, f, ensure_ascii=False, indent=2)
-                            logging.info(f"Updated cached meta for ID={aid} with main_image_path.")
-                    return existing_meta
+                            logging.warning(f"Skipping re-extraction of main image {extracted_main_img_url} for ID={aid} as it's not a JPG/JPEG.")
+
+                    # Try to re-extract auxiliary images
+                    aux_srcs = []
+                    # Collect auxiliary images, ensuring only JPGs and maximum 10 in total including main
+                    current_image_count = len(re_extracted_images)
+                    if current_image_count < 10:
+                        for img in article_content_element.find_all("img"):
+                            if current_image_count >= 10:
+                                break
+                            url = extract_img_url(img)
+                            if url and any(keyword in url.lower() for keyword in ["logo", "icon", "ad", "spacer", "pixel.gif"]):
+                                logging.debug(f"Skipping image with suspected logo/icon/ad/ad/spacer URL: {url}")
+                                continue
+                            
+                            if url and url != extracted_main_img_url: # Avoid re-adding main image if already processed
+                                file_extension = Path(url.split('?', 1)[0]).suffix.lower()
+                                if url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                                    if url not in aux_srcs:
+                                        aux_srcs.append(url)
+                                        current_image_count += 1 # Increment count for collected URLs
+                                else:
+                                    logging.debug(f"Skipping auxiliary image {url} for ID={aid} as it's not a JPG/JPEG during re-extraction.")
+
+                    with ThreadPoolExecutor(max_workers=5) as ex:
+                        futures = {ex.submit(save_image, url, img_dir_for_cache, aid): url for url in aux_srcs}
+                        for fut in as_completed(futures):
+                            try:
+                                if path := fut.result():
+                                    if path not in re_extracted_images: # Ensure uniqueness
+                                        re_extracted_images.append(path)
+                            except Exception as e:
+                                logging.warning(f"Error re-saving auxiliary image: {e}")
+
+                    # Final check for _embedded featured media if still no images
+                    if not re_extracted_images and "_embedded" in post:
+                        media = post["_embedded"].get("wp:featuredmedia")
+                        if media and media[0].get("source_url"):
+                            fallback_img_url = media[0]["source_url"]
+                            file_extension = Path(fallback_img_url.split('?', 1)[0]).suffix.lower()
+                            if fallback_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                                path = save_image(fallback_img_url, img_dir_for_cache, aid)
+                                if path:
+                                    re_extracted_images.append(path)
+                                    if not re_extracted_main_image_path:
+                                        re_extracted_main_image_path = path
+                                else:
+                                    logging.warning(f"Failed to re-save _embedded featured media for ID={aid}.")
+                            else:
+                                logging.warning(f"Skipping re-extraction of _embedded featured media {fallback_img_url} for ID={aid} as it's not a JPG/JPEG.")
+
+                    # Ensure main_image_path is set correctly and images list contains it
+                    if not re_extracted_main_image_path and re_extracted_images:
+                        re_extracted_main_image_path = re_extracted_images[0]
+                    
+                    existing_meta["images"] = re_extracted_images[:10] # Limit to 10
+                    existing_meta["main_image_path"] = re_extracted_main_image_path
+                    
+                    with open(meta_path, "w", encoding="utf-8") as f:
+                        json.dump(existing_meta, f, ensure_ascii=False, indent=2)
+                    logging.info(f"Updated cached meta for ID={aid} with re-extracted images.")
+
+                return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
         except Exception as e:
@@ -445,13 +507,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = filter_text(raw_text, WORDS_TO_FILTER)
 
     img_dir = art_dir / "images"
+    img_dir.mkdir(parents=True, exist_ok=True) # Ensure directory exists before saving
+    
     images: List[str] = []
     main_image_path: Optional[str] = None
+    collected_image_urls: Set[str] = set() # To store unique URLs before saving
 
     logging.info(f"Attempting to find main image for article ID={aid}...")
     extracted_main_img_url = extract_main_image_url(html_content)
     if extracted_main_img_url:
-        # Проверяем, является ли основное изображение JPG
         file_extension = Path(extracted_main_img_url.split('?', 1)[0]).suffix.lower()
         if extracted_main_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
             logging.info(f"Found main image URL: {extracted_main_img_url} for ID={aid}. Attempting to save.")
@@ -459,6 +523,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
             if saved_main_img_path:
                 images.append(saved_main_img_path)
                 main_image_path = saved_main_img_path
+                collected_image_urls.add(extracted_main_img_url) # Add original URL to set
                 logging.info(f"Main image saved successfully: {main_image_path}")
             else:
                 logging.warning(f"Failed to save main image from {extracted_main_img_url} for ID={aid}.")
@@ -467,79 +532,89 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     else:
         logging.info(f"No main image found via meta tags for ID={aid}.")
 
-    srcs = []
-
-    max_aux_images_to_collect = 10 - len(images)
-    
-    if max_aux_images_to_collect > 0:
+    # Collect auxiliary images, ensuring only JPGs and a total of up to 10 images
+    current_image_count = len(images)
+    if current_image_count < 10:
         for img in article_content_element.find_all("img"):
+            if current_image_count >= 10: # Stop if we've already collected enough images
+                logging.info(f"Collected 10 images (including main). Skipping further auxiliary images for ID={aid}.")
+                break
             url = extract_img_url(img)
             
             if url and any(keyword in url.lower() for keyword in ["logo", "icon", "ad", "spacer", "pixel.gif"]):
                 logging.debug(f"Skipping image with suspected logo/icon/ad/spacer URL: {url}")
                 continue
             
-            # Добавим проверку на JPG здесь для дополнительных изображений
-            if url:
+            # Ensure it's not the main image and is a JPG
+            if url and url not in collected_image_urls: # Check against collected URLs to avoid duplicates
                 file_extension = Path(url.split('?', 1)[0]).suffix.lower()
                 if url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
-                    if url != extracted_main_img_url:
-                        if url not in srcs:
-                            if len(srcs) < max_aux_images_to_collect:
-                                srcs.append(url)
-                            else:
-                                logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
-                                break
+                    collected_image_urls.add(url) # Add to set to mark as collected
+                    current_image_count += 1
                 else:
                     logging.debug(f"Skipping auxiliary image {url} for ID={aid} as it's not a JPG/JPEG.")
-            
+    
+    # Process only the URLs collected in `collected_image_urls` that are not already saved
+    # The `images` list currently holds only the saved main image.
+    # We now save all collected unique JPG URLs (excluding the main one if it was already saved)
+    aux_urls_to_save = [url for url in collected_image_urls if url != extracted_main_img_url or not main_image_path] # Ensure main image is saved only once
+    
     with ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs}
+        futures = {ex.submit(save_image, url, img_dir, aid): url for url in aux_urls_to_save}
         for fut in as_completed(futures):
             try:
                 if path := fut.result():
-                    if path not in images:
+                    if path not in images: # Add only if not already in 'images' (e.g., main image)
                         images.append(path)
             except Exception as e:
                 logging.warning(f"Error saving content image: {e}")
 
-    if not images and "_embedded" in post:
+    # Fallback to _embedded featured media if not enough images collected
+    if len(images) < 10 and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
         if media and media[0].get("source_url"):
             fallback_img_url = media[0]["source_url"]
-            # Проверяем, является ли запасное изображение JPG
-            file_extension = Path(fallback_img_url.split('?', 1)[0]).suffix.lower()
-            if fallback_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
-                logging.info(f"No images found, attempting fallback to _embedded featured media: {fallback_img_url} for ID={aid}.")
-                path = save_image(fallback_img_url, img_dir, aid)
-                if path:
-                    images.append(path)
-                    if not main_image_path:
-                        main_image_path = path
+            if fallback_img_url not in collected_image_urls: # Avoid duplicates
+                file_extension = Path(fallback_img_url.split('?', 1)[0]).suffix.lower()
+                if fallback_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                    logging.info(f"Attempting fallback to _embedded featured media: {fallback_img_url} for ID={aid}.")
+                    path = save_image(fallback_img_url, img_dir, aid)
+                    if path and path not in images: # Ensure uniqueness
+                        images.append(path)
+                        if not main_image_path: # Set as main if main was not found yet
+                            main_image_path = path
+                    else:
+                        logging.warning(f"Failed to save _embedded featured media or it was already present for ID={aid}.")
                 else:
-                    logging.warning(f"Failed to save _embedded featured media for ID={aid}.")
-            else:
-                logging.warning(f"Skipping _embedded featured media {fallback_img_url} for ID={aid} as it's not a JPG/JPEG.")
+                    logging.warning(f"Skipping _embedded featured media {fallback_img_url} for ID={aid} as it's not a JPG/JPEG.")
 
-    if not images:
-        logging.warning("No JPG images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
-        return None
-
+    # Sort images to ensure main image is first if it exists, otherwise use the first found JPG.
+    # Also, ensure we don't exceed 10 images.
     final_images_list = []
-    if main_image_path and main_image_path in images:
-        final_images_list.append(main_image_path)
-    
-    for img_path in images:
-        if img_path not in final_images_list and len(final_images_list) < 10:
-            final_images_list.append(img_path)
-    
-    final_images_list = final_images_list[:10]
+    if main_image_path:
+        # Add main_image_path first if it was successfully saved
+        if main_image_path in images:
+            final_images_list.append(main_image_path)
+            images.remove(main_image_path) # Remove to avoid adding again
+        else: # If main_image_path was set but not in images (e.g., filtered out later), re-evaluate
+            main_image_path = None
 
+    # Add other images up to a total of 10
+    for img_path in images:
+        if len(final_images_list) < 10:
+            final_images_list.append(img_path)
+        else:
+            break # Stop if we reach 10 images
+
+    # If no main_image_path was found or saved, but we have other images, pick the first one as main.
     if not main_image_path and final_images_list:
         main_image_path = final_images_list[0]
     elif not final_images_list:
-        main_image_path = None
+        main_image_path = None # Explicitly set to None if no JPG images were found at all
 
+    if not final_images_list:
+        logging.warning("No JPG images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
+        return None
 
     meta = {
         "id": aid,
@@ -548,7 +623,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         "link": post.get("link"),
         "title": title,
         "text_file": str(art_dir / "content.txt"), 
-        "images": final_images_list,
+        "images": final_images_list, # This will now contain multiple JPGs, up to 10
         "main_image_path": main_image_path,
         "posted": False,
         "hash": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() 
