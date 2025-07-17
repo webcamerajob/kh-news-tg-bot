@@ -40,7 +40,7 @@ on:
     
 env:
   POST_DELAY: 10
-  BATCH_LIMIT: 30
+  BATCH_LIMIT: 3
 
 jobs:
 
