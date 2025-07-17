@@ -88,7 +88,7 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
     Извлекает URL изображения из HTML-тега <img>.
     Проверяет различные атрибуты, в которых может храниться URL изображения.
     """
-    for attr in ("data-breeze", "data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
+    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
         val = img_tag.get(attr)
         if not val:
             continue
