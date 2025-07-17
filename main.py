@@ -148,6 +148,15 @@ def save_image(src_url: str, folder: Path, post_id: int) -> Optional[str]:
     logging.info(f"Saving image from {src_url} to {folder} for post {post_id}...")
     folder.mkdir(parents=True, exist_ok=True)
 
+    # Добавляем проверку на JPG/JPEG прямо здесь
+    # Для HTTP/HTTPS URL, проверяем расширение в URL
+    if not src_url.startswith("data:"):
+        # Извлекаем расширение из URL
+        file_extension = Path(src_url.split('?', 1)[0]).suffix.lower()
+        if file_extension not in ['.jpg', '.jpeg']:
+            logging.warning(f"Skipping image {src_url} for post {post_id} as it's not a JPG/JPEG.")
+            return None
+    
     if src_url.startswith("data:"):
         try:
             # Парсим Data URI
@@ -158,6 +167,11 @@ def save_image(src_url: str, folder: Path, post_id: int) -> Optional[str]:
 
             mime_type = match.group("mime")
             base64_data = match.group("data")
+
+            # Проверяем MIME-тип для Data URI
+            if 'jpeg' not in mime_type and 'jpg' not in mime_type:
+                logging.warning(f"Skipping Data URI image for post {post_id} as its MIME type ({mime_type}) is not JPG/JPEG.")
+                return None
 
             decoded_data = base64.b64decode(base64_data)
             extension = get_extension_from_mime(mime_type)
@@ -376,8 +390,17 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 else:
                     extracted_main_img_url = extract_main_image_url(html_content)
                     if extracted_main_img_url:
-                        img_dir_for_cache = art_dir / "images"
-                        saved_path = save_image(extracted_main_img_url, img_dir_for_cache, aid)
+                        # Добавим проверку на JPG здесь для кешированных статей
+                        file_extension = Path(extracted_main_img_url.split('?', 1)[0]).suffix.lower()
+                        if extracted_main_img_url.startswith("data:"):
+                            # Для Data URI, предположим, что mime-тип будет проверен в save_image
+                            saved_path = save_image(extracted_main_img_url, art_dir / "images", aid)
+                        elif file_extension in ['.jpg', '.jpeg']:
+                            saved_path = save_image(extracted_main_img_url, art_dir / "images", aid)
+                        else:
+                            logging.warning(f"Skipping cached main image {extracted_main_img_url} for ID={aid} as it's not a JPG/JPEG.")
+                            saved_path = None
+                        
                         if saved_path:
                             existing_meta["main_image_path"] = saved_path
                             with open(meta_path, "w", encoding="utf-8") as f:
@@ -428,14 +451,19 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     logging.info(f"Attempting to find main image for article ID={aid}...")
     extracted_main_img_url = extract_main_image_url(html_content)
     if extracted_main_img_url:
-        logging.info(f"Found main image URL: {extracted_main_img_url} for ID={aid}. Attempting to save.")
-        saved_main_img_path = save_image(extracted_main_img_url, img_dir, aid)
-        if saved_main_img_path:
-            images.append(saved_main_img_path)
-            main_image_path = saved_main_img_path
-            logging.info(f"Main image saved successfully: {main_image_path}")
+        # Проверяем, является ли основное изображение JPG
+        file_extension = Path(extracted_main_img_url.split('?', 1)[0]).suffix.lower()
+        if extracted_main_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+            logging.info(f"Found main image URL: {extracted_main_img_url} for ID={aid}. Attempting to save.")
+            saved_main_img_path = save_image(extracted_main_img_url, img_dir, aid)
+            if saved_main_img_path:
+                images.append(saved_main_img_path)
+                main_image_path = saved_main_img_path
+                logging.info(f"Main image saved successfully: {main_image_path}")
+            else:
+                logging.warning(f"Failed to save main image from {extracted_main_img_url} for ID={aid}.")
         else:
-            logging.warning(f"Failed to save main image from {extracted_main_img_url} for ID={aid}.")
+            logging.warning(f"Skipping main image {extracted_main_img_url} for ID={aid} as it's not a JPG/JPEG.")
     else:
         logging.info(f"No main image found via meta tags for ID={aid}.")
 
@@ -451,39 +479,50 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
                 logging.debug(f"Skipping image with suspected logo/icon/ad/spacer URL: {url}")
                 continue
             
-            if url and url != extracted_main_img_url:
-                if url not in srcs:
-                    if len(srcs) < max_aux_images_to_collect:
-                        srcs.append(url)
-                    else:
-                        logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
-                        break
-        
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs}
-            for fut in as_completed(futures):
-                try:
-                    if path := fut.result():
-                        if path not in images:
-                            images.append(path)
-                except Exception as e:
-                    logging.warning(f"Error saving content image: {e}")
+            # Добавим проверку на JPG здесь для дополнительных изображений
+            if url:
+                file_extension = Path(url.split('?', 1)[0]).suffix.lower()
+                if url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                    if url != extracted_main_img_url:
+                        if url not in srcs:
+                            if len(srcs) < max_aux_images_to_collect:
+                                srcs.append(url)
+                            else:
+                                logging.info(f"Collected {max_aux_images_to_collect} auxiliary images. Skipping further images for ID={aid}.")
+                                break
+                else:
+                    logging.debug(f"Skipping auxiliary image {url} for ID={aid} as it's not a JPG/JPEG.")
+            
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(save_image, url, img_dir, aid): url for url in srcs}
+        for fut in as_completed(futures):
+            try:
+                if path := fut.result():
+                    if path not in images:
+                        images.append(path)
+            except Exception as e:
+                logging.warning(f"Error saving content image: {e}")
 
     if not images and "_embedded" in post:
         media = post["_embedded"].get("wp:featuredmedia")
         if media and media[0].get("source_url"):
             fallback_img_url = media[0]["source_url"]
-            logging.info(f"No images found, attempting fallback to _embedded featured media: {fallback_img_url} for ID={aid}.")
-            path = save_image(fallback_img_url, img_dir, aid)
-            if path:
-                images.append(path)
-                if not main_image_path:
-                    main_image_path = path
+            # Проверяем, является ли запасное изображение JPG
+            file_extension = Path(fallback_img_url.split('?', 1)[0]).suffix.lower()
+            if fallback_img_url.startswith("data:") or file_extension in ['.jpg', '.jpeg']:
+                logging.info(f"No images found, attempting fallback to _embedded featured media: {fallback_img_url} for ID={aid}.")
+                path = save_image(fallback_img_url, img_dir, aid)
+                if path:
+                    images.append(path)
+                    if not main_image_path:
+                        main_image_path = path
+                else:
+                    logging.warning(f"Failed to save _embedded featured media for ID={aid}.")
             else:
-                logging.warning(f"Failed to save _embedded featured media for ID={aid}.")
+                logging.warning(f"Skipping _embedded featured media {fallback_img_url} for ID={aid} as it's not a JPG/JPEG.")
 
     if not images:
-        logging.warning("No images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
+        logging.warning("No JPG images found for ID=%s after all attempts; skipping article parsing and saving.", aid)
         return None
 
     final_images_list = []
@@ -570,14 +609,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
-                        default="https://www.khmertimeskh.com",
-                        help="WP site base URL")
+                         default="https://www.khmertimeskh.com",
+                         help="WP site base URL")
     parser.add_argument("--slug", type=str, default="national",
-                        help="Category slug")
+                         help="Category slug")
     parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="Max posts to parse")
+                         help="Max posts to parse")
     parser.add_argument("-l", "--lang", type=str, default="",
-                        help="Translate to language code")
+                         help="Translate to language code")
     parser.add_argument(
         "--posted-state-file",
         type=str,
