@@ -26,14 +26,13 @@ MAX_RETRIES   = 3
 RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 10.0 # Изменен с 5.0 на 10.0, как в вашей версии
 
-
 def escape_markdown(text: str) -> str:
     """
-    Экранирует спецсимволы для MarkdownV2.
+    Экранирует спецсимволы для MarkdownV2, кроме звездочки (*), которая используется для жирного текста.
     """
-    markdown_chars = r'\_*[]()~`>#+-=|{}.!'
+    # Удаляем '*' из списка символов для экранирования, так как он будет использоваться для жирного текста.
+    markdown_chars = r'\_[]()~`>#+-=|{}.!'
     return re.sub(r'([%s])' % re.escape(markdown_chars), r'\\\1', text)
-
 
 def chunk_text(text: str, size: int = 4096) -> List[str]:
     """
@@ -519,7 +518,15 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             
             # 3.2) Тело статьи по чанкам
             raw_text = text_path.read_text(encoding="utf-8")
-            chunks = chunk_text(raw_text)
+            
+            # Формируем текст для отправки с жирным заголовком
+            # Экранируем заголовок и делаем его жирным
+            formatted_title = f"*{escape_markdown(caption)}*" # <-- Новая строка
+            
+            # Объединяем заголовок и основной текст
+            # Добавляем две новые строки для лучшего отделения заголовка от тела
+            full_text_to_post = f"{formatted_title}\n\n{raw_text}"
+            chunks = chunk_text(full_text_to_post)
             all_chunks_sent = True
             for part in chunks:
                 if not await send_message(client, token, chat_id, part):
