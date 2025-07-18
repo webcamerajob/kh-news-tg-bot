@@ -518,15 +518,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             
             # 3.2) Тело статьи по чанкам
             raw_text = text_path.read_text(encoding="utf-8")
-            
-            # Формируем текст для отправки с жирным заголовком
-            # Экранируем заголовок и делаем его жирным
-            formatted_title = f"*{escape_markdown(caption)}*" # <-- Новая строка
-            
-            # Объединяем заголовок и основной текст
-            # Добавляем две новые строки для лучшего отделения заголовка от тела
-            full_text_to_post = f"{formatted_title}\n\n{raw_text}"
-            chunks = chunk_text(full_text_to_post)
+            chunks = chunk_text(raw_text)
             all_chunks_sent = True
             for part in chunks:
                 if not await send_message(client, token, chat_id, part):
