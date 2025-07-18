@@ -236,7 +236,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
 
     # Вставка заголовка в начало
-    raw_text = f"**{title}**\n\n{raw_text}"
+    # raw_text = f"**{title}**\n\n{raw_text}"
 
     img_dir = art_dir / "images"
     images: List[str] = []
