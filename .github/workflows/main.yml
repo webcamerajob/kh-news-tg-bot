@@ -97,7 +97,7 @@ jobs:
           # Запускаем парсер, его логи идут напрямую в консоль и в файл
           python3 -u main.py \
             --lang ${{ inputs.lang || 'ru' }} \
-            --limit ${{ env.BATCH_LIMIT_PARSE || 30 }} \
+            --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
             --posted-state-file articles/posted.json | tee parser_output.txt
 
           echo "→ PARSER RUN COMPLETE" # Маркер завершения работы парсера
