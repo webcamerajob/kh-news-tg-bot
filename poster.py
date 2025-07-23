@@ -19,7 +19,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 # --- Константа для ограничения количества записей в posted.json ---
-MAX_POSTED_RECORDS = 200 # Максимальное количество ID в posted.json
+MAX_POSTED_RECORDS = 300 # Максимальное количество ID в posted.json
 # ──────────────────────────────────────────────────────────────────────────────
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
