@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 # Убедитесь, что эти импорты у вас есть, если они используются
 from bs4 import BeautifulSoup
 import cloudscraper # Для fetch_category_id, fetch_posts, save_image
+from requests.exceptions import RequestException, Timeout as ReqTimeout
 import translators as ts # Для translate_text
 import fcntl # Для блокировки файлов в load_catalog и save_catalog
 
