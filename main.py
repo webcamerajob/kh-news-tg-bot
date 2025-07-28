@@ -6,6 +6,7 @@ import hashlib
 import time
 import re
 import os
+# Настройка переменной окружения (должна быть в начале, один раз)
 os.environ["translators_default_region"] = "EN"
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,9 +18,6 @@ import cloudscraper # Для fetch_category_id, fetch_posts, save_image
 from requests.exceptions import RequestException, Timeout as ReqTimeout
 import translators as ts # Для translate_text
 import fcntl # Для блокировки файлов в load_catalog и save_catalog
-
-# Настройка переменной окружения (должна быть в начале, один раз)
-os.environ["translators_default_region"] = "EN"
 
 # Настройки логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
