@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
-from requests.exceptions import RequestException, ReadTimeout, JSONDecodeError
 
 # Убедитесь, что эти импорты у вас есть, если они используются
 from bs4 import BeautifulSoup
@@ -321,7 +320,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
-                        default="https://www.khmertimeskh.com",
+                        default="https://www.thethaiger.com",
                         help="WP site base URL")
     parser.add_argument("--slug", type=str, default="national",
                         help="Category slug")
