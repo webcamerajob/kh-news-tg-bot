@@ -62,7 +62,50 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
     return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
-    """Получает ID категории по ее 'slug'."""
+    logging.info(f"Fetching category ID for {slug} from {base_url}...")
+    endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
+            r.raise_for_status()
+        except (ReadTimeout, RequestException) as e:
+            delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(
+                "Network error fetching category (try %s/%s): %s; retry in %.1fs",
+                attempt, MAX_RETRIES, e, delay
+            )
+            time.sleep(delay)
+            continue
+
+        try:
+            if "application/json" not in r.headers.get("Content-Type", ""):
+                raise ValueError(f"Unexpected content type: {r.headers.get('Content-Type')}")
+
+            data = r.json()
+            if not data:
+                raise RuntimeError(f"Category '{slug}' not found")
+            return data[0]["id"]
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logging.warning(
+                "Invalid response for category (try %s/%s): %s; retry in %.1fs",
+                attempt, MAX_RETRIES, e, BASE_DELAY * 2 ** (attempt - 1)
+            )
+            time.sleep(BASE_DELAY * 2 ** (attempt - 1))
+
+    raise RuntimeError("Failed fetching category id")
+
+def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
+    """Получает список постов из указанной категории."""
+    logging.info(f"Fetching posts for category {cat_id} from {base_url}, per_page={per_page}...")
+    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except (ReqTimeout, RequestException) a    """Получает ID категории по ее 'slug'."""
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
@@ -83,18 +126,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
         except json.JSONDecodeError as e:
             logging.error("JSON decode error for categories: %s", e)
             break
-    raise RuntimeError("Failed fetching category id")
-
-def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    """Получает список постов из указанной категории."""
-    logging.info(f"Fetching posts for category {cat_id} from {base_url}, per_page={per_page}...")
-    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
-            r.raise_for_status()
-            return r.json()
-        except (ReqTimeout, RequestException) as e:
+    raise RuntimeError("Failed fetching category id")s e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout fetching posts (try %s/%s): %s; retry in %.1fs",
