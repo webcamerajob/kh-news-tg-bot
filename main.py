@@ -32,6 +32,13 @@ BASE_DELAY = 1.0 # Базовая задержка для ретраев
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
+headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/114.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": base_url,
+    }
 SCRAPER_TIMEOUT = (10.0, 60.0)      # (connect_timeout, read_timeout) в секундах
 
 
