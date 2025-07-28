@@ -320,7 +320,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
-                        default="https://www.thethaiger.com",
+                        default="https://www.khmertimeskh.com",
                         help="WP site base URL")
     parser.add_argument("--slug", type=str, default="national",
                         help="Category slug")
