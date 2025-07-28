@@ -6,6 +6,7 @@ import hashlib
 import time
 import re
 import os
+os.environ["translators_default_region"] = "EN"
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
