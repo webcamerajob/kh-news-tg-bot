@@ -73,7 +73,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found")
             return data[0]["id"]
-        except (ReadTimeout, RequestException) as e:
+        except (ReqTimeout, RequestException) as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
             logging.warning(
                 "Timeout fetching category (try %s/%s): %s; retry in %.1fs",
