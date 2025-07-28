@@ -32,13 +32,6 @@ BASE_DELAY = 1.0 # Базовая задержка для ретраев
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
-headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/114.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": base_url,
-    }
 SCRAPER_TIMEOUT = (10.0, 60.0)      # (connect_timeout, read_timeout) в секундах
 
 
@@ -74,6 +67,13 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/114.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": base_url,
+        }
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
