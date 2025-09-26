@@ -195,19 +195,20 @@ jobs:
           echo "→ Tree of articles/ after poster run:"
           ls -R articles
 
-      - name: Commit updated posted.json
+      - name: Commit updated data files # <-- Я также переименовал шаг для ясности
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add articles/posted.json
+          # ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем оба файла для сохранения
+          git add articles/posted.json articles/catalog.json
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted catalog after posting"
+            git commit -m "chore: update data files (posted, catalog)"
 
-            # Подтягиваем последние изменения с удалённого main и ребейзим локальные коммиты
+            # Подтягиваем последние изменения и отправляем наши
             git pull --rebase origin main
-
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ Data files (posted.json, catalog.json) unchanged"
           fi
