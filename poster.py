@@ -68,7 +68,7 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
     return chunks
 
 
-def apply_watermark(img_path: Path, scale: float = 0.35) -> bytes:
+def apply_watermark(img_path: Path, scale: float = 0.4) -> bytes:
     """
     Накладывает watermark.png и возвращает изображение в виде байтов JPEG.
     """
