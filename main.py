@@ -176,6 +176,23 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
 
+def load_stopwords(filepath: Path) -> Set[str]:
+    """
+    Загружает стоп-слова из текстового файла.
+    Возвращает множество слов в нижнем регистре для быстрой проверки.
+    """
+    if not filepath.exists():
+        logging.info("Файл стоп-слов не найден, проверка не будет производиться.")
+        return set()
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            stopwords = {line.strip().lower() for line in f if line.strip()}
+            logging.info(f"Загружено {len(stopwords)} стоп-слов из {filepath.name}.")
+            return stopwords
+    except Exception as e:
+        logging.error(f"Не удалось прочитать файл стоп-слов {filepath.name}: {e}")
+        return set()
+
 def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
     """Перевод текста с защитой от ошибок."""
     logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
@@ -222,11 +239,21 @@ def translate_in_chunks(paragraphs: List[str], to_lang: str, provider: str = "ya
 
     return translated_paragraphs
 
-
-# ---Основная функция обработки---
-
-def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
+def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopwords: Set[str]) -> Optional[Dict[str, Any]]:
     """Парсит и сохраняет статью, включая перевод и загрузку изображений."""
+    
+    # Сначала извлекаем оригинальный заголовок
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+
+    # Проверка на стоп-слова только в заголовке
+    if stopwords:
+        title_to_check = orig_title
+        for stop_phrase in stopwords:
+            pattern = r'\b' + re.escape(stop_phrase) + r'\b'
+            if re.search(pattern, title_to_check, re.IGNORECASE):
+                logging.warning(f"🚫 Статья ID={post['id']} пропущена из-за стоп-фразы в ЗАГОЛОВКЕ: '{stop_phrase}'.")
+                return None
+
     aid, slug = str(post["id"]), post["slug"]
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
@@ -243,7 +270,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
 
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    # Используем уже извлечённый заголовок
     title = orig_title
 
     if translate_to:
@@ -258,10 +285,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     img_dir = art_dir / "images"
     images: List[str] = []
-    srcs = []
-    for img in soup.find_all("img")[:10]:
-        if url := extract_img_url(img):
-            srcs.append(url)
+    srcs = {extract_img_url(img) for img in soup.find_all("img")[:10]}
+    srcs.discard(None)
 
     with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
@@ -284,7 +309,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
         "date": post.get("date"), "link": post.get("link"),
         "title": title,
         "text_file": str(art_dir / "content.txt"),
-        "images": images, "posted": False,
+        "images": sorted(images), "posted": False,
         "hash": current_hash,
         "translated_to": ""
     }
@@ -312,9 +337,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 
     return meta
 
-
-# ---Точка входа---
-
 def main():
     """Основная функция запуска скрипта."""
     parser = argparse.ArgumentParser(description="Parser with translation")
@@ -330,10 +352,15 @@ def main():
     )
     args = parser.parse_args()
 
+    stopwords_path = Path("stopwords.txt")
+    stopwords = load_stopwords(stopwords_path)
+
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
+        # Запрашиваем больше статей, чтобы компенсировать отфильтрованные
+        post_request_count = (args.limit or 10) * 2
+        posts = fetch_posts(args.base_url, cid, per_page=post_request_count)
 
         catalog = load_catalog()
         existing_ids_in_catalog = {article["id"] for article in catalog}
@@ -341,33 +368,36 @@ def main():
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
 
         new_articles_processed_in_run = 0
-
+        processed_count = 0
+        
         for post in posts:
-            post_id = str(post["id"])
+            if args.limit and processed_count >= args.limit:
+                logging.info(f"Processing limit of {args.limit} articles reached.")
+                break
 
+            post_id = str(post["id"])
             if post_id in posted_ids_from_repo:
                 logging.info(f"Skipping article ID={post_id} as it's in {args.posted_state_file}.")
                 continue
 
-            if meta := parse_and_save(post, args.lang, args.base_url):
+            if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
+                processed_count += 1
                 if post_id not in existing_ids_in_catalog:
                     new_articles_processed_in_run += 1
                     logging.info(f"Processed new article ID={post_id} and added to local catalog.")
                 else:
                     logging.info(f"Updated article ID={post_id} in local catalog.")
                 
-                # Обновляем или добавляем статью в каталог
                 catalog = [item for item in catalog if item.get("id") != post_id]
                 catalog.append(meta)
                 existing_ids_in_catalog.add(post_id)
 
+        save_catalog(catalog)
         if new_articles_processed_in_run > 0:
-            save_catalog(catalog)
             logging.info(f"Added {new_articles_processed_in_run} new articles. Total parsed: {len(catalog)}")
             print("NEW_ARTICLES_STATUS:true")
         else:
-            save_catalog(catalog) # Сохраняем, даже если были только обновления
-            logging.info("No new articles found. Local catalog might have been updated.")
+            logging.info("No new articles found or updated.")
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
