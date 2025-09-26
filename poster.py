@@ -78,42 +78,45 @@ def apply_watermark(img_path: Path, scale: float = 0.35) -> bytes:
 
         watermark_path = Path(__file__).parent / "watermark.png"
         if not watermark_path.exists():
-            logging.warning("Watermark file not found. Returning original image.")
-            # Сохраняем как JPEG для консистентности и экономии размера
+            logging.warning("Файл watermark.png не найден. Возвращаем оригинальное изображение.")
             img_byte_arr = BytesIO()
             base_img.convert("RGB").save(img_byte_arr, format='JPEG', quality=90)
             return img_byte_arr.getvalue()
 
         watermark_img = Image.open(watermark_path).convert("RGBA")
         
-        # Масштабирование вотермарки
+        # Масштабирование
         wm_width, wm_height = watermark_img.size
         new_wm_width = int(base_width * scale)
-        new_wm_height = int(wm_height * new_wm_width / wm_width)
+        new_wm_height = int(wm_height * (new_wm_width / wm_width))
         resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
         watermark_img = watermark_img.resize((new_wm_width, new_wm_height), resample=resample_filter)
+        
+        # Создаём пустой слой РАЗМЕРОМ С ОСНОВНОЕ ИЗОБРАЖЕНИЕ
+        overlay = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
 
-        # Наложение
+        # Наносим вотермарку на этот слой в нужную позицию
         padding = int(base_width * 0.02)
         position = (base_width - new_wm_width - padding, padding)
-        
-        composite_img = Image.alpha_composite(base_img, watermark_img.point(lambda p: p * 0.8)).convert("RGB") # 80% opacity
+        overlay.paste(watermark_img, position, watermark_img) # Используем маску для прозрачности
 
-        # Сохранение в байты
+        # Совмещаем основное изображение со СЛОЕМ (overlay)
+        composite_img = Image.alpha_composite(base_img, overlay).convert("RGB")
+
+        # Сохраняем в байты
         img_byte_arr = BytesIO()
         composite_img.save(img_byte_arr, format='JPEG', quality=90)
         return img_byte_arr.getvalue()
         
     except Exception as e:
-        logging.error(f"Failed to apply watermark to {img_path}: {e}")
+        logging.error(f"Не удалось наложить водяной знак на {img_path}: {e}")
         # Возвращаем оригинал в случае ошибки
         try:
             with open(img_path, 'rb') as f:
                 return f.read()
         except Exception as e_orig:
-            logging.error(f"Failed to even read original image {img_path}: {e_orig}")
+            logging.error(f"Не удалось даже прочитать оригинальное изображение {img_path}: {e_orig}")
             return b""
-
 
 async def _post_with_retry(
     client: httpx.AsyncClient,
