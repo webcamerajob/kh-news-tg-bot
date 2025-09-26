@@ -64,8 +64,8 @@ jobs:
         id: parse_step
         run: |
           echo "→ STARTING PARSER RUN"
-          # Убедитесь, что имя файла (parser.py) здесь верное
-          python3 parser.py \
+          # Убедитесь, что имя файла (main.py) здесь верное
+          python3 main.py \
             --lang 'ru' \
             --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
             --posted-state-file articles/posted.json | tee parser_output.txt
