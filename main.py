@@ -358,8 +358,9 @@ def main():
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        # Запрашиваем больше статей, чтобы компенсировать отфильтрованные
-        post_request_count = (args.limit or 10) * 2
+        
+        # Запрашиваем больше статей, чтобы было из чего фильтровать
+        post_request_count = (args.limit or 10) * 2 
         posts = fetch_posts(args.base_url, cid, per_page=post_request_count)
 
         catalog = load_catalog()
@@ -367,37 +368,47 @@ def main():
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
 
-        new_articles_processed_in_run = 0
+        new_articles_in_run = 0
+        updated_articles_in_run = 0
         processed_count = 0
         
         for post in posts:
+            # Прекращаем обработку, если достигли лимита на одну пачку
             if args.limit and processed_count >= args.limit:
                 logging.info(f"Processing limit of {args.limit} articles reached.")
                 break
 
             post_id = str(post["id"])
             if post_id in posted_ids_from_repo:
-                logging.info(f"Skipping article ID={post_id} as it's in {args.posted_state_file}.")
+                logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
                 continue
 
             if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
                 processed_count += 1
                 if post_id not in existing_ids_in_catalog:
-                    new_articles_processed_in_run += 1
+                    new_articles_in_run += 1
                     logging.info(f"Processed new article ID={post_id} and added to local catalog.")
                 else:
+                    updated_articles_in_run += 1
                     logging.info(f"Updated article ID={post_id} in local catalog.")
                 
+                # Обновляем или добавляем статью в каталог
                 catalog = [item for item in catalog if item.get("id") != post_id]
                 catalog.append(meta)
                 existing_ids_in_catalog.add(post_id)
 
-        save_catalog(catalog)
-        if new_articles_processed_in_run > 0:
-            logging.info(f"Added {new_articles_processed_in_run} new articles. Total parsed: {len(catalog)}")
-            print("NEW_ARTICLES_STATUS:true")
+        # --- ИСПРАВЛЕННАЯ ЛОГИКА СОХРАНЕНИЯ ---
+        # Сохраняем каталог, если была хоть какая-то активность (новые или обновленные статьи)
+        if new_articles_in_run > 0 or updated_articles_in_run > 0:
+            save_catalog(catalog)
+            logging.info(f"Catalog saved. New articles: {new_articles_in_run}, Updated articles: {updated_articles_in_run}.")
+            # Статус TRUE ставим только если есть абсолютно новые статьи
+            if new_articles_in_run > 0:
+                 print("NEW_ARTICLES_STATUS:true")
+            else:
+                 print("NEW_ARTICLES_STATUS:false")
         else:
-            logging.info("No new articles found or updated.")
+            logging.info("No new or updated articles found.")
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
@@ -406,3 +417,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
