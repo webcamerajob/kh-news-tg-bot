@@ -18,6 +18,9 @@ logging.basicConfig(
 # --- Константа для ограничения количества записей в posted.json ---
 MAX_POSTED_RECORDS = 100
 
+# --- Настройка размера вотермарки ---
+WATERMARK_SCALE = 0.35  # 35% от ширины изображения
+
 # ──────────────────────────────────────────────────────────────────────────────
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
@@ -67,8 +70,7 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
         chunks.append(current_chunk)
     return chunks
 
-
-def apply_watermark(img_path: Path, scale: float = 0.4) -> bytes:
+def apply_watermark(img_path: Path, scale: float = 0.35) -> bytes:
     """
     Накладывает watermark.png и возвращает изображение в виде байтов JPEG.
     """
@@ -85,32 +87,26 @@ def apply_watermark(img_path: Path, scale: float = 0.4) -> bytes:
 
         watermark_img = Image.open(watermark_path).convert("RGBA")
         
-        # Масштабирование
         wm_width, wm_height = watermark_img.size
         new_wm_width = int(base_width * scale)
         new_wm_height = int(wm_height * (new_wm_width / wm_width))
         resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
         watermark_img = watermark_img.resize((new_wm_width, new_wm_height), resample=resample_filter)
         
-        # Создаём пустой слой РАЗМЕРОМ С ОСНОВНОЕ ИЗОБРАЖЕНИЕ
         overlay = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
 
-        # Наносим вотермарку на этот слой в нужную позицию
         padding = int(base_width * 0.02)
         position = (base_width - new_wm_width - padding, padding)
-        overlay.paste(watermark_img, position, watermark_img) # Используем маску для прозрачности
+        overlay.paste(watermark_img, position, watermark_img)
 
-        # Совмещаем основное изображение со СЛОЕМ (overlay)
         composite_img = Image.alpha_composite(base_img, overlay).convert("RGB")
 
-        # Сохраняем в байты
         img_byte_arr = BytesIO()
         composite_img.save(img_byte_arr, format='JPEG', quality=90)
         return img_byte_arr.getvalue()
         
     except Exception as e:
         logging.error(f"Не удалось наложить водяной знак на {img_path}: {e}")
-        # Возвращаем оригинал в случае ошибки
         try:
             with open(img_path, 'rb') as f:
                 return f.read()
@@ -138,7 +134,7 @@ async def _post_with_retry(
                 await asyncio.sleep(retry_after)
             elif 400 <= e.response.status_code < 500:
                 logging.error(f"❌ Client error {e.response.status_code}: {e.response.text}")
-                return False # Не повторяем клиентские ошибки
+                return False
             else:
                 logging.warning(f"⚠️ Server error {e.response.status_code}. Retry {attempt}/{MAX_RETRIES}...")
                 await asyncio.sleep(RETRY_DELAY * attempt)
@@ -153,7 +149,7 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
     media, files = [], {}
     for idx, img_path in enumerate(images[:10]):
-        image_bytes = apply_watermark(img_path)
+        image_bytes = apply_watermark(img_path, scale=WATERMARK_SCALE)
         if image_bytes:
             key = f"photo{idx}"
             files[key] = (img_path.name, image_bytes, "image/jpeg")
@@ -170,28 +166,60 @@ async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text
         data["reply_markup"] = json.dumps(kwargs["reply_markup"])
     return await _post_with_retry(client, "POST", url, data)
 
-def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[str, Path, List[Path], str]]:
-    """Проверяет статью и возвращает готовые к постингу данные."""
-    aid = str(art.get("id", ''))
+def validate_article(
+    art: Dict[str, Any],
+    article_dir: Path
+) -> Optional[Tuple[str, Path, List[Path], str]]:
+    """
+    Проверяет структуру папки статьи и возвращает подготовленные данные.
+    """
+    aid = art.get("id")
     title = art.get("title", "").strip()
-    text_file_name = Path(art.get("text_file", "")).name
-    if not all([aid, title, text_file_name]): return None
     
-    text_path = article_dir / text_file_name
-    if not text_path.is_file(): return None
-    
-    image_paths = sorted([p for p in (article_dir / "images").glob('*') if p.suffix.lower() in ['.jpg', '.jpeg', '.png']])
-    
+    text_file_path_str = art.get("text_file")
+
+    if not all([aid, title, text_file_path_str]):
+        logging.error(f"Invalid meta.json in {article_dir} (missing id, title, or text_file).")
+        return None
+
+    text_path = Path(text_file_path_str)
+    if not text_path.is_file():
+        logging.error(f"Text file {text_path} specified in meta.json not found. Skipping.")
+        return None
+
+    images_dir = article_dir / "images"
+    valid_imgs: List[Path] = []
+    if images_dir.is_dir():
+        valid_imgs = sorted([p for p in images_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}])
+
     html_title = f"<b>{escape_html(title)}</b>"
-    return html_title, text_path, image_paths, title
+    
+    return html_title, text_path, valid_imgs, title
 
 def load_posted_ids(state_file: Path) -> Set[str]:
-    """Читает state-файл и возвращает set из ID в виде СТРОК."""
-    if not state_file.is_file(): return set()
+    """
+    Читает state-файл, корректно обрезает список до MAX_POSTED_RECORDS,
+    сохраняя самые новые, и возвращает set из ID в виде СТРОК.
+    """
+    if not state_file.is_file():
+        return set()
+
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
-        ids = {str(item) for item in data if item is not None} if isinstance(data, list) else set()
-        return set(list(ids)[-MAX_POSTED_RECORDS:])
+
+        if not isinstance(data, list):
+            logging.warning(f"Данные в {state_file} - не список. Возвращаем пустой набор.")
+            return set()
+
+        # 1. Сначала обрезаем СПИСОК, сохраняя последние (самые новые) записи.
+        if len(data) > MAX_POSTED_RECORDS:
+            start_index = len(data) - MAX_POSTED_RECORDS
+            data = data[start_index:]
+            logging.info(f"Файл состояния обрезан до последних {MAX_POSTED_RECORDS} записей.")
+
+        # 2. Только после этого превращаем в множество для быстрой проверки.
+        return {str(item) for item in data if item is not None}
+
     except (json.JSONDecodeError, Exception) as e:
         logging.warning(f"Ошибка чтения файла состояния {state_file}: {e}.")
         return set()
@@ -200,7 +228,6 @@ def save_posted_ids(all_ids_to_save: Set[str], state_file: Path) -> None:
     """Сохраняет отсортированный список ID в файл состояния."""
     state_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Сортируем численно для красивого вывода в файле
         sorted_ids = sorted(list(all_ids_to_save), key=int)
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(sorted_ids, f, ensure_ascii=False, indent=2)
@@ -230,7 +257,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             try:
                 art_meta = json.loads(meta_file.read_text(encoding="utf-8"))
                 article_id = str(art_meta.get("id"))
-                if article_id != 'None' and article_id not in posted_ids:
+                if article_id and article_id != 'None' and article_id not in posted_ids:
                     if validated_data := validate_article(art_meta, d):
                         _, text_path, image_paths, original_title = validated_data
                         articles_to_post.append({
@@ -252,6 +279,8 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     
     async with httpx.AsyncClient() as client:
         sent_count = 0
+        newly_posted_ids: Set[str] = set()
+        
         for article in articles_to_post:
             if limit is not None and sent_count >= limit:
                 logging.info(f"Достигнут лимит в {limit} статей.")
@@ -278,10 +307,11 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
                             {"text": "Отзывы", "url": "https://t.me/feedback1dollar"}
                         ]]
                     } if is_last_chunk else None
-                    await send_message(client, token, chat_id, chunk, reply_markup=reply_markup)
+                    if not await send_message(client, token, chat_id, chunk, reply_markup=reply_markup):
+                        raise Exception("Failed to send a message chunk.")
 
                 logging.info(f"✅ Опубликовано ID={article['id']}")
-                posted_ids.add(article['id'])
+                newly_posted_ids.add(article['id'])
                 sent_count += 1
 
             except Exception as e:
@@ -289,7 +319,10 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
             
             await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
 
-    save_posted_ids(posted_ids, state_file)
+    if newly_posted_ids:
+        all_ids_to_save = posted_ids.union(newly_posted_ids)
+        save_posted_ids(all_ids_to_save, state_file)
+    
     logging.info(f"📢 Завершено: отправлено {sent_count} статей.")
 
 
