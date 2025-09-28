@@ -1,6 +1,6 @@
 name: Parse & Post Articles
 concurrency:
-  group: post-articles
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
   
 permissions:
@@ -16,16 +16,18 @@ on:
     
 env:
   POST_DELAY: 10
-  BATCH_LIMIT: 5
+  BATCH_LIMIT: 15
 
 jobs:
-  parse:
-    name: Парсинг → артефакты (WireGuard)
+  build-and-publish:
+    name: Parse and Publish
     runs-on: ubuntu-latest
-    outputs:
-      new_articles_found: ${{ steps.parse_step.outputs.new_articles_found }}
+    
     env:
-      WG_CONFIG: ${{ secrets.WG_CONFIG }}
+      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      # Если для этого проекта нужен VPN, добавьте сюда секрет
+      # WG_CONFIG: ${{ secrets.WG_CONFIG_KHMERTIMES }}
 
     steps:
       - name: Checkout code
@@ -40,97 +42,52 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-parser.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install parser requirements
+      - name: Install requirements
         run: |
           if [ -f requirements-parser.txt ]; then
             pip install -r requirements-parser.txt
           fi
+          if [ -f requirements-poster.txt ]; then
+            pip install -r requirements-poster.txt
+          fi
+      
+      # Если для этого проекта нужен VPN, раскомментируйте этот блок
+      # - name: 🔐 Setup WireGuard
+      #   run: |
+      #     sudo apt-get update && sudo apt-get install -y wireguard-tools
+      #     echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+      #     sudo wg-quick up wg0
 
-      - name: 🔐 Setup WireGuard & install jq
-        run: |
-          sudo apt-get update \
-            && sudo apt-get install -y wireguard-tools resolvconf jq
-          mkdir -p $HOME/wg
-          echo "$WG_CONFIG" > $HOME/wg/wg0.conf
-          chmod 600 $HOME/wg/wg0.conf
-          sudo wg-quick up $HOME/wg/wg0.conf
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-  
       - name: Run parser
         id: parse_step
         run: |
           echo "→ STARTING PARSER RUN"
-          # Убедитесь, что имя файла (main.py) здесь верное
+          # Убедитесь, что имя файла (например, main.py) верное
           python3 main.py \
             --lang 'ru' \
-            --limit ${{ env.BATCH_LIMIT_PARSE || 10 }} \
+            --limit ${{ env.BATCH_LIMIT_PARSE || 15 }} \
             --posted-state-file articles/posted.json | tee parser_output.txt
-
           echo "→ PARSER RUN COMPLETE"
           
-          # Извлекаем статус и устанавливаем его как выход шага
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
           echo "Extracted new_articles_found status: '$NEW_ARTICLES_STATUS'"
-
-      - name: 🛑 Teardown WireGuard
-        if: always()
-        run: sudo wg-quick down $HOME/wg/wg0.conf || true
-
-      - name: Upload parsed-content
-        uses: actions/upload-artifact@v4
-        with:
-          name: parsed-content
-          path: articles/
-
-  post:
-    name: Publish new articles
-    needs: parse
-    runs-on: ubuntu-latest
-    # Запускаем этот job, только если парсер нашел новые статьи
-    if: needs.parse.outputs.new_articles_found == 'true'
-    env:
-      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python for poster
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install poster requirements
-        run: |
-          if [ -f requirements-poster.txt ]; then
-            pip install -r requirements-poster.txt
-          fi
-
-      - name: Download parsed-content
-        uses: actions/download-artifact@v4
-        with:
-          name: parsed-content
-          path: parsed_articles
-
-      # --- ИСПРАВЛЕНИЕ: Перемещаем catalog.json в нужную папку ---
-      - name: Move catalog.json to the correct path
-        run: |
-          # Создаем папку articles, если её нет
-          mkdir -p articles
-          # Перемещаем catalog.json из папки артефактов в рабочую папку репозитория
-          mv parsed_articles/catalog.json articles/catalog.json
       
+      # Если используете VPN, раскомментируйте этот блок для его отключения
+      # - name: 🛑 Teardown WireGuard
+      #   if: always()
+      #   run: sudo wg-quick down wg0 || true
+
       - name: Run poster
+        if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
-          echo "→ Running poster against parsed_articles"
+          echo "→ Running poster..."
           python3 poster.py \
-            --parsed-dir parsed_articles \
+            --parsed-dir articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
@@ -139,13 +96,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Добавляем для сохранения ОБА файла состояния
-          git add articles/posted.json articles/catalog.json
+          # Сохраняем только журнал опубликованных статей. Кэш catalog.json не коммитим.
+          if [ -f "articles/posted.json" ]; then
+            git add articles/posted.json
+          fi
 
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update data files (posted, catalog)"
+            git commit -m "chore: update posted.json"
             git pull --rebase origin main
             git push
           else
-            echo "✅ Data files (posted.json, catalog.json) unchanged"
+            echo "✅ posted.json unchanged"
           fi
