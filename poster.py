@@ -324,13 +324,30 @@ def load_posted_ids(state_file: Path) -> Set[int]:
         logging.error(f"Ошибка чтения файла состояния {state_file}: {e}. Возвращается пустой набор.")
         return set()
 
-
 def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     """
     Сохраняет отсортированный список ID, обрезая его до MAX_POSTED_RECORDS,
     сохраняя самые большие (новейшие) ID.
     """
     state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- НАЧАЛО БЛОКА ОТЛАДКИ ---
+    print("--- DEBUG: Entering save_posted_ids ---")
+    print(f"Total unique IDs received to save: {len(all_ids_to_save)}")
+    
+    # Загружаем текущее состояние файла, чтобы сравнить
+    original_content_set = set()
+    if state_file.is_file():
+        try:
+            original_content_set = set(json.loads(state_file.read_text(encoding="utf-8")))
+        except:
+            print("DEBUG: Could not read or parse original state file for comparison.")
+    
+    print(f"Original IDs in file: {len(original_content_set)}")
+    
+    newly_added_ids = all_ids_to_save - original_content_set
+    print(f"DEBUG: IDs that should be new: {sorted(list(newly_added_ids))}")
+    # --- КОНЕЦ БЛОКА ОТЛАДКИ ---
 
     # 1. Конвертируем set в список и сортируем
     sorted_ids = sorted(list(all_ids_to_save))
@@ -346,6 +363,18 @@ def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     else:
         final_list_to_save = sorted_ids
 
+    # --- НАЧАЛО БЛОКА ОТЛАДКИ ---
+    print(f"DEBUG: Final list size to be saved: {len(final_list_to_save)}")
+    print(f"DEBUG: First 5 IDs in final list: {final_list_to_save[:5]}")
+    print(f"DEBUG: Last 5 IDs in final list: {final_list_to_save[-5:]}")
+    
+    # Сравниваем финальный список с тем, что было в файле
+    if set(final_list_to_save) == original_content_set:
+        print("DEBUG: CRITICAL! The final list of IDs is identical to the original file content. This is why it's unchanged.")
+    else:
+        print("DEBUG: The final list is different from the original. The file should be updated.")
+    # --- КОНЕЦ БЛОКА ОТЛАДКИ ---
+    
     try:
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(final_list_to_save, f, ensure_ascii=False, indent=2)
@@ -356,7 +385,7 @@ def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
         )
     except Exception as e:
         logging.error(f"Не удалось сохранить файл состояния {state_file}: {e}")
-
+        
 async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     """
     Основная функция для запуска постера.
