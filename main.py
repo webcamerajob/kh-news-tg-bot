@@ -207,12 +207,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopw
                 logging.warning(f"🚫 Статья ID={post['id']} пропущена из-за стоп-фразы в заголовке: '{stop_phrase}'.")
                 return None
 
-    # --- ИСПРАВЛЕНИЕ: ID всегда приводится к строке для консистентности ---
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: ID всегда приводится к строке для консистентности ---
     aid, slug = str(post["id"]), post["slug"]
     
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
-
+    
     meta_path = art_dir / "meta.json"
     if meta_path.exists():
         try:
@@ -267,12 +267,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopw
     if translate_to:
         clean_paras = [bad_re.sub("", p) for p in paras]
         trans = [translate_text(p, to_lang=translate_to, provider="yandex") for p in clean_paras]
-
         txt_t = art_dir / f"content.{translate_to}.txt"
         trans_txt = "\n\n".join(trans)
         header_t = f"{title}\n\n\n"
         txt_t.write_text(header_t + trans_txt, encoding="utf-8")
-
         meta.update({
             "translated_to": translate_to,
             "translated_paras": trans,
@@ -311,8 +309,9 @@ def main():
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
         catalog = load_catalog()
-        # --- ИСПРАВЛЕНИЕ: ID из каталога тоже приводятся к строке ---
+        # --- ИСПРАВЛЕНИЕ: ID из каталога тоже приводим к строке ---
         existing_ids_in_catalog = {str(article["id"]) for article in catalog}
+        # -----------------------------------------------------------
 
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
@@ -326,12 +325,12 @@ def main():
                 logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
                 continue
 
-            # Теперь эта проверка работает корректно
+            # Теперь эта проверка будет работать корректно (строка со строкой)
             is_in_local_catalog = post_id in existing_ids_in_catalog
 
             if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
                 if is_in_local_catalog:
-                    # И это удаление теперь тоже работает корректно
+                    # И это удаление теперь тоже будет работать корректно
                     catalog = [item for item in catalog if str(item.get("id")) != post_id]
                     logging.info(f"Updated article ID={post_id} in local catalog.")
                 else:
@@ -353,6 +352,6 @@ def main():
     except Exception as e:
         logging.exception("Fatal error in main:")
         exit(1)
-
+        
 if __name__ == "__main__":
     main()
