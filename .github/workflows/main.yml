@@ -1,4 +1,4 @@
-name: Parse & Post (Khmertimes)
+name: Parse & Post Articles
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -17,15 +17,16 @@ on:
 env:
   POST_DELAY: 10
   BATCH_LIMIT: 15
-  TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-  TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-  WG_CONFIG:        ${{ secrets.WG_CONFIG }}
 
 jobs:
-  build-and-publish:
-    name: Parse and Publish (Khmertimes)
+  parse:
+    name: Parse and Create Artifacts
     runs-on: ubuntu-latest
-    
+    outputs:
+      new_articles_found: ${{ steps.parse_step.outputs.new_articles_found }}
+    env:
+      WG_CONFIG: ${{ secrets.WG_CONFIG }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,10 +36,8 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install requirements
-        run: |
-          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
-          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+      - name: Install parser requirements
+        run: if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
       
       - name: 🔐 Setup WireGuard
         run: |
@@ -50,6 +49,7 @@ jobs:
       - name: Run parser
         id: parse_step
         run: |
+          # Убедитесь, что имя файла (например, main.py) и аргументы верны для этого проекта
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
@@ -64,26 +64,61 @@ jobs:
         if: always()
         run: sudo wg-quick down wg0 || true
 
+      - name: Upload parsed content as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsed-content
+          path: articles/
+
+  post:
+    name: Publish new articles
+    needs: parse
+    runs-on: ubuntu-latest
+    if: needs.parse.outputs.new_articles_found == 'true'
+    
+    env:
+      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install poster requirements
+        run: if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+
+      - name: Download parsed content artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: parsed-content
+          path: articles
+
       - name: Run poster
-        if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
           python3 poster.py \
             --parsed-dir articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated data files
+      - name: Commit updated posted.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -f "articles/posted.json" ]; then git add articles/posted.json; fi
-          if [ -f "articles/catalog.json" ]; then git add articles/catalog.json; fi
-
+          # Сохраняем ТОЛЬКО журнал опубликованных статей. Кэш catalog.json не трогаем.
+          if [ -f "articles/posted.json" ]; then
+            git add articles/posted.json
+          fi
+          
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update data files"
+            git commit -m "chore: update posted.json"
             git pull --rebase origin main
             git push
           else
-            echo "✅ Data files unchanged"
+            echo "✅ posted.json unchanged"
           fi
