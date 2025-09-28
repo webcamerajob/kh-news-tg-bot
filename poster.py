@@ -302,79 +302,57 @@ def validate_article(
 
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
-    Читает state-файл и возвращает set из ID.
-    Просто читает список чисел.
+    Читает state-файл и возвращает set из ID для быстрой проверки.
+    Порядок здесь не важен, только наличие.
     """
     if not state_file.is_file():
-        logging.info("Файл состояния %s не найден. Возвращается пустой набор.", state_file)
         return set()
     try:
         content = state_file.read_text(encoding="utf-8").strip()
         if not content:
             return set()
-            
         data = json.loads(content)
-        # Преобразуем все элементы в int, отфильтровывая некорректные
         return {int(item) for item in data if str(item).isdigit()}
-        
-    except (json.JSONDecodeError, ValueError) as e:
-        logging.warning("Файл состояния %s поврежден или имеет неверный формат: %s. Возвращается пустой набор.", state_file, e)
+    except (json.JSONDecodeError, ValueError):
         return set()
-    except Exception as e:
-        logging.error(f"Ошибка чтения файла состояния {state_file}: {e}. Возвращается пустой набор.")
+    except Exception:
         return set()
 
 def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     """
-    Сохраняет отсортированный список ID, обрезая его до MAX_POSTED_RECORDS,
-    сохраняя самые большие (новейшие) ID.
+    Объединяет старые и новые ID, сохраняя хронологический порядок публикации.
+    Новые ID добавляются в конец, старые удаляются из начала.
     """
     state_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # --- НАЧАЛО БЛОКА ОТЛАДКИ ---
-    print("--- DEBUG: Entering save_posted_ids ---")
-    print(f"Total unique IDs received to save: {len(all_ids_to_save)}")
     
-    # Загружаем текущее состояние файла, чтобы сравнить
-    original_content_set = set()
+    # 1. Загружаем старые ID как список, чтобы сохранить их исходный порядок
+    old_ids_list = []
     if state_file.is_file():
         try:
-            original_content_set = set(json.loads(state_file.read_text(encoding="utf-8")))
-        except:
-            print("DEBUG: Could not read or parse original state file for comparison.")
-    
-    print(f"Original IDs in file: {len(original_content_set)}")
-    
-    newly_added_ids = all_ids_to_save - original_content_set
-    print(f"DEBUG: IDs that should be new: {sorted(list(newly_added_ids))}")
-    # --- КОНЕЦ БЛОКА ОТЛАДКИ ---
+            content = state_file.read_text(encoding="utf-8").strip()
+            if content:
+                old_ids_list = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            logging.warning("Не удалось прочитать исходный state-файл для сохранения порядка. Порядок может быть нарушен.")
 
-    # 1. Конвертируем set в список и сортируем
-    sorted_ids = sorted(list(all_ids_to_save))
+    # 2. Определяем, какие ID действительно новые, сравнивая с исходным списком
+    old_ids_set = set(old_ids_list)
+    newly_posted_ids = sorted(list(all_ids_to_save - old_ids_set))
 
-    # 2. Обрезаем список, если он превышает лимит, сохраняя ПОСЛЕДНИЕ элементы
-    if len(sorted_ids) > MAX_POSTED_RECORDS:
-        final_list_to_save = sorted_ids[-MAX_POSTED_RECORDS:]
+    # 3. Добавляем новые ID в КОНЕЦ списка
+    combined_list = old_ids_list + newly_posted_ids
+    
+    # 4. Если список слишком длинный, обрезаем его С НАЧАЛА (удаляем самые старые)
+    if len(combined_list) > MAX_POSTED_RECORDS:
+        final_list_to_save = combined_list[-MAX_POSTED_RECORDS:]
         logging.info(
-            "Обрезаем список опубликованных ID с %d до %d (сохраняя самые новые).",
-            len(sorted_ids),
+            "Обрезаем список ID с %d до %d (удаляя самые старые записи).",
+            len(combined_list),
             MAX_POSTED_RECORDS
         )
     else:
-        final_list_to_save = sorted_ids
+        final_list_to_save = combined_list
 
-    # --- НАЧАЛО БЛОКА ОТЛАДКИ ---
-    print(f"DEBUG: Final list size to be saved: {len(final_list_to_save)}")
-    print(f"DEBUG: First 5 IDs in final list: {final_list_to_save[:5]}")
-    print(f"DEBUG: Last 5 IDs in final list: {final_list_to_save[-5:]}")
-    
-    # Сравниваем финальный список с тем, что было в файле
-    if set(final_list_to_save) == original_content_set:
-        print("DEBUG: CRITICAL! The final list of IDs is identical to the original file content. This is why it's unchanged.")
-    else:
-        print("DEBUG: The final list is different from the original. The file should be updated.")
-    # --- КОНЕЦ БЛОКА ОТЛАДКИ ---
-    
     try:
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(final_list_to_save, f, ensure_ascii=False, indent=2)
