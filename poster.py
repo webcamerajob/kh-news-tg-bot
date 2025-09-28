@@ -320,44 +320,19 @@ def load_posted_ids(state_file: Path) -> Set[int]:
 
 def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     """
-    Объединяет старые и новые ID, сохраняя хронологический порядок публикации.
-    Новые ID добавляются в конец, старые удаляются из начала.
+    Сохраняет полный список всех когда-либо опубликованных ID.
+    Новые ID добавляются в конец отсортированного списка. Обрезка не производится.
     """
     state_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # 1. Загружаем старые ID как список, чтобы сохранить их исходный порядок
-    old_ids_list = []
-    if state_file.is_file():
-        try:
-            content = state_file.read_text(encoding="utf-8").strip()
-            if content:
-                old_ids_list = json.loads(content)
-        except (json.JSONDecodeError, ValueError):
-            logging.warning("Не удалось прочитать исходный state-файл для сохранения порядка. Порядок может быть нарушен.")
-
-    # 2. Определяем, какие ID действительно новые, сравнивая с исходным списком
-    old_ids_set = set(old_ids_list)
-    newly_posted_ids = sorted(list(all_ids_to_save - old_ids_set))
-
-    # 3. Добавляем новые ID в КОНЕЦ списка
-    combined_list = old_ids_list + newly_posted_ids
+    # 1. Просто конвертируем полный набор ID в отсортированный список
+    final_list_to_save = sorted(list(all_ids_to_save))
     
-    # 4. Если список слишком длинный, обрезаем его С НАЧАЛА (удаляем самые старые)
-    if len(combined_list) > MAX_POSTED_RECORDS:
-        final_list_to_save = combined_list[-MAX_POSTED_RECORDS:]
-        logging.info(
-            "Обрезаем список ID с %d до %d (удаляя самые старые записи).",
-            len(combined_list),
-            MAX_POSTED_RECORDS
-        )
-    else:
-        final_list_to_save = combined_list
-
     try:
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(final_list_to_save, f, ensure_ascii=False, indent=2)
         logging.info(
-            "Сохранено %d ID в файл состояния %s.",
+            "Сохранено %d ID в файл состояния %s. Полная история сохранена.",
             len(final_list_to_save),
             state_file
         )
