@@ -145,21 +145,6 @@
     "translated_to": "ru"
   },
   {
-    "id": "1748662",
-    "hash": "ee92bbb89d13a6216aaddc4216329fb4bb1b2a53c0cd4ca6d00dd88bda96ccc9",
-    "translated_to": "ru"
-  },
-  {
-    "id": "1749843",
-    "hash": "3c54386a693f7897c3474c4375b4c569d81b0757fbbe9651310b650a3f6c0c71",
-    "translated_to": "ru"
-  },
-  {
-    "id": "1753738",
-    "hash": "20cf310ff884d543df80750029e9dd7e0dfbdcb28e96a15cac7e739ca578c77b",
-    "translated_to": "ru"
-  },
-  {
     "id": "1627949",
     "hash": "66c3c1de31d5737dfbc60fe80a134026d8f104942b14fa68335c1b50e4cf8cca",
     "translated_to": "ru"
@@ -187,6 +172,21 @@
   {
     "id": "1756132",
     "hash": "96d3b11c6a8062d361dd5a5201805861843e0eb2015893a185b632f31c10d629",
+    "translated_to": "ru"
+  },
+  {
+    "id": "1748662",
+    "hash": "7a8c0d80ff6db2c104738eac17b71ad97340e6e8b9463e48d62970a09ab0389a",
+    "translated_to": "ru"
+  },
+  {
+    "id": "1749843",
+    "hash": "41ccf0d4031f4f0a48a85b80a442aacc725bc6754c48d2b367b9e1f8eaf32028",
+    "translated_to": "ru"
+  },
+  {
+    "id": "1753738",
+    "hash": "36f9758e40d38a05e8b37158b2b5d0a0ae14ffaa6b15f6d6dc14db8b36ac0255",
     "translated_to": "ru"
   }
 ]
