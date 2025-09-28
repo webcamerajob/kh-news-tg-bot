@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+os.environ["translators_default_region"] = "EN"
 import argparse
 import logging
 import json
@@ -15,9 +16,6 @@ from bs4 import BeautifulSoup
 import cloudscraper # Для fetch_category_id, fetch_posts, save_image
 import translators as ts # Для translate_text
 import fcntl # Для блокировки файлов в load_catalog и save_catalog
-
-# Настройка переменной окружения (должна быть в начале, один раз)
-os.environ["translators_default_region"] = "EN"
 
 # Настройки логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
