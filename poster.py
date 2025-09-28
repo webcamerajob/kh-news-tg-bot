@@ -300,77 +300,62 @@ def validate_article(
     
     return html_title, text_path, valid_imgs, title
 
-
 def load_posted_ids(state_file: Path) -> Set[int]:
     """
-    Читает state-файл, загружает все ID, обрезает их до MAX_POSTED_RECORDS
-    (сохраняя самые новые), и возвращает set из этих ID.
+    Читает state-файл и возвращает set из ID.
+    Просто читает список чисел.
     """
-    ids_from_file: List[int] = []
     if not state_file.is_file():
-        logging.info("State file %s not found. Returning empty set.", state_file)
+        logging.info("Файл состояния %s не найден. Возвращается пустой набор.", state_file)
         return set()
-
     try:
-        data = json.loads(state_file.read_text(encoding="utf-8").strip())
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and "id" in item:
-                    try:
-                        ids_from_file.append(int(item["id"]))
-                    except (ValueError, TypeError):
-                        logging.warning("Invalid ID format in state file: %s. Skipping.", item)
-                elif isinstance(item, (int, str)) and str(item).isdigit():
-                    ids_from_file.append(int(item))
-                else:
-                    logging.warning("Unexpected item type in state file: %s. Skipping.", item)
-        else:
-            logging.warning("State file %s content is not a list. Returning empty set.", state_file)
-    except json.JSONDecodeError:
-        logging.warning("State file %s is not valid JSON. Returning empty set.", state_file)
+        content = state_file.read_text(encoding="utf-8").strip()
+        if not content:
+            return set()
+            
+        data = json.loads(content)
+        # Преобразуем все элементы в int, отфильтровывая некорректные
+        return {int(item) for item in data if str(item).isdigit()}
+        
+    except (json.JSONDecodeError, ValueError) as e:
+        logging.warning("Файл состояния %s поврежден или имеет неверный формат: %s. Возвращается пустой набор.", state_file, e)
+        return set()
     except Exception as e:
-        logging.error(f"Error reading existing state file {state_file}: {e}. Returning empty set.")
-
-    # Обрезаем список до MAX_POSTED_RECORDS, сохраняя самые новые (с конца списка)
-    # Если список меньше, чем MAX_POSTED_RECORDS, он останется как есть.
-    if len(ids_from_file) > MAX_POSTED_RECORDS:
-        ids_from_file = ids_from_file[-MAX_POSTED_RECORDS:]
-        logging.info("State file %s trimmed to %d records during load.", state_file.name, MAX_POSTED_RECORDS)
-
-    return set(ids_from_file)
+        logging.error(f"Ошибка чтения файла состояния {state_file}: {e}. Возвращается пустой набор.")
+        return set()
 
 
 def save_posted_ids(all_ids_to_save: Set[int], state_file: Path) -> None:
     """
-    Сохраняет список опубликованных ID статей в файл состояния.
-    Объединяет старые и новые ID, затем обрезает до MAX_POSTED_RECORDS,
-    сохраняя самые новые ID.
+    Сохраняет отсортированный список ID, обрезая его до MAX_POSTED_RECORDS,
+    сохраняя самые большие (новейшие) ID.
     """
     state_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Используем deque для эффективного управления фиксированным размером.
-    # Добавляем элементы в обратном порядке (от самых новых к старым),
-    # чтобы при выгрузке в список они были в прямом порядке.
-    temp_deque = deque(maxlen=MAX_POSTED_RECORDS)
-    
-    # Сначала добавим все ID из all_ids_to_save в deque
-    # Важно: Чтобы сохранить "новейшие", если all_ids_to_save большой,
-    # нужно добавить их в deque в порядке от самых старых до самых новых.
-    # Если all_ids_to_save - это Set, порядок не гарантирован.
-    # Сортируем для обеспечения правильного порядка при обрезке.
+    # 1. Конвертируем set в список и сортируем
     sorted_ids = sorted(list(all_ids_to_save))
-    for aid in sorted_ids:
-        temp_deque.append(aid)
+
+    # 2. Обрезаем список, если он превышает лимит, сохраняя ПОСЛЕДНИЕ элементы
+    if len(sorted_ids) > MAX_POSTED_RECORDS:
+        final_list_to_save = sorted_ids[-MAX_POSTED_RECORDS:]
+        logging.info(
+            "Обрезаем список опубликованных ID с %d до %d (сохраняя самые новые).",
+            len(sorted_ids),
+            MAX_POSTED_RECORDS
+        )
+    else:
+        final_list_to_save = sorted_ids
 
     try:
-        # Преобразуем deque в список для записи.
-        final_list_to_save = list(temp_deque)
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(final_list_to_save, f, ensure_ascii=False, indent=2)
-        logging.info(f"Saved {len(final_list_to_save)} IDs to state file {state_file} (max {MAX_POSTED_RECORDS}).")
+        logging.info(
+            "Сохранено %d ID в файл состояния %s.",
+            len(final_list_to_save),
+            state_file
+        )
     except Exception as e:
-        logging.error(f"Failed to save state file {state_file}: {e}")
-
+        logging.error(f"Не удалось сохранить файл состояния {state_file}: {e}")
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int]):
     """
