@@ -31,13 +31,12 @@ BASE_DELAY = 1.0
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
-SCRAPER_TIMEOUT = (10.0, 60.0)      # (connect_timeout, read_timeout) в секундах
+SCRAPER_TIMEOUT = (10.0, 60.0)
 
 # --- Вспомогательные функции ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     """
     Загружает множество ID из файла состояния (например, posted.json).
-    Используется блокировка файла для безопасного чтения.
     """
     try:
         if state_file_path.exists():
@@ -52,14 +51,12 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
 def load_stopwords(filepath: Path) -> Set[str]:
     """
     Загружает стоп-слова из текстового файла.
-    Возвращает множество фраз в нижнем регистре для быстрой проверки.
     """
     if not filepath.exists():
         logging.info("Файл стоп-слов не найден, проверка не будет производиться.")
         return set()
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            # Читаем строки, убираем пробелы и отфильтровываем пустые.
             stopwords = {line.strip() for line in f if line.strip()}
             logging.info(f"Загружено {len(stopwords)} стоп-слов из {filepath.name}.")
             return stopwords
@@ -203,16 +200,16 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopw
     
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
 
-    # Проверка на стоп-фразы в заголовке
     if stopwords:
         for stop_phrase in stopwords:
-            # \b - граница слова, re.escape - для безопасности, re.IGNORECASE - регистронезависимость
             pattern = r'\b' + re.escape(stop_phrase) + r'\b'
             if re.search(pattern, orig_title, re.IGNORECASE):
                 logging.warning(f"🚫 Статья ID={post['id']} пропущена из-за стоп-фразы в заголовке: '{stop_phrase}'.")
                 return None
 
-    aid, slug = str(post["id"]), post["slug"] # ID всегда строка для консистентности
+    # --- ИСПРАВЛЕНИЕ: ID всегда приводится к строке для консистентности ---
+    aid, slug = str(post["id"]), post["slug"]
+    
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
 
@@ -314,6 +311,7 @@ def main():
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
         catalog = load_catalog()
+        # --- ИСПРАВЛЕНИЕ: ID из каталога тоже приводятся к строке ---
         existing_ids_in_catalog = {str(article["id"]) for article in catalog}
 
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
@@ -328,23 +326,26 @@ def main():
                 logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
                 continue
 
+            # Теперь эта проверка работает корректно
+            is_in_local_catalog = post_id in existing_ids_in_catalog
+
             if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
-                if post_id not in existing_ids_in_catalog:
+                if is_in_local_catalog:
+                    # И это удаление теперь тоже работает корректно
+                    catalog = [item for item in catalog if str(item.get("id")) != post_id]
+                    logging.info(f"Updated article ID={post_id} in local catalog.")
+                else:
                     new_articles_processed_in_run += 1
                     logging.info(f"Processed new article ID={post_id} and added to local catalog.")
-                else:
-                    logging.info(f"Updated article ID={post_id} in local catalog.")
-                
-                catalog = [item for item in catalog if str(item.get("id")) != post_id]
+
                 catalog.append(meta)
                 existing_ids_in_catalog.add(post_id)
 
         if new_articles_processed_in_run > 0:
             save_catalog(catalog)
-            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed: {len(catalog)}")
+            logging.info(f"Added {new_articles_processed_in_run} new articles. Total parsed: {len(catalog)}")
             print("NEW_ARTICLES_STATUS:true")
         else:
-            # Сохраняем каталог, даже если были только обновления (новые хэши)
             save_catalog(catalog)
             logging.info("No new articles found, but catalog may have been updated.")
             print("NEW_ARTICLES_STATUS:false")
