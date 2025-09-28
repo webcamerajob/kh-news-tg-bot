@@ -1,4 +1,4 @@
-name: Parse & Post (Khmertimes)
+name: Parse & Post Articles (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -17,17 +17,15 @@ on:
 env:
   POST_DELAY: 10
   BATCH_LIMIT: 15
+  TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+  WG_CONFIG: ${{ secrets.WG_CONFIG }}
 
 jobs:
   build-and-publish:
     name: Parse and Publish (Khmertimes)
     runs-on: ubuntu-latest
     
-    env:
-      TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      WG_CONFIG:        ${{ secrets.WG_CONFIG }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,19 +42,19 @@ jobs:
       
       - name: 🔐 Setup WireGuard
         run: |
-          sudo apt-get update && sudo apt-get install -y wireguard-tools
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
-          # Принудительно используем DNS, чтобы избежать проблем с разрешением имён
+          # Принудительно используем DNS, чтобы избежать проблем с разрешением имён внутри VPN
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: Run parser
         id: parse_step
         run: |
-          echo "→ STARTING KHMERTIMES PARSER RUN"
-          # Убедитесь, что имя файла (например main.py) верное
+          echo "→ STARTING PARSER RUN"
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
+            --slug "national" \
             --lang 'ru' \
             --limit 15 \
             --posted-state-file articles/posted.json | tee parser_output.txt
@@ -84,13 +82,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -f "articles/posted.json" ]; then git add articles/posted.json; fi
-          if [ -f "articles/catalog.json" ]; then git add articles/catalog.json; fi
-
+          # Сохраняем ТОЛЬКО журнал опубликованных статей, чтобы избежать конфликтов
+          if [ -f "articles/posted.json" ]; then
+            git add articles/posted.json
+          fi
+          
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update data files (posted, catalog)"
+            git commit -m "chore: update posted.json"
             git pull --rebase origin main
             git push
           else
-            echo "✅ Data files unchanged"
+            echo "✅ posted.json unchanged"
           fi
