@@ -77,16 +77,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # ИСПРАВЛЕНО: Сохраняем ТОЛЬКО журнал опубликованных статей.
-          # Кэш catalog.json больше не трогаем, чтобы избежать конфликтов.
+          # ИСПРАВЛЕНО: Добавляем ОБА файла, чтобы не было "неучтённых" изменений
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
-          
+          if [ -f "articles/catalog.json" ]; then
+            git add articles/catalog.json
+          fi
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted.json"
+            git commit -m "chore: update data files"
             git pull --rebase origin main
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ Data files unchanged"
           fi
