@@ -1,4 +1,4 @@
-name: Parse & Post Articles (Khmertimes)
+name: Parse & Post (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -72,23 +72,20 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated data files
+      - name: Commit updated posted.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # ИСПРАВЛЕНО: Добавляем ОБА файла, чтобы не было "неучтённых" изменений
+          # Сохраняем ТОЛЬКО журнал опубликованных статей. Кэш catalog.json не трогаем.
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
-          if [ -f "articles/catalog.json" ]; then
-            git add articles/catalog.json
-          fi
-
+          
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update data files"
+            git commit -m "chore: update posted.json"
             git pull --rebase origin main
             git push
           else
-            echo "✅ Data files unchanged"
+            echo "✅ posted.json unchanged"
           fi
