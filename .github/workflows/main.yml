@@ -54,8 +54,8 @@ jobs:
         id: parse_step
         run: |
           echo "→ STARTING KHMERTIMES PARSER RUN"
-          # Убедитесь, что имя файла (например, parser.py или main.py) верное
-          python3 parser.py \
+          # Убедитесь, что имя файла (например main.py) верное
+          python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --lang 'ru' \
             --limit 15 \
