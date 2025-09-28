@@ -1,4 +1,4 @@
-name: Parse & Post Articles
+name: Parse & Post (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -20,14 +20,13 @@ env:
 
 jobs:
   build-and-publish:
-    name: Parse and Publish
+    name: Parse and Publish (Khmertimes)
     runs-on: ubuntu-latest
     
     env:
       TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-      # Если для этого проекта нужен VPN, добавьте сюда секрет
-      # WG_CONFIG: ${{ secrets.WG_CONFIG_KHMERTIMES }}
+      WG_CONFIG:        ${{ secrets.WG_CONFIG }}
 
     steps:
       - name: Checkout code
@@ -38,38 +37,28 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Cache pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
       - name: Install requirements
         run: |
-          if [ -f requirements-parser.txt ]; then
-            pip install -r requirements-parser.txt
-          fi
-          if [ -f requirements-poster.txt ]; then
-            pip install -r requirements-poster.txt
-          fi
+          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
+          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
       
-      # Если для этого проекта нужен VPN, раскомментируйте этот блок
-      # - name: 🔐 Setup WireGuard
-      #   run: |
-      #     sudo apt-get update && sudo apt-get install -y wireguard-tools
-      #     echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
-      #     sudo wg-quick up wg0
+      - name: 🔐 Setup WireGuard
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools
+          echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo wg-quick up wg0
+          # Принудительно используем DNS, чтобы избежать проблем с разрешением имён
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: Run parser
         id: parse_step
         run: |
-          echo "→ STARTING PARSER RUN"
-          # Убедитесь, что имя файла (например, main.py) верное
-          python3 main.py \
+          echo "→ STARTING KHMERTIMES PARSER RUN"
+          # Убедитесь, что имя файла (например, parser.py или main.py) верное
+          python3 parser.py \
+            --base-url "https://www.khmertimeskh.com" \
             --lang 'ru' \
-            --limit ${{ env.BATCH_LIMIT_PARSE || 15 }} \
+            --limit 15 \
             --posted-state-file articles/posted.json | tee parser_output.txt
           echo "→ PARSER RUN COMPLETE"
           
@@ -77,10 +66,9 @@ jobs:
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
           echo "Extracted new_articles_found status: '$NEW_ARTICLES_STATUS'"
       
-      # Если используете VPN, раскомментируйте этот блок для его отключения
-      # - name: 🛑 Teardown WireGuard
-      #   if: always()
-      #   run: sudo wg-quick down wg0 || true
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down wg0 || true
 
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
@@ -96,15 +84,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Сохраняем только журнал опубликованных статей. Кэш catalog.json не коммитим.
-          if [ -f "articles/posted.json" ]; then
-            git add articles/posted.json
-          fi
+          if [ -f "articles/posted.json" ]; then git add articles/posted.json; fi
+          if [ -f "articles/catalog.json" ]; then git add articles/catalog.json; fi
 
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted.json"
+            git commit -m "chore: update data files (posted, catalog)"
             git pull --rebase origin main
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ Data files unchanged"
           fi
