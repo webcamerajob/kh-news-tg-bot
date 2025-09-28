@@ -1,4 +1,4 @@
-name: Parse & Post Articles (Khmertimes)
+name: Parse & Post (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -19,7 +19,7 @@ env:
   BATCH_LIMIT: 15
   TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
-  WG_CONFIG: ${{ secrets.WG_CONFIG }}
+  WG_CONFIG:        ${{ secrets.WG_CONFIG }}
 
 jobs:
   build-and-publish:
@@ -45,25 +45,21 @@ jobs:
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
-          # Принудительно используем DNS, чтобы избежать проблем с разрешением имён внутри VPN
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: Run parser
         id: parse_step
         run: |
-          echo "→ STARTING PARSER RUN"
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
             --lang 'ru' \
             --limit 15 \
             --posted-state-file articles/posted.json | tee parser_output.txt
-          echo "→ PARSER RUN COMPLETE"
           
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
-          echo "Extracted new_articles_found status: '$NEW_ARTICLES_STATUS'"
-      
+
       - name: 🛑 Teardown WireGuard
         if: always()
         run: sudo wg-quick down wg0 || true
@@ -71,7 +67,6 @@ jobs:
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
-          echo "→ Running poster..."
           python3 poster.py \
             --parsed-dir articles \
             --state-file articles/posted.json \
@@ -82,15 +77,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Сохраняем ТОЛЬКО журнал опубликованных статей, чтобы избежать конфликтов
-          if [ -f "articles/posted.json" ]; then
-            git add articles/posted.json
-          fi
-          
+          if [ -f "articles/posted.json" ]; then git add articles/posted.json; fi
+          if [ -f "articles/catalog.json" ]; then git add articles/catalog.json; fi
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted.json"
+            git commit -m "chore: update data files"
             git pull --rebase origin main
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ Data files unchanged"
           fi
