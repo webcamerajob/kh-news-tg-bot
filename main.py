@@ -313,26 +313,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
 # --- Основная функция main() ---
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
-    parser.add_argument("--base-url", type=str,
-                        default="https://www.khmertimeskh.com",
-                        help="WP site base URL")
-    parser.add_argument("--slug", type=str, default="national",
-                        help="Category slug")
-    parser.add_argument("-n", "--limit", type=int, default=None,
-                        help="Max posts to parse")
-    parser.add_argument("-l", "--lang", type=str, default="",
-                        help="Translate to language code")
-    parser.add_argument(
-        "--posted-state-file",
-        type=str,
-        default="articles/posted.json",
-        help="Путь к файлу состояния с ID уже опубликованных статей (только для чтения)"
-    )
+    parser.add_argument("--base-url", type=str, default="https://www.khmertimeskh.com", help="WP site base URL")
+    parser.add_argument("--slug", type=str, default="national", help="Category slug")
+    parser.add_argument("-n", "--limit", type=int, default=None, help="Max posts to parse")
+    parser.add_argument("-l", "--lang", type=str, default="", help="Translate to language code")
+    parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="Путь к файлу состояния с ID уже опубликованных статей")
     args = parser.parse_args()
 
-    # --- ИЗМЕНЕНИЕ: Загружаем стоп-фразы в начале ---
     stopwords = load_stopwords(Path("stopwords.txt"))
-    # ---
 
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -341,57 +329,54 @@ def main():
 
         catalog = load_catalog()
         existing_ids_in_catalog = {str(article["id"]) for article in catalog}
-
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
-
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(f"Posted IDs: {posted_ids_from_repo}")
 
         new_articles_processed_in_run = 0
 
         for post in posts[:args.limit or len(posts)]:
             post_id = str(post["id"])
 
-            # --- НОВЫЙ БЛОК: Фильтрация по стоп-фразам в заголовке ---
+            # --- ПРАВИЛЬНАЯ ЛОГИКА ---
+
+            # 1. Главная проверка: если статья уже опубликована, сразу пропускаем.
+            if post_id in posted_ids_from_repo:
+                logging.debug(f"Article ID={post_id} is already in posted.json. Skipping.")
+                continue
+
+            # 2. Только для НОВЫХ статей проверяем заголовок на стоп-фразы.
             if stopwords:
                 title_text = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
                 lower_title = title_text.lower()
                 
-                is_skipped = False
+                is_skipped_by_stopword = False
                 for phrase in stopwords:
                     if phrase in lower_title:
-                        logging.info(f"Пропуск статьи ID={post_id} ('{title_text[:50]}...'), найдена стоп-фраза: '{phrase}'")
-                        is_skipped = True
+                        logging.info(f"Пропуск НОВОЙ статьи ID={post_id} ('{title_text[:50]}...'), найдена стоп-фраза: '{phrase}'")
+                        is_skipped_by_stopword = True
                         break
                 
-                if is_skipped:
-                    continue # Переходим к следующей статье в цикле
-            # --- КОНЕЦ НОВОГО БЛОКА ---
-
-            if post_id in posted_ids_from_repo:
-                logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
-                continue
-
+                if is_skipped_by_stopword:
+                    continue
+            
+            # 3. Если все проверки пройдены, обрабатываем статью.
+            logging.info(f"Processing new article ID={post_id}...")
             is_in_local_catalog = post_id in existing_ids_in_catalog
 
             if meta := parse_and_save(post, args.lang, args.base_url):
                 if is_in_local_catalog:
                     catalog = [item for item in catalog if str(item["id"]) != post_id]
-                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
-                else:
-                    new_articles_processed_in_run += 1
-                    logging.info(f"Processed new article ID={post_id} and added to local catalog.")
-
+                new_articles_processed_in_run += 1
                 catalog.append(meta)
-                existing_ids_in_catalog.add(post_id)
+        
+        # --- КОНЕЦ ПРАВИЛЬНОЙ ЛОГИКИ ---
 
         if new_articles_processed_in_run > 0:
             save_catalog(catalog)
-            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed articles in catalog: {len(catalog)}")
+            logging.info(f"Processed {new_articles_processed_in_run} new articles. Total in catalog: {len(catalog)}")
             print("NEW_ARTICLES_STATUS:true")
         else:
-            logging.info("No new articles found or processed that are not already in posted.json or local catalog.")
+            logging.info("No new articles found to process.")
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
