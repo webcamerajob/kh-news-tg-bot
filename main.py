@@ -6,8 +6,6 @@ import hashlib
 import time
 import re
 import os
-# Настройка переменной окружения (должна быть в начале, один раз)
-os.environ["translators_default_region"] = "EN"
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -19,21 +17,23 @@ from requests.exceptions import RequestException, Timeout as ReqTimeout
 import translators as ts # Для translate_text
 import fcntl # Для блокировки файлов в load_catalog и save_catalog
 
+# Настройка переменной окружения (должна быть в начале, один раз)
+os.environ["translators_default_region"] = "EN"
+
 # Настройки логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Предполагаемые константы
-OUTPUT_DIR = Path("articles") # Возвращаем к исходной директории
+OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
-BASE_DELAY = 1.0 # Базовая задержка для ретраев
+BASE_DELAY = 1.0
 
 # cloudscraper для обхода Cloudflare
 SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)      # (connect_timeout, read_timeout) в секундах
 
-
-# --- Вспомогательные функции (реальные реализации из нашего обсуждения) ---
+# --- Вспомогательные функции ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     """
     Загружает множество ID из файла состояния (например, posted.json).
@@ -47,6 +47,24 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
     except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
         logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
+        return set()
+
+def load_stopwords(filepath: Path) -> Set[str]:
+    """
+    Загружает стоп-слова из текстового файла.
+    Возвращает множество фраз в нижнем регистре для быстрой проверки.
+    """
+    if not filepath.exists():
+        logging.info("Файл стоп-слов не найден, проверка не будет производиться.")
+        return set()
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            # Читаем строки, убираем пробелы и отфильтровываем пустые.
+            stopwords = {line.strip() for line in f if line.strip()}
+            logging.info(f"Загружено {len(stopwords)} стоп-слов из {filepath.name}.")
+            return stopwords
+    except Exception as e:
+        logging.error(f"Не удалось прочитать файл стоп-слов {filepath.name}: {e}")
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
@@ -65,13 +83,6 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/114.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Referer": base_url,
-        }
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
@@ -141,9 +152,8 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
     try:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_SH)  # Блокировка для чтения
+            fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
-            # Валидация данных: фильтруем некорректные записи
             return [item for item in data if isinstance(item, dict) and "id" in item]
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logging.error("Catalog JSON decode error: %s", e)
@@ -153,13 +163,8 @@ def load_catalog() -> List[Dict[str, Any]]:
         return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
-    """
-    Сохраняет каталог статей в catalog.json с блокировкой файла.
-    Сохраняет только минимальный набор полей для защиты от дублей:
-    id, hash, translated_to
-    """
+    """Сохраняет каталог статей в catalog.json с блокировкой файла."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    # Фильтруем каждую запись
     minimal = []
     for item in catalog:
         if isinstance(item, dict) and "id" in item:
@@ -170,19 +175,15 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
             })
         else:
             logging.warning(f"Skipping malformed catalog entry: {item}")
-
     try:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX) # Блокировка для записи
+            fcntl.flock(f, fcntl.LOCK_EX)
             json.dump(minimal, f, ensure_ascii=False, indent=2)
     except IOError as e:
         logging.error("Failed to save catalog: %s", e)
 
 def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
-    """
-    Перевод текста через translators с защитой от ошибок.
-    Возвращает оригинал, если перевод недоступен.
-    """
+    """Перевод текста через translators с защитой от ошибок."""
     logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
     if not text or not isinstance(text, str):
         return ""
@@ -192,67 +193,52 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
             return translated
         logging.warning("Translator returned non-str for text: %s", text[:50])
     except Exception as e:
-        logging.warning("Translation error [%s → %s]: %s", provider, to_lang, e)
+        logging.warning("Translation error [%s -> %s]: %s", provider, to_lang, e)
     return text
 
-# Регулярные выражения для очистки текста
-bad_re = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]") # Пример
+bad_re = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
-# Функция parse_and_save (без изменений в логике, только форматирование)
-def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Optional[Dict[str, Any]]:
+def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopwords: Set[str]) -> Optional[Dict[str, Any]]:
     """Парсит и сохраняет статью, включая перевод и загрузку изображений."""
-    aid, slug = post["id"], post["slug"]
+    
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+
+    # Проверка на стоп-фразы в заголовке
+    if stopwords:
+        for stop_phrase in stopwords:
+            # \b - граница слова, re.escape - для безопасности, re.IGNORECASE - регистронезависимость
+            pattern = r'\b' + re.escape(stop_phrase) + r'\b'
+            if re.search(pattern, orig_title, re.IGNORECASE):
+                logging.warning(f"🚫 Статья ID={post['id']} пропущена из-за стоп-фразы в заголовке: '{stop_phrase}'.")
+                return None
+
+    aid, slug = str(post["id"]), post["slug"] # ID всегда строка для консистентности
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
 
-    # Проверяем существующую статью
     meta_path = art_dir / "meta.json"
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             current_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
-            # Проверяем, изменился ли контент или язык перевода
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
                 logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
                 return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             logging.warning(f"Failed to read existing meta for ID={aid}: {e}. Reparsing.")
 
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = orig_title
-
     if translate_to:
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                title = translate_text(orig_title, to_lang=translate_to, provider="yandex")
-                break
-            except Exception as e:
-                delay = BASE_DELAY * 2 ** (attempt - 1)
-                logging.warning(
-                    "Translate title attempt %s failed: %s; retry in %.1fs",
-                    attempt, MAX_RETRIES, e, delay
-                )
-                time.sleep(delay)
+        title = translate_text(orig_title, to_lang=translate_to, provider="yandex")
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
-
     paras = [p.get_text(strip=True) for p in soup.find_all("p")]
     raw_text = "\n\n".join(paras)
     raw_text = bad_re.sub("", raw_text)
-    raw_text = re.sub(r"[ \t]+", " ", raw_text)
-    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
-
-    # Вставка заголовка в начало
-    # raw_text = f"**{title}**\n\n{raw_text}"
 
     img_dir = art_dir / "images"
     images: List[str] = []
-    srcs = []
-
-    for img in soup.find_all("img")[:10]:
-        url = extract_img_url(img)
-        if url:
-            srcs.append(url)
+    srcs = {extract_img_url(img) for img in soup.find_all("img")[:10] if extract_img_url(img)}
 
     with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
@@ -282,48 +268,25 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str) -> Op
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        h = meta["hash"]
-        old = {}
-        if meta_path.exists():
-            try:
-                old = json.loads(meta_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                pass
+        clean_paras = [bad_re.sub("", p) for p in paras]
+        trans = [translate_text(p, to_lang=translate_to, provider="yandex") for p in clean_paras]
 
-        if old.get("hash") != h or old.get("translated_to") != translate_to:
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    clean_paras = [bad_re.sub("", p) for p in paras]
-                    trans = [translate_text(p, to_lang=translate_to, provider="yandex") for p in clean_paras]
+        txt_t = art_dir / f"content.{translate_to}.txt"
+        trans_txt = "\n\n".join(trans)
+        header_t = f"{title}\n\n\n"
+        txt_t.write_text(header_t + trans_txt, encoding="utf-8")
 
-                    txt_t = art_dir / f"content.{translate_to}.txt"
-                    trans_txt = "\n\n".join(trans)
-                    header_t = f"{title}\n\n\n"
-                    txt_t.write_text(header_t + trans_txt, encoding="utf-8")
-
-                    meta.update({
-                        "translated_to": translate_to,
-                        "translated_paras": trans,
-                        "translated_file": str(txt_t),
-                        "text_file": str(txt_t)
-                    })
-
-                    break
-                except Exception as e:
-                    delay = BASE_DELAY * 2 ** (attempt - 1)
-                    logging.warning("Translate try %s failed: %s; retry in %.1fs", attempt, e, delay)
-                    time.sleep(delay)
-            else: # Это `else` относится к `for` циклу, если не было `break`
-                logging.warning("Translation failed after max retries for ID=%s.", aid)
-        else:
-            logging.info("Using cached translation %s for ID=%s", translate_to, aid)
+        meta.update({
+            "translated_to": translate_to,
+            "translated_paras": trans,
+            "translated_file": str(txt_t),
+            "text_file": str(txt_t)
+        })
 
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-
     return meta
 
-# --- Основная функция main() ---
 def main():
     parser = argparse.ArgumentParser(description="Parser with translation")
     parser.add_argument("--base-url", type=str,
@@ -338,10 +301,12 @@ def main():
     parser.add_argument(
         "--posted-state-file",
         type=str,
-        default="articles/posted.json", # Убедитесь, что это правильный путь
-        help="Путь к файлу состояния с ID уже опубликованных статей (только для чтения)"
+        default="articles/posted.json",
+        help="Путь к файлу состояния с ID уже опубликованных статей"
     )
     args = parser.parse_args()
+
+    stopwords = load_stopwords(Path("stopwords.txt"))
 
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -349,15 +314,11 @@ def main():
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
 
         catalog = load_catalog()
-        existing_ids_in_catalog = {article["id"] for article in catalog}
+        existing_ids_in_catalog = {str(article["id"]) for article in catalog}
 
         posted_ids_from_repo = load_posted_ids(Path(args.posted_state_file))
-
         logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {args.posted_state_file}.")
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(f"Posted IDs: {posted_ids_from_repo}")
 
-        # Инициализация переменной new_articles_processed_in_run
         new_articles_processed_in_run = 0
 
         for post in posts[:args.limit or len(posts)]:
@@ -367,34 +328,30 @@ def main():
                 logging.info(f"Skipping article ID={post_id} as it's already in {args.posted_state_file}.")
                 continue
 
-            is_in_local_catalog = post_id in existing_ids_in_catalog
-
-            # Обработка статьи (парсинг и сохранение)
-            if meta := parse_and_save(post, args.lang, args.base_url):
-                if is_in_local_catalog:
-                    # Если статья уже в каталоге, удаляем старую запись
-                    catalog = [item for item in catalog if item["id"] != post_id]
-                    logging.info(f"Updated article ID={post_id} in local catalog (content changed or re-translated).")
-                else:
+            if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
+                if post_id not in existing_ids_in_catalog:
                     new_articles_processed_in_run += 1
                     logging.info(f"Processed new article ID={post_id} and added to local catalog.")
-
+                else:
+                    logging.info(f"Updated article ID={post_id} in local catalog.")
+                
+                catalog = [item for item in catalog if str(item.get("id")) != post_id]
                 catalog.append(meta)
                 existing_ids_in_catalog.add(post_id)
 
-        # Сохранение каталога и вывод статуса
         if new_articles_processed_in_run > 0:
             save_catalog(catalog)
-            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed articles in catalog: {len(catalog)}")
+            logging.info(f"Added {new_articles_processed_in_run} truly new articles. Total parsed: {len(catalog)}")
             print("NEW_ARTICLES_STATUS:true")
         else:
-            logging.info("No new articles found or processed that are not already in posted.json or local catalog.")
+            # Сохраняем каталог, даже если были только обновления (новые хэши)
+            save_catalog(catalog)
+            logging.info("No new articles found, but catalog may have been updated.")
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
         logging.exception("Fatal error in main:")
         exit(1)
 
-# Убедитесь, что этот блок БЕЗ ОТСТУПА!
 if __name__ == "__main__":
     main()
