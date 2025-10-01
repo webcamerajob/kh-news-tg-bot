@@ -1,4 +1,4 @@
-name: Parse & Post Articles (Khmertimes)
+name: Parse & Post Articles
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-and-publish:
-    name: Parse and Publish (Khmertimes)
+    name: Parse and Publish
     runs-on: ubuntu-latest
     
     steps:
@@ -35,9 +35,8 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install requirements & FFmpeg
+      - name: Install requirements
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
       
@@ -51,13 +50,7 @@ jobs:
       - name: Run parser
         id: parse_step
         run: |
-          python3 main.py \
-            --base-url "https://www.khmertimeskh.com" \
-            --slug "national" \
-            --lang 'ru' \
-            --limit 15 \
-            --posted-state-file articles/posted.json | tee parser_output.txt
-          
+          python3 main.py --limit 15 --posted-state-file articles/posted.json | tee parser_output.txt
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
@@ -68,25 +61,24 @@ jobs:
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
-          python3 poster.py \
-            --parsed-dir articles \
-            --state-file articles/posted.json \
-            --limit $BATCH_LIMIT
+          python3 poster.py --parsed-dir articles --state-file articles/posted.json --limit $BATCH_LIMIT
 
       - name: Commit updated data files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Сохраняем ТОЛЬКО журнал опубликованных статей. Кэш catalog.json не трогаем.
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
+          if [ -f "articles/catalog.json" ]; then
+            git add articles/catalog.json
+          fi
           
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted.json"
+            git commit -m "chore: update data files"
             git pull --rebase origin main
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ Data files unchanged"
           fi
