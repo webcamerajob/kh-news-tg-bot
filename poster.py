@@ -10,8 +10,13 @@ import httpx
 from httpx import HTTPStatusError, ReadTimeout, Timeout
 from PIL import Image
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
+# ──────────────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+# --- Константы ---
+MAX_POSTED_RECORDS = 100
 WATERMARK_SCALE = 0.35
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 MAX_RETRIES   = 3
@@ -19,6 +24,7 @@ RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 10.0
 
 def escape_html(text: str) -> str:
+    """Экранирует спецсимволы HTML."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 def chunk_text(text: str, size: int = 4096) -> List[str]:
@@ -140,23 +146,32 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
     return html_title, text_path, valid_imgs, title
 
 def load_posted_ids(state_file: Path) -> Set[str]:
-    """Читает state-файл и возвращает ПОЛНЫЙ set из ID в виде СТРОК."""
-    if not state_file.is_file(): return set()
+    """
+    Читает state-файл, корректно обрезает список до MAX_POSTED_RECORDS,
+    сохраняя самые новые, и возвращает set из ID в виде СТРОК.
+    """
+    if not state_file.is_file():
+        return set()
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
         if not isinstance(data, list):
             logging.warning(f"Данные в {state_file} - не список.")
             return set()
+        if len(data) > MAX_POSTED_RECORDS:
+            data = data[-MAX_POSTED_RECORDS:]
+            logging.info(f"Файл состояния обрезан до последних {MAX_POSTED_RECORDS} записей.")
         return {str(item) for item in data if item is not None}
     except (json.JSONDecodeError, Exception) as e:
         logging.warning(f"Ошибка чтения файла состояния {state_file}: {e}.")
         return set()
 
 def save_posted_ids(all_ids_to_save: Set[str], state_file: Path) -> None:
-    """Сохраняет ПОЛНЫЙ отсортированный список ID в файл состояния."""
+    """Сохраняет отсортированный список ID, обрезанный до лимита."""
     state_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        sorted_ids = sorted(list(all_ids_to_save), key=int)
+        sorted_ids = sorted([int(i) for i in all_ids_to_save])
+        if len(sorted_ids) > MAX_POSTED_RECORDS:
+            sorted_ids = sorted_ids[-MAX_POSTED_RECORDS:]
         with state_file.open("w", encoding="utf-8") as f:
             json.dump(sorted_ids, f, ensure_ascii=False, indent=2)
         logging.info(f"Сохранено {len(sorted_ids)} ID в файл состояния {state_file}.")
