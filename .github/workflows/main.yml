@@ -1,4 +1,4 @@
-name: Parse & Post Articles
+name: Parse & Post Articles (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-and-publish:
-    name: Parse and Publish
+    name: Parse and Publish (Khmertimes)
     runs-on: ubuntu-latest
     
     steps:
@@ -50,7 +50,12 @@ jobs:
       - name: Run parser
         id: parse_step
         run: |
-          python3 main.py --limit 15 --posted-state-file articles/posted.json | tee parser_output.txt
+          python3 main.py \
+            --base-url "https://www.khmertimeskh.com" \
+            --slug "national" \
+            --limit 15 \
+            --posted-state-file articles/posted.json | tee parser_output.txt
+          
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
@@ -61,7 +66,10 @@ jobs:
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
-          python3 poster.py --parsed-dir articles --state-file articles/posted.json --limit $BATCH_LIMIT
+          python3 poster.py \
+            --parsed-dir articles \
+            --state-file articles/posted.json \
+            --limit $BATCH_LIMIT
 
       - name: Commit updated data files
         run: |
