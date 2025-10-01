@@ -242,7 +242,8 @@ def main():
 
         for post in posts:
             if str(post["id"]) not in posted_ids:
-                if meta := parse_and_save(post, args.lang):
+                # ИСПРАВЛЕНИЕ ЗДЕСЬ: добавлен args.base_url
+                if meta := parse_and_save(post, args.lang, args.base_url):
                     processed_articles_meta.append(meta)
         
         if processed_articles_meta:
