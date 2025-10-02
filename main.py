@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import logging
 import json
@@ -5,7 +6,6 @@ import hashlib
 import time
 import re
 import os
-import shutil
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
@@ -21,7 +21,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-MAX_POSTED_RECORDS = 100
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
@@ -30,57 +29,15 @@ SCRAPER_TIMEOUT = (10.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
-def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
-    """
-    Удаляет папки со старыми статьями, которые были "вытеснены" из posted.json.
-    """
-    if not posted_ids_path.is_file() or not articles_dir.is_dir():
-        return
-    logging.info("Starting cleanup of old article directories...")
-    try:
-        with open(posted_ids_path, 'r', encoding='utf-8') as f:
-            all_posted_ids = [str(item) for item in json.load(f)]
-        if len(all_posted_ids) <= MAX_POSTED_RECORDS:
-            logging.info("No old articles to clean up.")
-            return
-        ids_to_keep = set(all_posted_ids[-MAX_POSTED_RECORDS:])
-        cleaned_count = 0
-        for article_folder in articles_dir.iterdir():
-            if article_folder.is_dir():
-                dir_id = article_folder.name.split('_', 1)[0]
-                if dir_id.isdigit() and dir_id not in ids_to_keep:
-                    logging.warning(f"🧹 Cleaning up old article directory: {article_folder.name}")
-                    shutil.rmtree(article_folder)
-                    cleaned_count += 1
-        if cleaned_count > 0:
-            logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
-    except Exception as e:
-        logging.error(f"An error occurred during cleanup: {e}")
-
 def load_posted_ids(state_file_path: Path) -> Set[str]:
-    """Загружает множество ID из файла состояния."""
     try:
         if state_file_path.exists():
             with open(state_file_path, 'r', encoding='utf-8') as f:
                 fcntl.flock(f, fcntl.LOCK_SH)
                 return {str(item) for item in json.load(f)}
         return set()
-    except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
-        logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
-        return set()
-
-def load_stopwords(filepath: Path) -> Set[str]:
-    """Загружает стоп-слова из текстового файла."""
-    if not filepath.exists():
-        logging.info("Файл стоп-слов не найден, проверка не будет производиться.")
-        return set()
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            stopwords = {line.strip() for line in f if line.strip()}
-            logging.info(f"Загружено {len(stopwords)} стоп-слов из {filepath.name}.")
-            return stopwords
     except Exception as e:
-        logging.error(f"Не удалось прочитать файл стоп-слов {filepath.name}: {e}")
+        logging.warning(f"Could not load posted IDs from {state_file_path}: {e}. Assuming empty set.")
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
@@ -161,23 +118,16 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
 
 def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
     if not text or not isinstance(text, str): return ""
+    logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
     try:
-        logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
         return ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
     except Exception as e:
         logging.warning(f"Translation error: {e}")
     return text
 
-def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopwords: Set[str]) -> Optional[Dict[str, Any]]:
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    if stopwords:
-        for stop_phrase in stopwords:
-            pattern = r'\b' + re.escape(stop_phrase) + r'\b'
-            if re.search(pattern, orig_title, re.IGNORECASE):
-                logging.warning(f"🚫 Статья ID={post['id']} пропущена из-за стоп-фразы в ЗАГОЛОВКЕ: '{stop_phrase}'.")
-                return None
-
-    aid, slug = str(post["id"]), post["slug"]
+def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str, Any]]:
+    aid = str(post["id"])
+    slug = post["slug"]
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
@@ -187,14 +137,13 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopw
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
-                logging.info(f"Skipping unchanged article ID={aid} (content and translation match local cache).")
+                logging.info(f"Skipping unchanged article ID={aid}")
                 return existing_meta
         except (json.JSONDecodeError, UnicodeDecodeError):
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
-    title = orig_title
-    if translate_to:
-        title = translate_text(orig_title, to_lang=translate_to)
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
 
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
@@ -224,8 +173,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, base_url: str, stopw
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": post.get("link"),
         "title": title, "text_file": text_file_path.name,
-        "images": sorted([Path(p).name for p in images]), "posted": False,
-        "hash": current_hash, "translated_to": ""
+        "images": sorted([Path(p).name for p in images]),
+        "posted": False, "hash": current_hash, "translated_to": ""
     }
     text_file_path.write_text(raw_text, encoding="utf-8")
 
@@ -249,55 +198,27 @@ def main():
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
     args = parser.parse_args()
 
-    posted_ids_path = Path(args.posted_state_file)
-    cleanup_old_articles(posted_ids_path, OUTPUT_DIR)
-    
-    stopwords = load_stopwords(Path("stopwords.txt"))
-
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10) * 3)
-
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
+        
         catalog = load_catalog()
-        existing_ids_in_catalog = {str(item["id"]) for item in catalog}
-        posted_ids_from_repo = load_posted_ids(posted_ids_path)
-        logging.info(f"Loaded {len(posted_ids_from_repo)} posted IDs from {posted_ids_path}.")
-
-        new_articles_count = 0
-        updated_articles_count = 0
-        processed_count = 0
+        posted_ids = load_posted_ids(Path(args.posted_state_file))
         
+        processed_articles_meta = []
         for post in posts:
-            if args.limit and processed_count >= args.limit:
-                logging.info(f"Processing limit of {args.limit} articles reached.")
-                break
-            
-            post_id = str(post["id"])
-            if post_id in posted_ids_from_repo:
-                continue
-
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: добавлен аргумент stopwords ---
-            if meta := parse_and_save(post, args.lang, args.base_url, stopwords):
-                processed_count += 1
-                if post_id not in existing_ids_in_catalog:
-                    new_articles_count += 1
-                else:
-                    updated_articles_count += 1
-                
-                catalog = [item for item in catalog if str(item.get("id")) != post_id]
-                catalog.append(meta)
+            if str(post["id"]) not in posted_ids:
+                if meta := parse_and_save(post, args.lang):
+                    processed_articles_meta.append(meta)
         
-        if new_articles_count > 0 or updated_articles_count > 0:
+        if processed_articles_meta:
+            for meta in processed_articles_meta:
+                catalog = [item for item in catalog if item.get("id") != meta["id"]]
+                catalog.append(meta)
             save_catalog(catalog)
-            logging.info(f"Catalog saved. New: {new_articles_count}, Updated: {updated_articles_count}.")
-            # Статус true ставим, если есть хотя бы одна новая статья для постинга
-            if new_articles_count > 0:
-                print("NEW_ARTICLES_STATUS:true")
-            else:
-                print("NEW_ARTICLES_STATUS:false")
+            print("NEW_ARTICLES_STATUS:true")
         else:
-            logging.info("No new or updated articles found.")
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
