@@ -30,16 +30,20 @@ SCRAPER_TIMEOUT = (10.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
+def normalize_text(text: str) -> str:
+    """Заменяет специальные типографские символы на их простые аналоги."""
+    replacements = {'–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'"}
+    for special, simple in replacements.items():
+        text = text.replace(special, simple)
+    return text
+
 def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
-    if not posted_ids_path.is_file() or not articles_dir.is_dir():
-        return
+    if not posted_ids_path.is_file() or not articles_dir.is_dir(): return
     logging.info("Starting cleanup of old article directories...")
     try:
         with open(posted_ids_path, 'r', encoding='utf-8') as f:
             all_posted_ids = [str(item) for item in json.load(f)]
-        if len(all_posted_ids) <= MAX_POSTED_RECORDS:
-            logging.info("No old articles to clean up.")
-            return
+        if len(all_posted_ids) <= MAX_POSTED_RECORDS: return
         ids_to_keep = set(all_posted_ids[-MAX_POSTED_RECORDS:])
         cleaned_count = 0
         for article_folder in articles_dir.iterdir():
@@ -49,8 +53,7 @@ def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
                     logging.warning(f"🧹 Cleaning up old article directory: {article_folder.name}")
                     shutil.rmtree(article_folder)
                     cleaned_count += 1
-        if cleaned_count > 0:
-            logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
+        if cleaned_count > 0: logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
     except Exception as e:
         logging.error(f"An error occurred during cleanup: {e}")
 
@@ -141,14 +144,46 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error(f"Failed to save catalog: {e}")
 
-def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
+def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> Optional[str]:
     if not text or not isinstance(text, str): return ""
     logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
     try:
-        return ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
+        translated = ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
+        if isinstance(translated, str): return translated
+        logging.warning(f"Translator returned non-str for text: {text[:50]}")
+        return None
     except Exception as e:
         logging.warning(f"Translation error: {e}")
-    return text
+        return None
+
+def translate_in_chunks(paragraphs: List[str], to_lang: str, provider: str = "yandex", chunk_size: int = 4500) -> Optional[List[str]]:
+    """Переводит список абзацев, объединяя их в чанки для сохранения контекста."""
+    if not paragraphs: return []
+    logging.info(f"Translating {len(paragraphs)} paragraphs in chunks to '{to_lang}'...")
+    
+    translated_chunks = []
+    current_chunk_paras = []
+    current_len = 0
+    
+    for p in paragraphs:
+        if current_len + len(p) + 2 > chunk_size and current_chunk_paras:
+            text_to_translate = "\n\n".join(current_chunk_paras)
+            translated_part = translate_text(text_to_translate, to_lang=to_lang, provider=provider)
+            if translated_part is None: return None # Прерываем, если часть не перевелась
+            translated_chunks.append(translated_part)
+            current_chunk_paras, current_len = [p], len(p)
+        else:
+            current_chunk_paras.append(p)
+            current_len += len(p) + 2
+            
+    if current_chunk_paras:
+        text_to_translate = "\n\n".join(current_chunk_paras)
+        translated_part = translate_text(text_to_translate, to_lang=to_lang, provider=provider)
+        if translated_part is None: return None # Прерываем, если последняя часть не перевелась
+        translated_chunks.append(translated_part)
+
+    # Собираем всё обратно в единый список абзацев
+    return "\n\n".join(translated_chunks).split("\n\n")
 
 def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
@@ -168,12 +203,23 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
-
+    title = orig_title
+    
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
     
-    raw_text = "\n\n".join(paras)
+    # Сначала нормализуем, потом используем
+    normalized_title = normalize_text(orig_title)
+    normalized_paras = [normalize_text(p) for p in paras]
+    
+    if translate_to:
+        translated_title = translate_text(normalized_title, to_lang=translate_to)
+        if translated_title is None:
+            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+            return None
+        title = translated_title
+
+    raw_text = "\n\n".join(normalized_paras)
     raw_text = BAD_RE.sub("", raw_text)
 
     img_dir = art_dir / "images"
@@ -204,7 +250,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
+        translated_paras = translate_in_chunks(normalized_paras, to_lang=translate_to)
+        if translated_paras is None:
+            logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+            return None
+
+        trans_text = "\n\n".join(translated_paras)
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
         trans_file_path.write_text(final_translated_text, encoding="utf-8")
@@ -223,34 +274,25 @@ def main():
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
     args = parser.parse_args()
 
-    # Запускаем очистку старых папок в самом начале
-    posted_ids_path = Path(args.posted_state_file)
-    cleanup_old_articles(posted_ids_path, OUTPUT_DIR)
+    # cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
 
     try:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10) * 3)
 
         catalog = load_catalog()
-        posted_ids = load_posted_ids(posted_ids_path)
+        posted_ids = load_posted_ids(Path(args.posted_state_file))
         
-        new_articles_count = 0
         processed_articles_meta = []
-
         for post in posts:
             if str(post["id"]) not in posted_ids:
                 if meta := parse_and_save(post, args.lang):
                     processed_articles_meta.append(meta)
         
         if processed_articles_meta:
-            existing_ids_in_catalog = {str(item['id']) for item in catalog}
             for meta in processed_articles_meta:
-                if meta['id'] not in existing_ids_in_catalog:
-                    new_articles_count += 1
-                catalog = [item for item in catalog if str(item.get("id")) != meta["id"]]
+                catalog = [item for item in catalog if item.get("id") != meta["id"]]
                 catalog.append(meta)
-
             save_catalog(catalog)
             print("NEW_ARTICLES_STATUS:true")
         else:
