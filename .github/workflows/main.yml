@@ -1,14 +1,12 @@
 name: Parse & Post Articles (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
   
 permissions:
   contents: write
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
   schedule:
     - cron: '30 22-23 * * *'
