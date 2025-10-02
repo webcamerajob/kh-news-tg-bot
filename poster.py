@@ -10,12 +10,8 @@ import httpx
 from httpx import HTTPStatusError, ReadTimeout, Timeout
 from PIL import Image
 
-# ──────────────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-# --- Константы ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 MAX_POSTED_RECORDS = 100
 WATERMARK_SCALE = 0.35
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
@@ -24,7 +20,6 @@ RETRY_DELAY   = 5.0
 DEFAULT_DELAY = 10.0
 
 def escape_html(text: str) -> str:
-    """Экранирует спецсимволы HTML."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 def chunk_text(text: str, size: int = 4096) -> List[str]:
@@ -148,10 +143,9 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
 def load_posted_ids(state_file: Path) -> Set[str]:
     """
     Читает state-файл, корректно обрезает список до MAX_POSTED_RECORDS,
-    сохраняя самые новые, и возвращает set из ID в виде СТРОК.
+    и возвращает set из ID в виде СТРОК.
     """
-    if not state_file.is_file():
-        return set()
+    if not state_file.is_file(): return set()
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
         if not isinstance(data, list):
@@ -201,9 +195,9 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
                 article_id = str(art_meta.get("id"))
                 if article_id and article_id != 'None' and article_id not in posted_ids:
                     if validated_data := validate_article(art_meta, d):
-                        html_title, text_path, image_paths, original_title = validated_data
+                        _, text_path, image_paths, original_title = validated_data
                         articles_to_post.append({
-                            "id": article_id, "html_title": html_title,
+                            "id": article_id, "html_title": f"<b>{escape_html(original_title)}</b>",
                             "text_path": text_path, "image_paths": image_paths,
                             "original_title": original_title
                         })
