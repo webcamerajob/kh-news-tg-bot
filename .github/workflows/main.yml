@@ -50,7 +50,12 @@ jobs:
       - name: Run parser
         id: parse_step
         run: |
-          python3 main.py --limit 15 | tee parser_output.txt
+          python3 main.py \
+            --base-url "https://www.khmertimeskh.com" \
+            --slug "national" \
+            --limit 15 \
+            --posted-state-file articles/posted.json | tee parser_output.txt
+          
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
