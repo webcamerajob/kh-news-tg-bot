@@ -3,6 +3,7 @@ import json
 import argparse
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from io import BytesIO
@@ -231,6 +232,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
                     cleaned_text = cleaned_text[len(article["original_title"]):].lstrip()
 
                 full_html = f"{article['html_title']}\n\n{escape_html(cleaned_text)}"
+                full_html = re.sub(r'\n{3,}', '\n\n', full_html).strip()
                 chunks = chunk_text(full_html)
 
                 for i, chunk in enumerate(chunks):
