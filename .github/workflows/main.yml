@@ -1,4 +1,4 @@
-name: Parse & Post Articles
+name: Parse & Post Articles (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-and-publish:
-    name: Parse and Publish
+    name: Parse and Publish (Khmertimes)
     runs-on: ubuntu-latest
     
     steps:
