@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 import logging
 import json
@@ -6,6 +5,7 @@ import hashlib
 import time
 import re
 import os
+import shutil
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
+MAX_POSTED_RECORDS = 100
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
@@ -28,6 +29,33 @@ SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
+
+def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
+    """
+    Удаляет папки со старыми статьями, которые были "вытеснены" из posted.json.
+    """
+    if not posted_ids_path.is_file() or not articles_dir.is_dir():
+        return
+    logging.info("Starting cleanup of old article directories...")
+    try:
+        with open(posted_ids_path, 'r', encoding='utf-8') as f:
+            all_posted_ids = [str(item) for item in json.load(f)]
+        if len(all_posted_ids) <= MAX_POSTED_RECORDS:
+            logging.info("No old articles to clean up.")
+            return
+        ids_to_keep = set(all_posted_ids[-MAX_POSTED_RECORDS:])
+        cleaned_count = 0
+        for article_folder in articles_dir.iterdir():
+            if article_folder.is_dir():
+                dir_id = article_folder.name.split('_', 1)[0]
+                if dir_id.isdigit() and dir_id not in ids_to_keep:
+                    logging.warning(f"🧹 Cleaning up old article directory: {article_folder.name}")
+                    shutil.rmtree(article_folder)
+                    cleaned_count += 1
+        if cleaned_count > 0:
+            logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
+    except Exception as e:
+        logging.error(f"An error occurred during cleanup: {e}")
 
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
@@ -173,8 +201,8 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": post.get("link"),
         "title": title, "text_file": text_file_path.name,
-        "images": sorted([Path(p).name for p in images]),
-        "posted": False, "hash": current_hash, "translated_to": ""
+        "images": sorted([Path(p).name for p in images]), "posted": False,
+        "hash": current_hash, "translated_to": ""
     }
     text_file_path.write_text(raw_text, encoding="utf-8")
 
@@ -198,24 +226,34 @@ def main():
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
     args = parser.parse_args()
 
+    # Запускаем очистку старых папок в самом начале
+    posted_ids_path = Path(args.posted_state_file)
+    cleanup_old_articles(posted_ids_path, OUTPUT_DIR)
+
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
-        
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10) * 3)
+
         catalog = load_catalog()
-        posted_ids = load_posted_ids(Path(args.posted_state_file))
+        posted_ids = load_posted_ids(posted_ids_path)
         
+        new_articles_count = 0
         processed_articles_meta = []
+
         for post in posts:
             if str(post["id"]) not in posted_ids:
                 if meta := parse_and_save(post, args.lang):
                     processed_articles_meta.append(meta)
         
         if processed_articles_meta:
+            existing_ids_in_catalog = {str(item['id']) for item in catalog}
             for meta in processed_articles_meta:
-                catalog = [item for item in catalog if item.get("id") != meta["id"]]
+                if meta['id'] not in existing_ids_in_catalog:
+                    new_articles_count += 1
+                catalog = [item for item in catalog if str(item.get("id")) != meta["id"]]
                 catalog.append(meta)
+
             save_catalog(catalog)
             print("NEW_ARTICLES_STATUS:true")
         else:
