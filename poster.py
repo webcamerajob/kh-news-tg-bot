@@ -166,6 +166,7 @@ def save_posted_ids(all_ids_to_save: Set[str], state_file: Path) -> None:
         logging.error(f"Не удалось сохранить файл состояния {state_file}: {e}")
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark_scale: float):
+    """Основная функция для запуска постера."""
     token, chat_id = os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHANNEL")
     if not token or not chat_id:
         logging.error("Переменные окружения TELEGRAM_TOKEN и TELEGRAM_CHANNEL должны быть установлены.")
@@ -188,16 +189,11 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
                 article_id = str(art_meta.get("id"))
                 if article_id and article_id != 'None' and article_id not in posted_ids:
                     if validated_data := validate_article(art_meta, d):
-                        _, text_path, image_paths, original_title = validated_data
-                        articles_to_post.append({
-                            "id": article_id, "html_title": f"<b>{escape_html(original_title)}</b>",
-                            "text_path": text_path, "image_paths": image_paths,
-                            "original_title": original_title
-                        })
+                        articles_to_post.append(validated_data)
             except Exception as e:
                 logging.warning(f"Не удалось обработать {d.name}: {e}")
 
-    articles_to_post.sort(key=lambda x: int(x["id"]))
+    articles_to_post.sort(key=lambda x: int(x[0].split('<b>ID: ')[-1].split('</b>')[0]) if '<b>ID: ' in x[0] else 0)
     if not articles_to_post:
         logging.info("🔍 Нет новых статей для публикации.")
         return
@@ -208,36 +204,57 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
         sent_count = 0
         newly_posted_ids: Set[str] = set()
         
-        for article in articles_to_post:
+        for article_data in articles_to_post:
             if limit is not None and sent_count >= limit:
-                logging.info(f"Достигнут лимит в {limit} статей.")
                 break
             
-            logging.info(f"Публикуем статью ID={article['id']}...")
+            # Распаковываем данные из validate_article
+            html_title, text_path, image_paths, video_paths, youtube_urls, original_title = article_data
+            aid = str(json.loads((text_path.parent / "meta.json").read_text(encoding="utf-8"))['id'])
+
+            logging.info(f"Публикуем статью ID={aid}...")
+            processed_videos_to_delete = []
             try:
-                if article["image_paths"]:
-                    await send_media_group(client, token, chat_id, article["image_paths"], watermark_scale)
+                if image_paths:
+                    await send_media_group(client, token, chat_id, image_paths, "photo", watermark_scale)
+                
+                processed_videos = [apply_watermark_to_video(vp) for vp in video_paths]
+                valid_processed_videos = [pv for pv in processed_videos if pv and pv.exists()]
+                processed_videos_to_delete.extend(valid_processed_videos)
+                if valid_processed_videos:
+                    await send_media_group(client, token, chat_id, valid_processed_videos, "video", watermark_scale)
 
-                raw_text = article["text_path"].read_text(encoding="utf-8")
+                raw_text = text_path.read_text(encoding="utf-8")
                 cleaned_text = raw_text.lstrip()
-                if cleaned_text.startswith(article["original_title"]):
-                    cleaned_text = cleaned_text[len(article["original_title"]):].lstrip()
+                if cleaned_text.startswith(original_title):
+                    cleaned_text = cleaned_text[len(original_title):].lstrip()
 
-                full_html = f"{article['html_title']}\n\n{escape_html(cleaned_text)}"
+                full_html = f"{html_title}\n\n{escape_html(cleaned_text)}"
+                
+                if youtube_urls:
+                    separator = "\n\n" if cleaned_text.strip() else ""
+                    youtube_links_text = "\n".join(youtube_urls)
+                    full_html += separator + youtube_links_text
+                
+                # --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ: Принудительно убираем лишние переносы ---
+                full_html = re.sub(r'\n{3,}', '\n\n', full_html).strip()
+                # --------------------------------------------------------------------
+                
                 chunks = chunk_text(full_html)
-
                 for i, chunk in enumerate(chunks):
-                    is_last_chunk = (i == len(chunks) - 1)
-                    reply_markup = { "inline_keyboard": [[ {"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, {"text": "Отзывы", "url": "https://t.me/feedback1dollar"} ]]} if is_last_chunk else None
+                    reply_markup = { "inline_keyboard": [[ {"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, {"text": "Отзывы", "url": "https://t.me/feedback1dollar"} ]]} if i == len(chunks) - 1 else None
                     if not await send_message(client, token, chat_id, chunk, reply_markup=reply_markup):
                         raise Exception("Failed to send a message chunk.")
 
-                logging.info(f"✅ Опубликовано ID={article['id']}")
-                newly_posted_ids.add(article['id'])
+                logging.info(f"✅ Опубликовано ID={aid}")
+                newly_posted_ids.add(aid)
                 sent_count += 1
 
             except Exception as e:
-                logging.error(f"❌ Ошибка при публикации ID={article['id']}: {e}", exc_info=True)
+                logging.error(f"❌ Ошибка при публикации ID={aid}: {e}", exc_info=True)
+            finally:
+                for pv in processed_videos_to_delete:
+                    if "wm_" in pv.name: pv.unlink(missing_ok=True)
             
             await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
 
