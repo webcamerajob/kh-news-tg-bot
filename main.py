@@ -31,9 +31,6 @@ SCRAPER_TIMEOUT = (10.0, 60.0)
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
 def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
-    """
-    Удаляет папки со старыми статьями, которые были "вытеснены" из posted.json.
-    """
     if not posted_ids_path.is_file() or not articles_dir.is_dir():
         return
     logging.info("Starting cleanup of old article directories...")
