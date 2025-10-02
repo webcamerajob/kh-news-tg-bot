@@ -53,6 +53,7 @@ jobs:
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
+            --lang 'ru' \
             --limit 15 \
             --posted-state-file articles/posted.json | tee parser_output.txt
           
@@ -66,14 +67,17 @@ jobs:
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
-          python3 poster.py --parsed-dir articles --limit $BATCH_LIMIT
+          python3 poster.py \
+            --parsed-dir articles \
+            --state-file articles/posted.json \
+            --limit $BATCH_LIMIT
 
-      - name: Commit updated data files
+      - name: Commit updated posted.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Сохраняем только posted.json, чтобы избежать конфликтов
+
+          # Сохраняем ТОЛЬКО журнал опубликованных статей, чтобы избежать конфликтов.
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
