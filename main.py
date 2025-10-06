@@ -201,20 +201,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
+    # --- ФИНАЛЬНЫЙ, САМЫЙ ТОЧНЫЙ ФИЛЬТР ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
     srcs = set()
     
-    # Сначала ищем ссылки-обертки, в них картинки лучшего качества
-    for link_tag in article_content.find_all("a", class_="ci-lightbox", limit=10):
-        if href := link_tag.get("href"):
-            srcs.add(href)
+    # Ищем теги <img> с классом 'wp-post-image' внутри контейнера статьи
+    for img_tag in article_content.find_all("img", class_="wp-post-image", limit=10):
+        if url := extract_img_url(img_tag):
+            srcs.add(url)
     
-    # Если по какой-то причине не нашли, используем старый метод как запасной
-    if not srcs:
-        logging.warning(f"No 'ci-lightbox' links found for ID={aid}. Falling back to searching <img> tags.")
-        srcs = {extract_img_url(img) for img in article_content.find_all("img")[:10] if extract_img_url(img)}
-
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -222,7 +217,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
-    # ----------------------------------------------------
+    # -------------------------------------------------------------
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
@@ -230,7 +225,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 images.append(path)
 
     if not images:
-        logging.warning(f"No images found for ID={aid} after all checks. Skipping.")
+        logging.warning(f"No valid article images found for ID={aid}. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
