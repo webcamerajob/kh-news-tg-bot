@@ -225,7 +225,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
     
-    # Сначала нормализуем, потом используем
     normalized_title = normalize_text(orig_title)
     normalized_paras = [normalize_text(p) for p in paras]
     
@@ -249,9 +248,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
-    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
-        if path := save_image(media[0]["source_url"], img_dir):
-            images.append(path)
+    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ ГЛАВНОГО ИЗОБРАЖЕНИЯ ---
+    if not images and "_embedded" in post:
+        media_list = post["_embedded"].get("wp:featuredmedia")
+        # Проверяем, что это список, что он не пустой, и что у первого элемента есть URL
+        if isinstance(media_list, list) and media_list:
+            if source_url := media_list[0].get("source_url"):
+                if path := save_image(source_url, img_dir):
+                    images.append(path)
+    # ----------------------------------------------------
 
     if not images:
         logging.warning(f"No images for ID={aid}; skipping.")
