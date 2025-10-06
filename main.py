@@ -196,20 +196,19 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     if not article_content:
         logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
         return None
+
+    # --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ: Удаляем блок "Related Posts" ---
+    if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
+        related_posts_block.decompose() # Полностью удаляем этот блок из HTML
+        logging.info("Removed 'Related Posts' block before searching for images.")
+    # -----------------------------------------------------------
     
     paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # --- ФИНАЛЬНЫЙ, САМЫЙ ТОЧНЫЙ ФИЛЬТР ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
-    srcs = set()
-    
-    # Ищем теги <img> с классом 'wp-post-image' внутри контейнера статьи
-    for img_tag in article_content.find_all("img", class_="wp-post-image", limit=10):
-        if url := extract_img_url(img_tag):
-            srcs.add(url)
-    
+    srcs = {extract_img_url(img) for img in article_content.find_all("img")[:10] if extract_img_url(img)}
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -217,7 +216,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
-    # -------------------------------------------------------------
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
