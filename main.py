@@ -194,28 +194,22 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     
     article_content = soup.find("div", class_="entry-content")
     if not article_content:
-        logging.warning(f"Could not find article content container for ID={aid}. Using full page.")
-        article_content = soup # Запасной вариант - ищем по всей странице
+        logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
+        return None
+
+    # --- ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ: Удаляем блок "Related Posts" ПЕРЕД поиском ---
+    if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
+        related_posts_block.decompose() # Полностью удаляем этот блок из HTML
+        logging.info("Removed 'Related Posts' block before searching for images.")
+    # -------------------------------------------------------------------------
     
     paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
-    srcs = set()
-    
-    # 1. Сначала ищем ссылки-обертки (самый надежный метод)
-    for link_tag in article_content.find_all("a", class_="ci-lightbox", limit=10):
-        if href := link_tag.get("href"):
-            srcs.add(href)
-    
-    # 2. Если ничего не нашли, ищем картинки по классу 'wp-post-image'
-    if not srcs:
-        for img_tag in article_content.find_all("img", class_="wp-post-image", limit=10):
-            if url := extract_img_url(img_tag):
-                srcs.add(url)
-    
+    # Теперь ищем картинки в ОЧИЩЕННОМ HTML
+    srcs = {extract_img_url(img) for img in article_content.find_all("img")[:10] if extract_img_url(img)}
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -223,7 +217,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
-    # ----------------------------------------------------
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
@@ -231,7 +224,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 images.append(path)
 
     if not images:
-        logging.warning(f"No valid article images found for ID={aid} after all checks. Skipping.")
+        logging.warning(f"No valid article images found for ID={aid}. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
