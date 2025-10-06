@@ -194,21 +194,27 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     
     article_content = soup.find("div", class_="entry-content")
     if not article_content:
-        logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
-        return None
+        logging.warning(f"Could not find article content container for ID={aid}. Using full page.")
+        article_content = soup # Запасной вариант - ищем по всей странице
     
     paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # --- ФИНАЛЬНЫЙ, САМЫЙ ТОЧНЫЙ ФИЛЬТР ИЗОБРАЖЕНИЙ ---
+    # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
     srcs = set()
     
-    # Ищем теги <img> с классом 'attachment-post-thumbnail' ИСКЛЮЧИТЕЛЬНО внутри контейнера статьи
-    for img_tag in article_content.find_all("img", class_="attachment-post-thumbnail", limit=10):
-        if url := extract_img_url(img_tag):
-            srcs.add(url)
+    # 1. Сначала ищем ссылки-обертки (самый надежный метод)
+    for link_tag in article_content.find_all("a", class_="ci-lightbox", limit=10):
+        if href := link_tag.get("href"):
+            srcs.add(href)
+    
+    # 2. Если ничего не нашли, ищем картинки по классу 'wp-post-image'
+    if not srcs:
+        for img_tag in article_content.find_all("img", class_="wp-post-image", limit=10):
+            if url := extract_img_url(img_tag):
+                srcs.add(url)
     
     images: List[str] = []
     if srcs:
@@ -217,16 +223,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
-    # -------------------------------------------------------------
+    # ----------------------------------------------------
 
-    # Запасной вариант (fallback) для главного изображения из API
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
             if path := save_image(source_url, img_dir):
                 images.append(path)
 
     if not images:
-        logging.warning(f"No valid article images found for ID={aid}. Skipping.")
+        logging.warning(f"No valid article images found for ID={aid} after all checks. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
