@@ -21,7 +21,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-MAX_POSTED_RECORDS = 100
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
@@ -29,6 +28,13 @@ SCRAPER = cloudscraper.create_scraper()
 SCRAPER_TIMEOUT = (10.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
+
+def normalize_text(text: str) -> str:
+    """Заменяет специальные типографские символы на их простые аналоги."""
+    replacements = {'–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'"}
+    for special, simple in replacements.items():
+        text = text.replace(special, simple)
+    return text
 
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
@@ -42,7 +48,11 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    attributes_to_check = ["data-brsrcset", "data-breeze", "data-src", "data-lazy-src", "data-original", "srcset", "src"]
+    """Извлекает URL изображения из тега <img>, проверяя множество атрибутов."""
+    attributes_to_check = [
+        "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
+        "data-original", "srcset", "src",
+    ]
     for attr in attributes_to_check:
         if src_val := img_tag.get(attr):
             return src_val.split(',')[0].split()[0]
@@ -51,7 +61,6 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
 def fetch_category_id(base_url: str, slug: str) -> int:
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
-    # ... (код функции без изменений) ...
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
@@ -65,9 +74,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             time.sleep(delay)
     raise RuntimeError("Failed fetching category id")
 
-
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    # ... (код функции без изменений) ...
     logging.info(f"Fetching posts for category {cat_id}, per_page={per_page}...")
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
@@ -83,7 +90,6 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str
     return []
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
-    # ... (код функции без изменений) ...
     logging.info(f"Saving image from {src_url}...")
     folder.mkdir(parents=True, exist_ok=True)
     fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
@@ -101,7 +107,6 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
     logging.error(f"Failed saving image {fn} after {MAX_RETRIES} attempts")
     return None
 
-# Функции load_catalog и save_catalog остаются без изменений
 def load_catalog() -> List[Dict[str, Any]]:
     if not CATALOG_PATH.exists(): return []
     try:
@@ -127,8 +132,10 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
     if not text or not isinstance(text, str): return ""
     logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
     try:
-        translated = ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
-        if isinstance(translated, str): return translated
+        normalized_text = normalize_text(text)
+        translated = ts.translate_text(normalized_text, translator=provider, from_language="en", to_language=to_lang)
+        if isinstance(translated, str):
+            return translated
         return None
     except Exception as e:
         logging.warning(f"Translation error: {e}")
@@ -138,11 +145,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     aid = str(post["id"])
     slug = post["slug"]
     link = post.get("link")
-    if not link: return None
+    if not link:
+        logging.warning(f"Article ID={aid} has no link. Skipping.")
+        return None
 
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
-    
+    meta_path = art_dir / "meta.json"
+
     logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
     try:
         page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
@@ -152,10 +162,24 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
         logging.error(f"Failed to fetch full page for ID={aid}: {e}")
         return None
 
-    # --- ДИАГНОСТИКА ---
-    (art_dir / "_debug_1_full_page.html").write_text(page_html, encoding="utf-8")
-    logging.info(f"Saved _debug_1_full_page.html for ID={aid}")
-    # --------------------
+    current_hash = hashlib.sha256(page_html.encode()).hexdigest()
+    if meta_path.exists():
+        try:
+            existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
+                logging.info(f"Skipping unchanged article ID={aid}")
+                return existing_meta
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
+
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    title = orig_title
+    if translate_to:
+        translated_title = translate_text(orig_title, to_lang=translate_to)
+        if translated_title is None:
+            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+            return None
+        title = translated_title
 
     soup = BeautifulSoup(page_html, "html.parser")
     
@@ -163,28 +187,57 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     if not article_content:
         logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
         return None
-        
-    # --- ДИАГНОСТИКА ---
-    (art_dir / "_debug_2_article_content.html").write_text(str(article_content), encoding="utf-8")
-    logging.info(f"Saved _debug_2_article_content.html for ID={aid}")
-    # --------------------
-
-    # Просто логируем, но не удаляем блок, чтобы увидеть его в debug-файле
-    if article_content.find("ul", class_="rp4wp-posts-list"):
-        logging.info("Found 'Related Posts' block.")
-        
-    # Ищем картинки в найденном контейнере
-    img_tags = article_content.find_all("img", limit=15)
-    if img_tags:
-        logging.info(f"Found {len(img_tags)} img tags inside entry-content. First 5:")
-        for img_tag in img_tags[:5]:
-            logging.info(f"DEBUG_IMG_TAG: {img_tag}")
-    else:
-        logging.warning(f"No img tags found inside entry-content for ID={aid}.")
     
-    # Мы не будем скачивать картинки в этом диагностическом запуске, просто вернём None
-    logging.warning(f"DIAGNOSTIC RUN: Skipping actual processing for ID={aid}")
-    return None # Завершаем здесь, чтобы не выполнять остальную логику
+    if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
+        related_posts_block.decompose()
+        logging.info("Removed 'Related Posts' block.")
+
+    paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
+    raw_text = "\n\n".join(paras)
+    raw_text = BAD_RE.sub("", raw_text)
+
+    img_dir = art_dir / "images"
+    srcs = {extract_img_url(img) for img in article_content.find_all("img", class_="attachment-post-thumbnail")[:10] if extract_img_url(img)}
+    images: List[str] = []
+    if srcs:
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
+            for fut in as_completed(futures):
+                if path := fut.result():
+                    images.append(path)
+
+    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
+        if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
+            if path := save_image(source_url, img_dir):
+                images.append(path)
+
+    if not images:
+        logging.warning(f"No valid article images found for ID={aid}. Skipping.")
+        return None
+    
+    text_file_path = art_dir / "content.txt"
+    meta = {
+        "id": aid, "slug": slug, "date": post.get("date"), "link": link,
+        "title": title, "text_file": text_file_path.name,
+        "images": sorted([Path(p).name for p in images]), "posted": False,
+        "hash": current_hash, "translated_to": ""
+    }
+    text_file_path.write_text(raw_text, encoding="utf-8")
+
+    if translate_to:
+        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
+        if trans_text is None:
+             logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+             return None
+        
+        trans_file_path = art_dir / f"content.{translate_to}.txt"
+        final_translated_text = f"{title}\n\n{trans_text}"
+        trans_file_path.write_text(final_translated_text, encoding="utf-8")
+        meta.update({"translated_to": translate_to, "text_file": trans_file_path.name})
+
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return meta
 
 def main():
     parser = argparse.ArgumentParser(description="Parser")
@@ -195,16 +248,29 @@ def main():
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
     args = parser.parse_args()
 
+    # cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
+
     try:
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10) * 3)
+
+        catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
         
+        processed_articles_meta = []
         for post in posts:
             if str(post["id"]) not in posted_ids:
-                parse_and_save(post, args.lang)
+                if meta := parse_and_save(post, args.lang):
+                    processed_articles_meta.append(meta)
         
-        print("NEW_ARTICLES_STATUS:false") # Всегда false, так как мы ничего не публикуем
+        if processed_articles_meta:
+            for meta in processed_articles_meta:
+                catalog = [item for item in catalog if item.get("id") != meta["id"]]
+                catalog.append(meta)
+            save_catalog(catalog)
+            print("NEW_ARTICLES_STATUS:true")
+        else:
+            print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
         logging.exception("Fatal error in main:")
