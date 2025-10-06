@@ -30,20 +30,15 @@ SCRAPER_TIMEOUT = (10.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
-def normalize_text(text: str) -> str:
-    """Заменяет специальные типографские символы на их простые аналоги."""
-    replacements = {'–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'"}
-    for special, simple in replacements.items():
-        text = text.replace(special, simple)
-    return text
-
 def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
-    if not posted_ids_path.is_file() or not articles_dir.is_dir(): return
+    if not posted_ids_path.is_file() or not articles_dir.is_dir():
+        return
     logging.info("Starting cleanup of old article directories...")
     try:
         with open(posted_ids_path, 'r', encoding='utf-8') as f:
             all_posted_ids = [str(item) for item in json.load(f)]
-        if len(all_posted_ids) <= MAX_POSTED_RECORDS: return
+        if len(all_posted_ids) <= MAX_POSTED_RECORDS:
+            return
         ids_to_keep = set(all_posted_ids[-MAX_POSTED_RECORDS:])
         cleaned_count = 0
         for article_folder in articles_dir.iterdir():
@@ -53,7 +48,8 @@ def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
                     logging.warning(f"🧹 Cleaning up old article directory: {article_folder.name}")
                     shutil.rmtree(article_folder)
                     cleaned_count += 1
-        if cleaned_count > 0: logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
+        if cleaned_count > 0:
+            logging.info(f"Cleanup complete. Removed {cleaned_count} old article directories.")
     except Exception as e:
         logging.error(f"An error occurred during cleanup: {e}")
 
@@ -69,26 +65,13 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    """
-    Извлекает URL изображения из тега <img>, проверяя множество
-    атрибутов для поддержки "ленивой загрузки", включая плагин Breeze.
-    """
-    # Список всех возможных атрибутов, от самых специфичных к стандартным
     attributes_to_check = [
-        "data-brsrcset",    # Добавлено для плагина Breeze
-        "data-breeze",      # Добавлено для плагина Breeze
-        "data-src",
-        "data-lazy-src",
-        "data-original",
-        "srcset",
-        "src",
+        "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
+        "data-original", "srcset", "src",
     ]
-    
     for attr in attributes_to_check:
         if src_val := img_tag.get(attr):
-            # Берём первую ссылку, убирая лишние дескрипторы (e.g., "750w")
             return src_val.split(',')[0].split()[0]
-            
     return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
@@ -161,46 +144,14 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error(f"Failed to save catalog: {e}")
 
-def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> Optional[str]:
+def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> str:
     if not text or not isinstance(text, str): return ""
     logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
     try:
-        translated = ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
-        if isinstance(translated, str): return translated
-        logging.warning(f"Translator returned non-str for text: {text[:50]}")
-        return None
+        return ts.translate_text(text, translator=provider, from_language="en", to_language=to_lang)
     except Exception as e:
         logging.warning(f"Translation error: {e}")
-        return None
-
-def translate_in_chunks(paragraphs: List[str], to_lang: str, provider: str = "yandex", chunk_size: int = 4500) -> Optional[List[str]]:
-    """Переводит список абзацев, объединяя их в чанки для сохранения контекста."""
-    if not paragraphs: return []
-    logging.info(f"Translating {len(paragraphs)} paragraphs in chunks to '{to_lang}'...")
-    
-    translated_chunks = []
-    current_chunk_paras = []
-    current_len = 0
-    
-    for p in paragraphs:
-        if current_len + len(p) + 2 > chunk_size and current_chunk_paras:
-            text_to_translate = "\n\n".join(current_chunk_paras)
-            translated_part = translate_text(text_to_translate, to_lang=to_lang, provider=provider)
-            if translated_part is None: return None # Прерываем, если часть не перевелась
-            translated_chunks.append(translated_part)
-            current_chunk_paras, current_len = [p], len(p)
-        else:
-            current_chunk_paras.append(p)
-            current_len += len(p) + 2
-            
-    if current_chunk_paras:
-        text_to_translate = "\n\n".join(current_chunk_paras)
-        translated_part = translate_text(text_to_translate, to_lang=to_lang, provider=provider)
-        if translated_part is None: return None # Прерываем, если последняя часть не перевелась
-        translated_chunks.append(translated_part)
-
-    # Собираем всё обратно в единый список абзацев
-    return "\n\n".join(translated_chunks).split("\n\n")
+    return text
 
 def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
@@ -220,26 +171,26 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = orig_title
-    
+    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
+
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
     
-    normalized_title = normalize_text(orig_title)
-    normalized_paras = [normalize_text(p) for p in paras]
-    
-    if translate_to:
-        translated_title = translate_text(normalized_title, to_lang=translate_to)
-        if translated_title is None:
-            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
-            return None
-        title = translated_title
-
-    raw_text = "\n\n".join(normalized_paras)
+    raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
+    # --- ДИАГНОСТИКА: Логируем все найденные теги <img> ---
+    img_tags = soup.find_all("img")
+    if img_tags:
+        logging.info(f"Found {len(img_tags)} img tags for article ID={aid}. First 5:")
+        for img_tag in img_tags[:5]:
+            logging.info(f"DEBUG_IMG_TAG: {img_tag}")
+    else:
+        logging.warning(f"No img tags found in content for article ID={aid}.")
+    # ---------------------------------------------------
+
     img_dir = art_dir / "images"
-    srcs = {extract_img_url(img) for img in soup.find_all("img")[:10] if extract_img_url(img)}
+    srcs = {extract_img_url(img) for img in img_tags[:10] if extract_img_url(img)}
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -248,15 +199,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
-    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ ГЛАВНОГО ИЗОБРАЖЕНИЯ ---
-    if not images and "_embedded" in post:
-        media_list = post["_embedded"].get("wp:featuredmedia")
-        # Проверяем, что это список, что он не пустой, и что у первого элемента есть URL
-        if isinstance(media_list, list) and media_list:
-            if source_url := media_list[0].get("source_url"):
-                if path := save_image(source_url, img_dir):
-                    images.append(path)
-    # ----------------------------------------------------
+    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
+        if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
+            if path := save_image(source_url, img_dir):
+                images.append(path)
 
     if not images:
         logging.warning(f"No images for ID={aid}; skipping.")
@@ -272,12 +218,11 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        translated_paras = translate_in_chunks(normalized_paras, to_lang=translate_to)
-        if translated_paras is None:
-            logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
-            return None
-
-        trans_text = "\n\n".join(translated_paras)
+        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
+        if trans_text is None or trans_text == "\n\n".join(paras):
+             logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+             return None
+        
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
         trans_file_path.write_text(final_translated_text, encoding="utf-8")
