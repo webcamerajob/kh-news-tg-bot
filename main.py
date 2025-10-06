@@ -69,9 +69,26 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    for attr in ("data-src", "data-lazy-src", "data-srcset", "srcset", "src"):
-        if val := img_tag.get(attr):
-            return val.split()[0]
+    """
+    Извлекает URL изображения из тега <img>, проверяя множество
+    атрибутов для поддержки "ленивой загрузки".
+    """
+    # Список всех возможных атрибутов, от самых вероятных к стандартным
+    attributes_to_check = [
+        "data-src",
+        "data-lazy-src",
+        "data-original",
+        "data-url",
+        "src",
+        "srcset",
+        "data-srcset"
+    ]
+    
+    for attr in attributes_to_check:
+        if src_val := img_tag.get(attr):
+            # Берём первую ссылку, если в атрибуте их несколько (как в srcset)
+            return src_val.split(',')[0].split()[0]
+            
     return None
 
 def fetch_category_id(base_url: str, slug: str) -> int:
