@@ -156,11 +156,27 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
 def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
     slug = post["slug"]
+    link = post.get("link")
+    if not link:
+        logging.warning(f"Article ID={aid} has no link. Skipping.")
+        return None
+
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
-    current_hash = hashlib.sha256(post["content"]["rendered"].encode()).hexdigest()
+    # --- ИЗМЕНЕНИЕ: Загружаем полный HTML со страницы статьи ---
+    logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
+    try:
+        page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
+        page_response.raise_for_status()
+        page_html = page_response.text
+    except Exception as e:
+        logging.error(f"Failed to fetch full page for ID={aid}: {e}")
+        return None
+    # --------------------------------------------------------
+
+    current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -173,24 +189,21 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
 
-    soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
-    paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
+    # Теперь парсим полный HTML, а не `post["content"]["rendered"]`
+    soup = BeautifulSoup(page_html, "html.parser")
     
+    # Ищем основной контейнер статьи, чтобы не захватить лишнего
+    article_content = soup.find("div", class_="entry-content")
+    if not article_content:
+        article_content = soup # Если не нашли, используем весь `soup`
+    
+    paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # --- ДИАГНОСТИКА: Логируем все найденные теги <img> ---
-    img_tags = soup.find_all("img")
-    if img_tags:
-        logging.info(f"Found {len(img_tags)} img tags for article ID={aid}. First 5:")
-        for img_tag in img_tags[:5]:
-            logging.info(f"DEBUG_IMG_TAG: {img_tag}")
-    else:
-        logging.warning(f"No img tags found in content for article ID={aid}.")
-    # ---------------------------------------------------
-
     img_dir = art_dir / "images"
-    srcs = {extract_img_url(img) for img in img_tags[:10] if extract_img_url(img)}
+    # Ищем картинки в основном контейнере
+    srcs = {extract_img_url(img) for img in article_content.find_all("img")[:10] if extract_img_url(img)}
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -199,18 +212,19 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
+    # Логика для featured media остаётся как запасной вариант
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
             if path := save_image(source_url, img_dir):
                 images.append(path)
 
     if not images:
-        logging.warning(f"No images for ID={aid}; skipping.")
+        logging.warning(f"No images found for ID={aid} even after fetching full page. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
     meta = {
-        "id": aid, "slug": slug, "date": post.get("date"), "link": post.get("link"),
+        "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": title, "text_file": text_file_path.name,
         "images": sorted([Path(p).name for p in images]), "posted": False,
         "hash": current_hash, "translated_to": ""
