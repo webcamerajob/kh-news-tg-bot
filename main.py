@@ -165,7 +165,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
-    # --- ИЗМЕНЕНИЕ: Загружаем полный HTML со страницы статьи ---
     logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
     try:
         page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
@@ -174,7 +173,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     except Exception as e:
         logging.error(f"Failed to fetch full page for ID={aid}: {e}")
         return None
-    # --------------------------------------------------------
 
     current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
@@ -188,21 +186,26 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
+    if translate_to and (title is None or title == orig_title):
+        logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+        return None
 
-    # Теперь парсим полный HTML, а не `post["content"]["rendered"]`
     soup = BeautifulSoup(page_html, "html.parser")
     
-    # Ищем основной контейнер статьи, чтобы не захватить лишнего
+    # --- ИСПРАВЛЕНИЕ: Ищем основной контейнер статьи ---
     article_content = soup.find("div", class_="entry-content")
     if not article_content:
-        article_content = soup # Если не нашли, используем весь `soup`
+        # Если контейнер не найден, это может быть не статья, пропускаем
+        logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
+        return None
+    # ----------------------------------------------------
     
     paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
     img_dir = art_dir / "images"
-    # Ищем картинки в основном контейнере
+    # --- ИСПРАВЛЕНИЕ: Ищем картинки ТОЛЬКО внутри контейнера статьи ---
     srcs = {extract_img_url(img) for img in article_content.find_all("img")[:10] if extract_img_url(img)}
     images: List[str] = []
     if srcs:
@@ -212,14 +215,13 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
-    # Логика для featured media остаётся как запасной вариант
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
             if path := save_image(source_url, img_dir):
                 images.append(path)
 
     if not images:
-        logging.warning(f"No images found for ID={aid} even after fetching full page. Skipping.")
+        logging.warning(f"No images found for ID={aid} in article body. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
