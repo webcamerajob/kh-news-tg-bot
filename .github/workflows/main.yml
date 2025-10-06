@@ -1,4 +1,4 @@
-name: Parse & Post Articles (Khmertimes)
+name: Parse & Post Articles
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build-and-publish:
-    name: Parse and Publish (Khmertimes)
+    name: Parse and Publish
     runs-on: ubuntu-latest
     
     steps:
@@ -70,20 +70,20 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated posted.json
+      - name: Commit updated data files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Сохраняем ТОЛЬКО журнал опубликованных статей, чтобы избежать конфликтов.
-          if [ -f "articles/posted.json" ]; then
-            git add articles/posted.json
+          # ИСПРАВЛЕНО: Добавляем ВСЮ папку articles, если она существует
+          if [ -d "articles" ]; then
+            git add articles/
           fi
           
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update posted.json"
+            git commit -m "chore: update articles and state files"
             git pull --rebase origin main
             git push
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ No changes to commit"
           fi
