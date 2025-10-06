@@ -203,23 +203,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = orig_title
-    
+    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
+    if translate_to and title == orig_title:
+        logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+        return None
+
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
     
-    # Сначала нормализуем, потом используем
-    normalized_title = normalize_text(orig_title)
-    normalized_paras = [normalize_text(p) for p in paras]
-    
-    if translate_to:
-        translated_title = translate_text(normalized_title, to_lang=translate_to)
-        if translated_title is None:
-            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
-            return None
-        title = translated_title
-
-    raw_text = "\n\n".join(normalized_paras)
+    raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
     img_dir = art_dir / "images"
@@ -232,9 +224,15 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
-    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
-        if path := save_image(media[0]["source_url"], img_dir):
-            images.append(path)
+    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ ГЛАВНОГО ИЗОБРАЖЕНИЯ ---
+    if not images and "_embedded" in post:
+        media_list = post["_embedded"].get("wp:featuredmedia")
+        # Проверяем, что это список, что он не пустой, и что у первого элемента есть URL
+        if isinstance(media_list, list) and media_list:
+            if source_url := media_list[0].get("source_url"):
+                if path := save_image(source_url, img_dir):
+                    images.append(path)
+    # ----------------------------------------------------
 
     if not images:
         logging.warning(f"No images for ID={aid}; skipping.")
@@ -250,12 +248,11 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        translated_paras = translate_in_chunks(normalized_paras, to_lang=translate_to)
-        if translated_paras is None:
-            logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
-            return None
-
-        trans_text = "\n\n".join(translated_paras)
+        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
+        if trans_text is None or trans_text == "\n\n".join(paras):
+             logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+             return None
+        
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
         trans_file_path.write_text(final_translated_text, encoding="utf-8")
