@@ -71,22 +71,22 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
 def extract_img_url(img_tag: Any) -> Optional[str]:
     """
     Извлекает URL изображения из тега <img>, проверяя множество
-    атрибутов для поддержки "ленивой загрузки".
+    атрибутов для поддержки "ленивой загрузки", включая плагин Breeze.
     """
-    # Список всех возможных атрибутов, от самых вероятных к стандартным
+    # Список всех возможных атрибутов, от самых специфичных к стандартным
     attributes_to_check = [
+        "data-brsrcset",    # Добавлено для плагина Breeze
+        "data-breeze",      # Добавлено для плагина Breeze
         "data-src",
         "data-lazy-src",
         "data-original",
-        "data-url",
-        "src",
         "srcset",
-        "data-srcset"
+        "src",
     ]
     
     for attr in attributes_to_check:
         if src_val := img_tag.get(attr):
-            # Берём первую ссылку, если в атрибуте их несколько (как в srcset)
+            # Берём первую ссылку, убирая лишние дескрипторы (e.g., "750w")
             return src_val.split(',')[0].split()[0]
             
     return None
@@ -220,15 +220,23 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
-    if translate_to and title == orig_title:
-        logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
-        return None
-
+    title = orig_title
+    
     soup = BeautifulSoup(post["content"]["rendered"], "html.parser")
     paras = [p.get_text(strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
     
-    raw_text = "\n\n".join(paras)
+    # Сначала нормализуем, потом используем
+    normalized_title = normalize_text(orig_title)
+    normalized_paras = [normalize_text(p) for p in paras]
+    
+    if translate_to:
+        translated_title = translate_text(normalized_title, to_lang=translate_to)
+        if translated_title is None:
+            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+            return None
+        title = translated_title
+
+    raw_text = "\n\n".join(normalized_paras)
     raw_text = BAD_RE.sub("", raw_text)
 
     img_dir = art_dir / "images"
@@ -241,15 +249,9 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
                 if path := fut.result():
                     images.append(path)
 
-    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ ГЛАВНОГО ИЗОБРАЖЕНИЯ ---
-    if not images and "_embedded" in post:
-        media_list = post["_embedded"].get("wp:featuredmedia")
-        # Проверяем, что это список, что он не пустой, и что у первого элемента есть URL
-        if isinstance(media_list, list) and media_list:
-            if source_url := media_list[0].get("source_url"):
-                if path := save_image(source_url, img_dir):
-                    images.append(path)
-    # ----------------------------------------------------
+    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
+        if path := save_image(media[0]["source_url"], img_dir):
+            images.append(path)
 
     if not images:
         logging.warning(f"No images for ID={aid}; skipping.")
@@ -265,11 +267,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
-        if trans_text is None or trans_text == "\n\n".join(paras):
-             logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
-             return None
-        
+        translated_paras = translate_in_chunks(normalized_paras, to_lang=translate_to)
+        if translated_paras is None:
+            logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+            return None
+
+        trans_text = "\n\n".join(translated_paras)
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
         trans_file_path.write_text(final_translated_text, encoding="utf-8")
