@@ -173,13 +173,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    title = orig_title
-    if translate_to:
-        translated_title = translate_text(orig_title, to_lang=translate_to)
-        if translated_title is None:
-            logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
-            return None
-        title = translated_title
+    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
+    if translate_to and (title is None or title == orig_title):
+        logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
+        return None
 
     soup = BeautifulSoup(page_html, "html.parser")
     
@@ -190,21 +187,37 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     
     if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
         related_posts_block.decompose()
-        logging.info("Removed 'Related Posts' block.")
-
+        logging.info("Removed 'Related Posts' block before searching for images.")
+    
     paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
+    # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
-    srcs = {extract_img_url(img) for img in article_content.find_all("img", class_="attachment-post-thumbnail")[:10] if extract_img_url(img)}
+    srcs = set()
+    
+    # Шаг 1: Ищем ссылки на полноразмерные изображения в лайтбоксах
+    for link_tag in article_content.find_all("a", class_="ci-lightbox"):
+        if href := link_tag.get("href"):
+            srcs.add(href)
+    
+    # Шаг 2: Ищем все остальные изображения в тексте статьи
+    for img_tag in article_content.find_all("img"):
+        if url := extract_img_url(img_tag):
+            srcs.add(url)
+
+    # Ограничиваем общее количество картинок до 10
+    limited_srcs = list(srcs)[:10]
+    
     images: List[str] = []
-    if srcs:
+    if limited_srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
-            futures = {ex.submit(save_image, url, img_dir): url for url in srcs}
+            futures = {ex.submit(save_image, url, img_dir): url for url in limited_srcs}
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
+    # ----------------------------------------------------
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
@@ -226,7 +239,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
 
     if translate_to:
         trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
-        if trans_text is None:
+        if trans_text is None or trans_text == "\n\n".join(paras):
              logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
              return None
         
