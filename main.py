@@ -180,44 +180,45 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
 
     soup = BeautifulSoup(page_html, "html.parser")
     
-    article_content = soup.find("div", class_="entry-content")
-    if not article_content:
-        logging.warning(f"Could not find article content container for ID={aid}. Skipping.")
-        return None
-    
-    if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
-        related_posts_block.decompose()
-        logging.info("Removed 'Related Posts' block before searching for images.")
-    
-    paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
-    raw_text = "\n\n".join(paras)
-    raw_text = BAD_RE.sub("", raw_text)
-
     # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
     srcs = set()
     
-    # Шаг 1: Ищем ссылки на полноразмерные изображения в лайтбоксах
-    for link_tag in article_content.find_all("a", class_="ci-lightbox"):
+    # Шаг 1: Ищем главные фото (в 'ci-lightbox') по ВСЕЙ странице
+    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
         if href := link_tag.get("href"):
             srcs.add(href)
+            
+    # Шаг 2: Ищем остальные фото в ОСНОВНОМ ТЕКСТЕ статьи
+    if article_content := soup.find("div", class_="entry-content"):
+        # Удаляем блок "Related Posts" из основного текста, если он там есть
+        if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
+            related_posts_block.decompose()
+        
+        # Ищем остальные картинки
+        for img_tag in article_content.find_all("img"):
+            if url := extract_img_url(img_tag):
+                if not url.endswith(('.gif', '.svg')): # Игнорируем баннеры и иконки
+                    srcs.add(url)
     
-    # Шаг 2: Ищем все остальные изображения в тексте статьи
-    for img_tag in article_content.find_all("img"):
-        if url := extract_img_url(img_tag):
-            srcs.add(url)
+    # -----------------------------------------------------------
 
-    # Ограничиваем общее количество картинок до 10
-    limited_srcs = list(srcs)[:10]
+    paras = []
+    if article_content:
+        paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
     
+    raw_text = "\n\n".join(paras)
+    raw_text = BAD_RE.sub("", raw_text)
+
     images: List[str] = []
-    if limited_srcs:
+    if srcs:
+        # Ограничиваем общее количество картинок до 10
+        limited_srcs = list(srcs)[:10]
         with ThreadPoolExecutor(max_workers=5) as ex:
             futures = {ex.submit(save_image, url, img_dir): url for url in limited_srcs}
             for fut in as_completed(futures):
                 if path := fut.result():
                     images.append(path)
-    # ----------------------------------------------------
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
