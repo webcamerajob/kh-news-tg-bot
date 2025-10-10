@@ -70,6 +70,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
             return data[0]["id"]
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
+            error_details = f"Status Code: {r.status_code}, Response Text: '{r.text[:200]}...'"
             logging.warning(f"Error fetching category (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
     raise RuntimeError("Failed fetching category id")
