@@ -65,12 +65,17 @@ def fetch_category_id(base_url: str, slug: str) -> int:
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
-            data = r.json()
-            if not data: raise RuntimeError(f"Category '{slug}' not found")
+            # Добавлено более детальное логирование ошибки JSON
+            try:
+                data = r.json()
+            except json.JSONDecodeError as jde:
+                logging.error(f"JSON Decode Error for {endpoint}: {jde}. Response content: '{r.text[:500]}...'")
+                raise # Перебрасываем исключение
+            
+            if not data: raise RuntimeError(f"Category '{slug}' not found or empty response")
             return data[0]["id"]
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            error_details = f"Status Code: {r.status_code}, Response Text: '{r.text[:200]}...'"
             logging.warning(f"Error fetching category (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
     raise RuntimeError("Failed fetching category id")
@@ -142,7 +147,23 @@ def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> 
         logging.warning(f"Translation error: {e}")
         return None
 
-def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str, Any]]:
+# --- ИЗМЕНЕНО: Функция загрузки стоп-фраз ---
+def load_stopwords(file_path: Optional[Path]) -> List[str]:
+    if not file_path or not file_path.exists():
+        logging.info("No stopwords file specified or file does not exist. No titles will be filtered by stopwords.")
+        return []
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            stopwords = [line.strip().lower() for line in f if line.strip()]
+            logging.info(f"Loaded {len(stopwords)} stopwords from {file_path}")
+            return stopwords
+    except Exception as e:
+        logging.error(f"Error loading stopwords from {file_path}: {e}. No titles will be filtered by stopwords.")
+        return []
+
+# --- МОДИФИКАЦИЯ: parse_and_save теперь принимает список стоп-фраз ---
+def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
     slug = post["slug"]
     link = post.get("link")
@@ -153,6 +174,17 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
+
+    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    
+    # --- ЛОГИКА ФИЛЬТРАЦИИ ПО ЗАГОЛОВКУ СТОП-ФРАЗАМИ ---
+    if stopwords:
+        normalized_title = orig_title.lower()
+        for phrase in stopwords:
+            if phrase in normalized_title:
+                logging.info(f"Skipping article ID={aid} due to stopword '{phrase}' in title: '{orig_title}'")
+                return None
+    # --- КОНЕЦ ЛОГИКИ ФИЛЬТРАЦИИ ---
 
     logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
     try:
@@ -173,7 +205,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
         except (json.JSONDecodeError, UnicodeDecodeError):
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
     if translate_to and (title is None or title == orig_title):
         logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
@@ -181,29 +212,22 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
 
     soup = BeautifulSoup(page_html, "html.parser")
     
-    # --- ИСПРАВЛЕННАЯ ЛОГИКА ПОИСКА ИЗОБРАЖЕНИЙ ---
     img_dir = art_dir / "images"
     srcs = set()
     
-    # Шаг 1: Ищем главные фото (в 'ci-lightbox') по ВСЕЙ странице
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
         if href := link_tag.get("href"):
             srcs.add(href)
             
-    # Шаг 2: Ищем остальные фото в ОСНОВНОМ ТЕКСТЕ статьи
     if article_content := soup.find("div", class_="entry-content"):
-        # Удаляем блок "Related Posts" из основного текста, если он там есть
         if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
             related_posts_block.decompose()
         
-        # Ищем остальные картинки
         for img_tag in article_content.find_all("img"):
             if url := extract_img_url(img_tag):
-                if not url.endswith(('.gif', '.svg')): # Игнорируем баннеры и иконки
+                if not url.endswith(('.gif', '.svg')):
                     srcs.add(url)
     
-    # -----------------------------------------------------------
-
     paras = []
     if article_content:
         paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
@@ -213,7 +237,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str) -> Optional[Dict[str
 
     images: List[str] = []
     if srcs:
-        # Ограничиваем общее количество картинок до 10
         limited_srcs = list(srcs)[:10]
         with ThreadPoolExecutor(max_workers=5) as ex:
             futures = {ex.submit(save_image, url, img_dir): url for url in limited_srcs}
@@ -261,6 +284,9 @@ def main():
     parser.add_argument("-n", "--limit", type=int, default=10, help="Max posts to parse")
     parser.add_argument("-l", "--lang", type=str, default="ru", help="Translate to language code")
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
+    # --- ИЗМЕНЕНО: Аргумент теперь называется --stopwords-file ---
+    parser.add_argument("--stopwords-file", type=str, help="Path to a file with stopwords (one per line) to filter titles.")
+    # --- КОНЕЦ ИЗМЕНЕННОГО АРГУМЕНТА ---
     args = parser.parse_args()
 
     # cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
@@ -272,10 +298,15 @@ def main():
         catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
         
+        # --- ИЗМЕНЕНО: Загрузка стоп-фраз ---
+        stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
+        # --- КОНЕЦ ИЗМЕНЕННОГО ШАГА ---
+        
         processed_articles_meta = []
         for post in posts:
             if str(post["id"]) not in posted_ids:
-                if meta := parse_and_save(post, args.lang):
+                # --- Передаем stopwords в parse_and_save ---
+                if meta := parse_and_save(post, args.lang, stopwords):
                     processed_articles_meta.append(meta)
         
         if processed_articles_meta:
