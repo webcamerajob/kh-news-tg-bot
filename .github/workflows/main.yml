@@ -53,7 +53,8 @@ jobs:
             --slug "national" \
             --lang 'ru' \
             --limit 15 \
-            --posted-state-file articles/posted.json | tee parser_output.txt
+            --posted-state-file articles/posted.json \
+            --stopwords-file stopwords.txt | tee parser_output.txt # <-- ДОБАВЛЕНА ЭТА СТРОКА
           
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
