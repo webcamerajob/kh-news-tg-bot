@@ -134,18 +134,36 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error(f"Failed to save catalog: {e}")
 
-def translate_text(text: str, to_lang: str = "ru", provider: str = "yandex") -> Optional[str]:
+def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     if not text or not isinstance(text, str): return ""
-    logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
-    try:
-        normalized_text = normalize_text(text)
-        translated = ts.translate_text(normalized_text, translator=provider, from_language="en", to_language=to_lang)
-        if isinstance(translated, str):
-            return translated
-        return None
-    except Exception as e:
-        logging.warning(f"Translation error: {e}")
-        return None
+    
+    # Список провайдеров в порядке предпочтения
+    providers = ["yandex", "google", "bing"]
+    normalized_text = normalize_text(text)
+    
+    for provider in providers:
+        logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
+        try:
+            translated = ts.translate_text(
+                normalized_text, 
+                translator=provider, 
+                from_language="en", 
+                to_language=to_lang,
+                timeout=30 # Добавляем таймаут на всякий случай
+            )
+            
+            # Проверяем, что перевод успешен и отличается от оригинала
+            if isinstance(translated, str) and translated.strip() and translated.lower() != normalized_text.lower():
+                return translated
+            else:
+                logging.warning(f"Translation with {provider} resulted in empty or unchanged text.")
+        except Exception as e:
+            # Улучшенное логирование для понимания причины ошибки
+            logging.warning(f"Translation error with provider '{provider}': {e}", exc_info=False)
+            continue # Переходим к следующему провайдеру
+            
+    logging.error(f"All translation providers failed for text starting with: '{text[:100]}...'")
+    return None
 
 # --- ИЗМЕНЕНО: Функция загрузки стоп-фраз ---
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
