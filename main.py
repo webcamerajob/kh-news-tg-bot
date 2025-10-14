@@ -134,34 +134,83 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     except IOError as e:
         logging.error(f"Failed to save catalog: {e}")
 
+PROVIDER_LIMITS = {
+    "google": 4800,
+    "bing": 4500,
+    "yandex": 4000
+}
+
+def chunk_text_by_limit(text: str, limit: int) -> List[str]:
+    """
+    Интеллектуально разбивает текст на чанки, не превышающие лимит символов.
+    Приоритет разбивки: 1. Конец абзаца. 2. Конец предложения. 3. Пробел.
+    """
+    chunks = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+
+        split_pos = text.rfind('\n\n', 0, limit)
+        if split_pos == -1:
+            split_pos = text.rfind('. ', 0, limit)
+        if split_pos == -1:
+            split_pos = text.rfind(' ', 0, limit)
+        if split_pos == -1:
+            split_pos = limit
+        
+        chunk_end = split_pos + (2 if text[split_pos:split_pos+2] == '\n\n' else 1)
+        
+        chunks.append(text[:chunk_end])
+        text = text[chunk_end:].lstrip()
+        
+    return chunks
+
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    if not text or not isinstance(text, str): return ""
+    """
+    Переводит большой текст, разбивая его на чанки под лимиты конкретных API.
+    Автоматически переключает провайдеров при сбое.
+    """
+    if not text or not isinstance(text, str):
+        return ""
     
-    # Список провайдеров в порядке предпочтения
     providers = ["yandex", "google", "bing"]
     normalized_text = normalize_text(text)
-    
+
     for provider in providers:
-        logging.info(f"Translating text (provider: {provider}) to {to_lang}...")
+        limit = PROVIDER_LIMITS.get(provider, 3000)
+        logging.info(f"Translating text (provider: {provider}, chunk limit: {limit})...")
+        
         try:
-            translated = ts.translate_text(
-                normalized_text, 
-                translator=provider, 
-                from_language="en", 
-                to_language=to_lang,
-                timeout=30 # Добавляем таймаут на всякий случай
-            )
-            
-            # Проверяем, что перевод успешен и отличается от оригинала
-            if isinstance(translated, str) and translated.strip() and translated.lower() != normalized_text.lower():
-                return translated
-            else:
-                logging.warning(f"Translation with {provider} resulted in empty or unchanged text.")
+            chunks = chunk_text_by_limit(normalized_text, limit)
+            translated_chunks = []
+            provider_succeeded = True
+
+            for i, chunk in enumerate(chunks):
+                if i > 0: time.sleep(0.5) 
+                
+                translated_chunk = ts.translate_text(
+                    chunk,
+                    translator=provider,
+                    from_language="en",
+                    to_language=to_lang,
+                    timeout=45
+                )
+                
+                if isinstance(translated_chunk, str) and translated_chunk.strip():
+                    translated_chunks.append(translated_chunk)
+                else:
+                    logging.warning(f"Provider '{provider}' failed on a chunk. Trying next provider.")
+                    provider_succeeded = False
+                    break
+
+            if provider_succeeded:
+                return "".join(translated_chunks)
+        
         except Exception as e:
-            # Улучшенное логирование для понимания причины ошибки
             logging.warning(f"Translation error with provider '{provider}': {e}", exc_info=False)
-            continue # Переходим к следующему провайдеру
-            
+            continue
+    
     logging.error(f"All translation providers failed for text starting with: '{text[:100]}...'")
     return None
 
@@ -180,7 +229,6 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
         logging.error(f"Error loading stopwords from {file_path}: {e}. No titles will be filtered by stopwords.")
         return []
 
-# --- МОДИФИКАЦИЯ: parse_and_save теперь принимает список стоп-фраз ---
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
     slug = post["slug"]
@@ -195,14 +243,12 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
 
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     
-    # --- ЛОГИКА ФИЛЬТРАЦИИ ПО ЗАГОЛОВКУ СТОП-ФРАЗАМИ ---
     if stopwords:
         normalized_title = orig_title.lower()
         for phrase in stopwords:
             if phrase in normalized_title:
                 logging.info(f"Skipping article ID={aid} due to stopword '{phrase}' in title: '{orig_title}'")
                 return None
-    # --- КОНЕЦ ЛОГИКИ ФИЛЬТРАЦИИ ---
 
     logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
     try:
@@ -224,7 +270,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
-    if translate_to and (title is None or title == orig_title):
+    if translate_to and (title is None or title.lower() == orig_title.lower()):
         logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
         return None
 
@@ -281,9 +327,10 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
-        trans_text = translate_text("\n\n".join(paras), to_lang=translate_to)
-        if trans_text is None or trans_text == "\n\n".join(paras):
-             logging.error(f"Failed to translate body for ID={aid}. Skipping article.")
+        trans_text = translate_text(raw_text, to_lang=translate_to)
+        
+        if trans_text is None or not trans_text.strip():
+             logging.error(f"Failed to translate body for ID={aid} after all retries. Skipping article.")
              return None
         
         trans_file_path = art_dir / f"content.{translate_to}.txt"
