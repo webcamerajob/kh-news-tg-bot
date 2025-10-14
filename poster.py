@@ -141,35 +141,38 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
     html_title = f"<b>{escape_html(title)}</b>"
     return html_title, text_path, valid_imgs, title
 
-def load_posted_ids(state_file: Path) -> Set[str]:
+def load_posted_ids(state_file: Path) -> List[str]:
     """
     Читает state-файл, корректно обрезает список до MAX_POSTED_RECORDS,
-    и возвращает set из ID в виде СТРОК.
+    и возвращает list из ID в виде СТРОК, сохраняя порядок.
     """
-    if not state_file.is_file(): return set()
+    if not state_file.is_file(): return []
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
         if not isinstance(data, list):
             logging.warning(f"Данные в {state_file} - не список.")
-            return set()
+            return []
+        
+        # Обрезаем список, оставляя самые последние записи (те, что в конце файла)
         if len(data) > MAX_POSTED_RECORDS:
             data = data[-MAX_POSTED_RECORDS:]
             logging.info(f"Файл состояния обрезан до последних {MAX_POSTED_RECORDS} записей.")
-        return {str(item) for item in data if item is not None}
+        
+        return [str(item) for item in data if item is not None]
     except (json.JSONDecodeError, Exception) as e:
         logging.warning(f"Ошибка чтения файла состояния {state_file}: {e}.")
-        return set()
+        return []
 
-def save_posted_ids(all_ids_to_save: Set[str], state_file: Path) -> None:
-    """Сохраняет отсортированный список ID, обрезанный до лимита."""
+def save_posted_ids(ids_to_save: List[str], state_file: Path) -> None:
+    """Сохраняет список ID в файл состояния."""
     state_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        sorted_ids = sorted([int(i) for i in all_ids_to_save])
-        if len(sorted_ids) > MAX_POSTED_RECORDS:
-            sorted_ids = sorted_ids[-MAX_POSTED_RECORDS:]
+        # Конвертируем в int для json, но не сортируем
+        final_ids = [int(i) for i in ids_to_save]
+        
         with state_file.open("w", encoding="utf-8") as f:
-            json.dump(sorted_ids, f, ensure_ascii=False, indent=2)
-        logging.info(f"Сохранено {len(sorted_ids)} ID в файл состояния {state_file}.")
+            json.dump(final_ids, f, ensure_ascii=False, indent=2)
+        logging.info(f"Сохранено {len(final_ids)} ID в файл состояния {state_file}.")
     except Exception as e:
         logging.error(f"Не удалось сохранить файл состояния {state_file}: {e}")
 
@@ -184,8 +187,11 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
         logging.error(f"Директория {parsed_root} не существует.")
         return
 
-    posted_ids = load_posted_ids(state_file)
-    logging.info(f"Загружено {len(posted_ids)} ранее опубликованных ID.")
+    # Загружаем как список, чтобы сохранить порядок
+    posted_ids_list = load_posted_ids(state_file)
+    # Создаем set для быстрых проверок на существование
+    posted_ids_set = set(posted_ids_list)
+    logging.info(f"Загружено {len(posted_ids_set)} ранее опубликованных ID.")
 
     articles_to_post = []
     for d in sorted(parsed_root.iterdir()):
@@ -194,7 +200,8 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
             try:
                 art_meta = json.loads(meta_file.read_text(encoding="utf-8"))
                 article_id = str(art_meta.get("id"))
-                if article_id and article_id != 'None' and article_id not in posted_ids:
+                # Проверяем по set'у
+                if article_id and article_id != 'None' and article_id not in posted_ids_set:
                     if validated_data := validate_article(art_meta, d):
                         _, text_path, image_paths, original_title = validated_data
                         articles_to_post.append({
@@ -208,13 +215,17 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
     articles_to_post.sort(key=lambda x: int(x["id"]))
     if not articles_to_post:
         logging.info("🔍 Нет новых статей для публикации.")
+        # --- ВАЖНО: сохраняем файл даже если нет новых статей, чтобы применить обрезку, если она была в load_posted_ids ---
+        save_posted_ids(posted_ids_list, state_file)
         return
 
     logging.info(f"Найдено {len(articles_to_post)} новых статей для публикации.")
     
     async with httpx.AsyncClient() as client:
         sent_count = 0
-        newly_posted_ids: Set[str] = set()
+        
+        # Работаем с копией списка, чтобы добавлять в него новые ID
+        final_posted_ids = list(posted_ids_list)
         
         for article in articles_to_post:
             if limit is not None and sent_count >= limit:
@@ -223,6 +234,7 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
             
             logging.info(f"Публикуем статью ID={article['id']}...")
             try:
+                # ... (здесь ваш код публикации без изменений) ...
                 if article["image_paths"]:
                     await send_media_group(client, token, chat_id, article["image_paths"], watermark_scale)
 
@@ -240,9 +252,11 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
                     reply_markup = { "inline_keyboard": [[ {"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, {"text": "Отзывы", "url": "https://t.me/feedback1dollar"} ]]} if is_last_chunk else None
                     if not await send_message(client, token, chat_id, chunk, reply_markup=reply_markup):
                         raise Exception("Failed to send a message chunk.")
+                # ... (конец кода публикации) ...
 
                 logging.info(f"✅ Опубликовано ID={article['id']}")
-                newly_posted_ids.add(article['id'])
+                # Добавляем новый ID в конец списка
+                final_posted_ids.append(article['id'])
                 sent_count += 1
 
             except Exception as e:
@@ -250,9 +264,13 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
             
             await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
 
-    if newly_posted_ids:
-        all_ids_to_save = posted_ids.union(newly_posted_ids)
-        save_posted_ids(all_ids_to_save, state_file)
+    # --- НОВАЯ ЛОГИКА СОХРАНЕНИЯ ---
+    if sent_count > 0:
+        # Обрезаем итоговый список С НАЧАЛА, если он превышает лимит
+        if len(final_posted_ids) > MAX_POSTED_RECORDS:
+            final_posted_ids = final_posted_ids[-MAX_POSTED_RECORDS:]
+        
+        save_posted_ids(final_posted_ids, state_file)
     
     logging.info(f"📢 Завершено: отправлено {sent_count} статей.")
 
