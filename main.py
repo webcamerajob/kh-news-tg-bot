@@ -1,4 +1,3 @@
-import html
 import argparse
 import logging
 import json
@@ -7,6 +6,7 @@ import time
 import re
 import os
 import shutil
+import html
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
@@ -37,6 +37,20 @@ def normalize_text(text: str) -> str:
         text = text.replace(special, simple)
     return text
 
+def sanitize_text(text: str) -> str:
+    """Полная стерилизация текста от HTML-тегов и мусора редактора."""
+    if not text:
+        return ""
+    # 1. Декодируем HTML-сущности (&nbsp;, &quot; и т.д.)
+    text = html.unescape(text)
+    # 2. Удаляем любые HTML-теги физически через регулярку
+    text = re.sub(r'<[^>]+>', '', text)
+    # 3. Удаляем специфические метки TinyMCE / WordPress
+    text = re.sub(r'mce_SELRES_[^ ]+', '', text)
+    # 4. Убираем лишние пробелы и пустые строки (более 2 подряд)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
         if state_file_path.exists():
@@ -66,23 +80,22 @@ def fetch_category_id(base_url: str, slug: str) -> int:
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
-            # Добавлено более детальное логирование ошибки JSON
             try:
                 data = r.json()
             except json.JSONDecodeError as jde:
-                logging.error(f"JSON Decode Error for {endpoint}: {jde}. Response content: '{r.text[:500]}...'")
-                raise # Перебрасываем исключение
+                logging.error(f"JSON Decode Error for {endpoint}: {jde}.")
+                raise
             
-            if not data: raise RuntimeError(f"Category '{slug}' not found or empty response")
+            if not data: raise RuntimeError(f"Category '{slug}' not found")
             return data[0]["id"]
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(f"Error fetching category (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
+            logging.warning(f"Error fetching category: {e}; retry in {delay:.1f}s")
             time.sleep(delay)
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    logging.info(f"Fetching posts for category {cat_id}, per_page={per_page}...")
+    logging.info(f"Fetching posts for category {cat_id}...")
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -91,9 +104,7 @@ def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str
             return r.json()
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(f"Error fetching posts (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
             time.sleep(delay)
-    logging.error("Giving up fetching posts")
     return []
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
@@ -108,10 +119,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
             dest.write_bytes(r.content)
             return str(dest)
         except Exception as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(f"Error saving image {fn} (try {attempt}/{MAX_RETRIES}): {e}; retry in {delay:.1f}s")
-            time.sleep(delay)
-    logging.error(f"Failed saving image {fn} after {MAX_RETRIES} attempts")
+            time.sleep(BASE_DELAY * 2 ** (attempt - 1))
     return None
 
 def load_catalog() -> List[Dict[str, Any]]:
@@ -120,9 +128,7 @@ def load_catalog() -> List[Dict[str, Any]]:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
             fcntl.flock(f, fcntl.LOCK_SH)
             return [item for item in json.load(f) if isinstance(item, dict) and "id" in item]
-    except Exception as e:
-        logging.error(f"Catalog read/decode error: {e}")
-        return []
+    except Exception: return []
 
 def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -132,220 +138,143 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
         with open(CATALOG_PATH, "w", encoding="utf-8") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             json.dump(minimal, f, ensure_ascii=False, indent=2)
-    except IOError as e:
-        logging.error(f"Failed to save catalog: {e}")
+    except IOError: pass
 
-PROVIDER_LIMITS = {
-    "google": 4800,
-    "bing": 4500,
-    "yandex": 4000
-}
+PROVIDER_LIMITS = {"google": 4800, "bing": 4500, "yandex": 4000}
 
 def chunk_text_by_limit(text: str, limit: int) -> List[str]:
-    """
-    Интеллектуально разбивает текст на чанки, не превышающие лимит символов.
-    Приоритет разбивки: 1. Конец абзаца. 2. Конец предложения. 3. Пробел.
-    """
     chunks = []
     while text:
         if len(text) <= limit:
             chunks.append(text)
             break
-
         split_pos = text.rfind('\n\n', 0, limit)
-        if split_pos == -1:
-            split_pos = text.rfind('. ', 0, limit)
-        if split_pos == -1:
-            split_pos = text.rfind(' ', 0, limit)
-        if split_pos == -1:
-            split_pos = limit
-        
+        if split_pos == -1: split_pos = text.rfind('. ', 0, limit)
+        if split_pos == -1: split_pos = text.rfind(' ', 0, limit)
+        if split_pos == -1: split_pos = limit
         chunk_end = split_pos + (2 if text[split_pos:split_pos+2] == '\n\n' else 1)
-        
         chunks.append(text[:chunk_end])
         text = text[chunk_end:].lstrip()
-        
     return chunks
 
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    """
-    Переводит большой текст, разбивая его на чанки под лимиты конкретных API.
-    Автоматически переключает провайдеров при сбое.
-    """
-    if not text or not isinstance(text, str):
-        return ""
-    
+    if not text: return ""
     providers = ["yandex", "google", "bing"]
     normalized_text = normalize_text(text)
-
     for provider in providers:
         limit = PROVIDER_LIMITS.get(provider, 3000)
-        logging.info(f"Translating text (provider: {provider}, chunk limit: {limit})...")
-        
         try:
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
-            provider_succeeded = True
-
             for i, chunk in enumerate(chunks):
-                if i > 0: time.sleep(0.5) 
-                
-                translated_chunk = ts.translate_text(
-                    chunk,
-                    translator=provider,
-                    from_language="en",
-                    to_language=to_lang,
-                    timeout=45
-                )
-                
-                if isinstance(translated_chunk, str) and translated_chunk.strip():
-                    translated_chunks.append(translated_chunk)
-                else:
-                    logging.warning(f"Provider '{provider}' failed on a chunk. Trying next provider.")
-                    provider_succeeded = False
-                    break
-
-            if provider_succeeded:
-                return "".join(translated_chunks)
-        
-        except Exception as e:
-            logging.warning(f"Translation error with provider '{provider}': {e}", exc_info=False)
-            continue
-    
-    logging.error(f"All translation providers failed for text starting with: '{text[:100]}...'")
+                if i > 0: time.sleep(0.5)
+                res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
+                if res: translated_chunks.append(res)
+                else: raise ValueError("Empty chunk")
+            return "".join(translated_chunks)
+        except Exception: continue
     return None
 
-# --- ИЗМЕНЕНО: Функция загрузки стоп-фраз ---
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
-    if not file_path or not file_path.exists():
-        logging.info("No stopwords file specified or file does not exist. No titles will be filtered by stopwords.")
-        return []
-    
+    if not file_path or not file_path.exists(): return []
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            stopwords = [line.strip().lower() for line in f if line.strip()]
-            logging.info(f"Loaded {len(stopwords)} stopwords from {file_path}")
-            return stopwords
-    except Exception as e:
-        logging.error(f"Error loading stopwords from {file_path}: {e}. No titles will be filtered by stopwords.")
-        return []
+            return [line.strip().lower() for line in f if line.strip()]
+    except Exception: return []
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
     slug = post["slug"]
     link = post.get("link")
-    if not link:
-        logging.warning(f"Article ID={aid} has no link. Skipping.")
-        return None
+    if not link: return None
 
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
-    # Извлекаем заголовок и очищаем от HTML-сущностей
-    orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
-    orig_title = html.unescape(orig_title)
+    # Извлекаем и ЧИСТИМ заголовок
+    raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    orig_title = sanitize_text(raw_title)
     
-    # Фильтрация по стоп-словам
     if stopwords:
         normalized_title = orig_title.lower()
         for phrase in stopwords:
             if phrase in normalized_title:
-                logging.info(f"Skipping article ID={aid} due to stopword '{phrase}' in title: '{orig_title}'")
+                logging.info(f"Stopword '{phrase}' found in ID={aid}. Skipping.")
                 return None
 
-    logging.info(f"Fetching full page HTML for article ID={aid} from {link}")
+    logging.info(f"Processing ID={aid}: {link}")
     try:
         page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
         page_response.raise_for_status()
         page_html = page_response.text
     except Exception as e:
-        logging.error(f"Failed to fetch full page for ID={aid}: {e}")
+        logging.error(f"Fetch error ID={aid}: {e}")
         return None
 
-    # Проверка хеша (чтобы не обрабатывать статью повторно, если она не изменилась)
     current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
         try:
             existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
-                logging.info(f"Skipping unchanged article ID={aid}")
+                logging.info(f"No changes for ID={aid}. Skipping.")
                 return existing_meta
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
+        except Exception: pass
 
     # Перевод заголовка
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
-    if translate_to and (title is None or title.lower() == orig_title.lower()):
-        logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
-        return None
+    title = sanitize_text(title)
 
     soup = BeautifulSoup(page_html, "html.parser")
     
-    # --- БЛОК ОЧИСТКИ МУСОРА ---
-    # Удаляем технические закладки WordPress (mce_SELRES и data-mce-type)
-    for junk in soup.find_all(["span", "div"], {"data-mce-type": True}):
-        junk.decompose()
-    for junk in soup.find_all(class_=re.compile(r"mce_SELRES|wp-block-adrunner")):
-        junk.decompose()
-    
-    # Ищем основной контент статьи
+    # 1. ГЛУБОКАЯ ОЧИСТКА BS4: Удаляем все технические элементы
+    for junk in soup.find_all(["span", "div", "script", "style", "iframe"]):
+        # Удаляем если есть признаки закладок TinyMCE или рекламных блоков
+        if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", "")):
+            junk.decompose()
+            
     article_content = soup.find("div", class_="entry-content")
     
-    if article_content:
-        # Удаляем блок "Похожие записи"
-        if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
-            related_posts_block.decompose()
-        
-        # Удаляем скрипты и стили, если они затесались в контент
-        for script_or_style in article_content(["script", "style"]):
-            script_or_style.decompose()
-    # --- КОНЕЦ БЛОКА ОЧИСТКИ ---
-
-    # Извлечение картинок (сначала лайтбоксы, потом из контента)
-    img_dir = art_dir / "images"
-    srcs = set()
-    
-    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
-        if href := link_tag.get("href"):
-            srcs.add(href)
-            
-    if article_content:
-        for img_tag in article_content.find_all("img"):
-            if url := extract_img_url(img_tag):
-                if not url.endswith(('.gif', '.svg')):
-                    srcs.add(url)
-    
-    # Сбор текста: берем только параграфы
+    # Сбор и ЧИСТКА параграфов
     paras = []
     if article_content:
-        # Извлекаем текст из параграфов, игнорируя пустые
+        # Удаляем блоки похожих записей внутри контента
+        for rel in article_content.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")):
+            rel.decompose()
+            
         for p in article_content.find_all("p"):
             p_text = p.get_text(strip=True)
             if p_text:
-                paras.append(html.unescape(p_text))
+                # Финальная стерилизация параграфа через sanitize_text
+                clean_p = sanitize_text(p_text)
+                if clean_p:
+                    paras.append(clean_p)
     
     raw_text = "\n\n".join(paras)
-    raw_text = BAD_RE.sub("", raw_text) # Удаляем невидимые символы
+    raw_text = BAD_RE.sub("", raw_text)
 
-    # Сохранение картинок
+    # Картинки
+    img_dir = art_dir / "images"
+    srcs = set()
+    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
+        if h := link_tag.get("href"): srcs.add(h)
+    if article_content:
+        for img in article_content.find_all("img"):
+            if u := extract_img_url(img): srcs.add(u)
+
     images: List[str] = []
     if srcs:
-        limited_srcs = list(srcs)[:10]
         with ThreadPoolExecutor(max_workers=5) as ex:
-            futures = {ex.submit(save_image, url, img_dir): url for url in limited_srcs}
+            futures = {ex.submit(save_image, url, img_dir): url for url in list(srcs)[:10]}
             for fut in as_completed(futures):
-                if path := fut.result():
-                    images.append(path)
+                if path := fut.result(): images.append(path)
 
-    # Если картинок в тексте нет, пробуем взять Featured Image из мета-данных WP
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
-        if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
-            if path := save_image(source_url, img_dir):
-                images.append(path)
+        if isinstance(media, list) and (u := media[0].get("source_url")):
+            if path := save_image(u, img_dir): images.append(path)
 
     if not images:
-        logging.warning(f"No valid article images found for ID={aid}. Skipping.")
+        logging.warning(f"No images for ID={aid}. Skipping.")
         return None
     
     text_file_path = art_dir / "content.txt"
@@ -355,20 +284,16 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         "images": sorted([Path(p).name for p in images]), "posted": False,
         "hash": current_hash, "translated_to": ""
     }
-    
-    # Сохраняем оригинал текста
     text_file_path.write_text(raw_text, encoding="utf-8")
 
-    # Перевод основного текста
     if translate_to:
         trans_text = translate_text(raw_text, to_lang=translate_to)
-        
-        if trans_text is None or not trans_text.strip():
-             logging.error(f"Failed to translate body for ID={aid} after all retries. Skipping article.")
+        if not trans_text:
+             logging.error(f"Translation failed ID={aid}.")
              return None
         
-        # Декодируем возможные артефакты перевода (&quot; и т.д.)
-        trans_text = html.unescape(trans_text)
+        # Стерилизуем перевод (некоторые API добавляют свои теги)
+        trans_text = sanitize_text(trans_text)
         
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
@@ -386,28 +311,19 @@ def main():
     parser.add_argument("-n", "--limit", type=int, default=10, help="Max posts to parse")
     parser.add_argument("-l", "--lang", type=str, default="ru", help="Translate to language code")
     parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
-    # --- ИЗМЕНЕНО: Аргумент теперь называется --stopwords-file ---
-    parser.add_argument("--stopwords-file", type=str, help="Path to a file with stopwords (one per line) to filter titles.")
-    # --- КОНЕЦ ИЗМЕНЕННОГО АРГУМЕНТА ---
+    parser.add_argument("--stopwords-file", type=str, help="Path to stopwords file")
     args = parser.parse_args()
-
-    # cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
 
     try:
         cid = fetch_category_id(args.base_url, args.slug)
         posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10) * 3)
-
         catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
-        
-        # --- ИЗМЕНЕНО: Загрузка стоп-фраз ---
         stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
-        # --- КОНЕЦ ИЗМЕНЕННОГО ШАГА ---
         
         processed_articles_meta = []
         for post in posts:
             if str(post["id"]) not in posted_ids:
-                # --- Передаем stopwords в parse_and_save ---
                 if meta := parse_and_save(post, args.lang, stopwords):
                     processed_articles_meta.append(meta)
         
@@ -421,7 +337,7 @@ def main():
             print("NEW_ARTICLES_STATUS:false")
 
     except Exception as e:
-        logging.exception("Fatal error in main:")
+        logging.exception("Fatal error:")
         exit(1)
 
 if __name__ == "__main__":
