@@ -1,3 +1,4 @@
+import html
 import argparse
 import logging
 import json
@@ -241,8 +242,11 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
+    # Извлекаем заголовок и очищаем от HTML-сущностей
     orig_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
+    orig_title = html.unescape(orig_title)
     
+    # Фильтрация по стоп-словам
     if stopwords:
         normalized_title = orig_title.lower()
         for phrase in stopwords:
@@ -259,6 +263,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         logging.error(f"Failed to fetch full page for ID={aid}: {e}")
         return None
 
+    # Проверка хеша (чтобы не обрабатывать статью повторно, если она не изменилась)
     current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
         try:
@@ -269,6 +274,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         except (json.JSONDecodeError, UnicodeDecodeError):
             logging.warning(f"Failed to read existing meta for ID={aid}. Reparsing.")
 
+    # Перевод заголовка
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
     if translate_to and (title is None or title.lower() == orig_title.lower()):
         logging.error(f"Failed to translate title for ID={aid}. Skipping article.")
@@ -276,6 +282,27 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
 
     soup = BeautifulSoup(page_html, "html.parser")
     
+    # --- БЛОК ОЧИСТКИ МУСОРА ---
+    # Удаляем технические закладки WordPress (mce_SELRES и data-mce-type)
+    for junk in soup.find_all(["span", "div"], {"data-mce-type": True}):
+        junk.decompose()
+    for junk in soup.find_all(class_=re.compile(r"mce_SELRES|wp-block-adrunner")):
+        junk.decompose()
+    
+    # Ищем основной контент статьи
+    article_content = soup.find("div", class_="entry-content")
+    
+    if article_content:
+        # Удаляем блок "Похожие записи"
+        if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
+            related_posts_block.decompose()
+        
+        # Удаляем скрипты и стили, если они затесались в контент
+        for script_or_style in article_content(["script", "style"]):
+            script_or_style.decompose()
+    # --- КОНЕЦ БЛОКА ОЧИСТКИ ---
+
+    # Извлечение картинок (сначала лайтбоксы, потом из контента)
     img_dir = art_dir / "images"
     srcs = set()
     
@@ -283,22 +310,25 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         if href := link_tag.get("href"):
             srcs.add(href)
             
-    if article_content := soup.find("div", class_="entry-content"):
-        if related_posts_block := article_content.find("ul", class_="rp4wp-posts-list"):
-            related_posts_block.decompose()
-        
+    if article_content:
         for img_tag in article_content.find_all("img"):
             if url := extract_img_url(img_tag):
                 if not url.endswith(('.gif', '.svg')):
                     srcs.add(url)
     
+    # Сбор текста: берем только параграфы
     paras = []
     if article_content:
-        paras = [p.get_text(strip=True) for p in article_content.find_all("p") if p.get_text(strip=True)]
+        # Извлекаем текст из параграфов, игнорируя пустые
+        for p in article_content.find_all("p"):
+            p_text = p.get_text(strip=True)
+            if p_text:
+                paras.append(html.unescape(p_text))
     
     raw_text = "\n\n".join(paras)
-    raw_text = BAD_RE.sub("", raw_text)
+    raw_text = BAD_RE.sub("", raw_text) # Удаляем невидимые символы
 
+    # Сохранение картинок
     images: List[str] = []
     if srcs:
         limited_srcs = list(srcs)[:10]
@@ -308,6 +338,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
                 if path := fut.result():
                     images.append(path)
 
+    # Если картинок в тексте нет, пробуем взять Featured Image из мета-данных WP
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and media and (source_url := media[0].get("source_url")):
             if path := save_image(source_url, img_dir):
@@ -324,14 +355,20 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         "images": sorted([Path(p).name for p in images]), "posted": False,
         "hash": current_hash, "translated_to": ""
     }
+    
+    # Сохраняем оригинал текста
     text_file_path.write_text(raw_text, encoding="utf-8")
 
+    # Перевод основного текста
     if translate_to:
         trans_text = translate_text(raw_text, to_lang=translate_to)
         
         if trans_text is None or not trans_text.strip():
              logging.error(f"Failed to translate body for ID={aid} after all retries. Skipping article.")
              return None
+        
+        # Декодируем возможные артефакты перевода (&quot; и т.д.)
+        trans_text = html.unescape(trans_text)
         
         trans_file_path = art_dir / f"content.{translate_to}.txt"
         final_translated_text = f"{title}\n\n{trans_text}"
