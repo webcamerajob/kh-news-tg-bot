@@ -11,8 +11,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# НОВЫЕ ИМПОРТЫ ДЛЯ НАДЕЖНОЙ БИБЛИОТЕКИ
-from playwright_extra.async_api import async_playwright, BrowserContext
+# ИСПОЛЬЗУЕМ ТОЛЬКО ОФИЦИАЛЬНЫЙ PLAYWRIGHT
+from playwright.async_api import async_playwright, BrowserContext
 
 # СТАРЫЕ ИМПОРТЫ
 os.environ["translators_default_region"] = "EN"
@@ -29,7 +29,7 @@ BASE_DELAY = 1.0
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
-# --- БЛОК САНІТИЗАЦІЇ ТА ПЕРЕКЛАДУ (БЕЗ ЗМІН) ---
+# --- БЛОК ВСПОМОГАТЕЛЬНЫХ ФУНКЦИЙ (БЕЗ ИЗМЕНЕНИЙ) ---
 def normalize_text(text: str) -> str:
     replacements = {'–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'"}
     for special, simple in replacements.items():
@@ -82,7 +82,6 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
             continue
     return None
 
-# --- СЛУЖБОВІ ФУНКЦІЇ (БЕЗ ЗМІН) ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
         if state_file_path.exists():
@@ -126,26 +125,31 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
             return [line.strip().lower() for line in f if line.strip()]
     except Exception:
         return []
+# --- КОНЕЦ ВСПОМОГАТЕЛЬНЫХ ФУНКЦИЙ ---
 
-# --- СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT-EXTRA (БОЛЬШЕ НЕ НУЖНЫ ЯВНЫЕ ВЫЗОВЫ STEALTH) ---
 
-async def fetch_json(context: BrowserContext, url: str) -> Optional[Any]:
+# --- СЕТЕВЫЕ ФУНКЦИИ (УЖЕ НЕ НУЖНЫ ОТДЕЛЬНЫЕ ДЛЯ JSON И HTML) ---
+async def fetch_with_playwright(context: BrowserContext, url: str) -> Optional[str]:
     page = None
     try:
         page = await context.new_page()
-        response = await page.goto(url, timeout=60000, wait_until='domcontentloaded')
+        response = await page.goto(url, timeout=90000, wait_until='domcontentloaded')
         if not response or not response.ok:
             raise RuntimeError(f"Request failed with status {response.status if response else 'N/A'}")
-        return await response.json()
+        return await response.text()
     finally:
         if page: await page.close()
+
 
 async def fetch_category_id(context: BrowserContext, base_url: str, slug: str) -> int:
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            data = await fetch_json(context, endpoint)
+            content = await fetch_with_playwright(context, endpoint)
+            if not content:
+                 raise RuntimeError("Empty response from API")
+            data = json.loads(content)
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found (empty JSON response)")
             return data[0]["id"]
@@ -155,15 +159,17 @@ async def fetch_category_id(context: BrowserContext, base_url: str, slug: str) -
             await asyncio.sleep(delay)
     raise RuntimeError("Failed fetching category id after all retries")
 
+
 async def fetch_posts(context: BrowserContext, base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
     logging.info(f"Fetching posts for category {cat_id}...")
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     try:
-        data = await fetch_json(context, endpoint)
-        return data or []
+        content = await fetch_with_playwright(context, endpoint)
+        return json.loads(content) if content else []
     except Exception as e:
         logging.warning(f"Error fetching posts: {e}")
     return []
+
 
 async def save_image(context: BrowserContext, src_url: str, folder: Path) -> Optional[str]:
     logging.info(f"Saving image from {src_url}...")
@@ -181,6 +187,7 @@ async def save_image(context: BrowserContext, src_url: str, folder: Path) -> Opt
     except Exception as e:
         logging.error(f"Exception while saving image {src_url}: {e}")
         return None
+
 
 async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
@@ -200,17 +207,12 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         return None
 
     logging.info(f"Processing ID={aid}: {link}")
-    page = None
-    try:
-        page = await context.new_page()
-        await page.goto(link, timeout=90000, wait_until='networkidle')
-        page_html = await page.content()
-    except Exception as e:
-        logging.error(f"Playwright fetch error ID={aid}: {e}")
-        return None
-    finally:
-        if page: await page.close()
 
+    page_html = await fetch_with_playwright(context, link)
+    if not page_html:
+        logging.error(f"Failed to fetch HTML for ID={aid}")
+        return None
+    
     current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
         try:
@@ -284,6 +286,7 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
 
+
 async def main():
     parser = argparse.ArgumentParser(description="Parser")
     parser.add_argument("--base-url", type=str, required=True, help="WP site base URL")
@@ -294,14 +297,17 @@ async def main():
     parser.add_argument("--stopwords-file", type=str, help="Path to stopwords file")
     args = parser.parse_args()
 
-    # ИСПОЛЬЗУЕМ async_playwright ИЗ PLAYWRIGHT-EXTRA
+    # Скрипт, который скрывает автоматизацию. Он будет внедрен на каждую страницу.
+    stealth_script = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+
     pw = await async_playwright().start()
-    
-    # PLAYWRIGHT-EXTRA АВТОМАТИЧЕСКИ ПРИМЕНЯЕТ STEALTH К БРАУЗЕРУ
     browser = await pw.chromium.launch(headless=True)
     context = await browser.new_context(
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
     )
+    # КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Внедряем наш скрипт в контекст браузера.
+    await context.add_init_script(stealth_script)
+    
     try:
         cid = await fetch_category_id(context, args.base_url, args.slug)
         posts = await fetch_posts(context, args.base_url, cid, per_page=(args.limit or 10) * 3)
