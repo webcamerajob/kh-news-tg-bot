@@ -26,21 +26,12 @@ MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
 # --- УСИЛЕНИЕ СКРЕЙПЕРА (ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
-DEFAULT_HEADERS = {
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
-    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'accept-language': 'en-US,en;q=0.9,ru;q=0.8',
-    'accept-encoding': 'gzip, deflate, br',
-    'upgrade-insecure-requests': '1',
-}
-
-# 1. Создаем объект скрейпера без заголовков
 SCRAPER = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
+    # Указываем конкретную версию браузера.
+    # Это заставит cloudscraper использовать правильный JA3-отпечаток и заголовки.
+    browser='chrome110',
     delay=10
 )
-# 2. Устанавливаем заголовки ПОСЛЕ создания объекта
-SCRAPER.headers.update(DEFAULT_HEADERS)
 SCRAPER_TIMEOUT = (15.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
