@@ -2,5 +2,4 @@ requests
 beautifulsoup4
 httpx
 translators
-playwright>=1.40
-playwright-stealth>=1.0.6
+playwright-extra
