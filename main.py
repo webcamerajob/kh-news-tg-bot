@@ -11,9 +11,9 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# НОВЫЕ ИМПОРТЫ
-from playwright.async_api import async_playwright, BrowserContext, Page, Playwright
-from playwright_stealth.async_api import stealth_async
+# НОВЫЕ ИМПОРТЫ (С ПРАВИЛЬНЫМ ПУТЕМ)
+from playwright.async_api import async_playwright, BrowserContext
+from playwright_stealth import stealth_async
 
 # СТАРЫЕ ИМПОРТЫ
 os.environ["translators_default_region"] = "EN"
@@ -28,11 +28,9 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# УДАЛЕНО: Глобальный SCRAPER. Теперь контекст браузера передается в функции.
-
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
-# --- БЛОК САНІТИЗАЦІЇ ТА ПЕРЕКЛАДУ (ЗАЛИШАЄТЬСЯ БЕЗ ЗМІН) ---
+# --- БЛОК САНІТИЗАЦІЇ ТА ПЕРЕКЛАДУ (БЕЗ ЗМІН) ---
 def normalize_text(text: str) -> str:
     replacements = {'–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'"}
     for special, simple in replacements.items():
@@ -84,9 +82,8 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
         except Exception:
             continue
     return None
-# --- КІНЕЦЬ БЛОКУ САНІТИЗАЦІЇ ТА ПЕРЕКЛАДУ ---
 
-# --- СЛУЖБОВІ ФУНКЦІЇ (ЗАЛИШАЮТЬСЯ БЕЗ ЗМІН) ---
+# --- СЛУЖБОВІ ФУНКЦІЇ (БЕЗ ЗМІН) ---
 def load_posted_ids(state_file_path: Path) -> Set[str]:
     try:
         if state_file_path.exists():
@@ -131,43 +128,26 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
     except Exception:
         return []
 
-# --- ПОЛНОСТЬЮ ПЕРЕПИСАННЫЕ СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT ---
+# --- СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT-STEALTH ---
 
-async def fetch_json_with_playwright(context: BrowserContext, url: str) -> Optional[Any]:
-    """Загружает и возвращает JSON с URL, используя Playwright (ИСПРАВЛЕННАЯ ВЕРСИЯ)."""
+async def fetch_json_with_stealth(context: BrowserContext, url: str) -> Optional[Any]:
     page = None
     try:
         page = await context.new_page()
         await stealth_async(page)
-        
-        # 1. Выполняем переход и получаем объект ответа
         response = await page.goto(url, timeout=60000, wait_until='domcontentloaded')
-
-        # 2. ПЕРВАЯ и ГЛАВНАЯ проверка: был ли ответ успешным (статус 2xx)?
-        if not response.ok:
-            # Если статус 403, 404, 500, то тело ответа - это не JSON.
-            # Вызываем ошибку с понятным сообщением.
-            raise RuntimeError(f"Request failed with status {response.status}: {response.status_text}")
-
-        # 3. Теперь, когда мы знаем что статус 2xx, можно безопасно парсить JSON.
-        # Это правильный способ получить JSON из ответа.
+        if not response or not response.ok:
+            raise RuntimeError(f"Request failed with status {response.status if response else 'N/A'}")
         return await response.json()
-
-    except Exception as e:
-        # Логируем ошибку, чтобы она не пропадала молча и чтобы сработал цикл retry
-        logging.error(f"Error in fetch_json_with_playwright for {url}: {e}")
-        raise e
-        
     finally:
-        if page:
-            await page.close()
+        if page: await page.close()
 
 async def fetch_category_id(context: BrowserContext, base_url: str, slug: str) -> int:
     logging.info(f"Fetching category ID for {slug} from {base_url}...")
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            data = await fetch_json_with_playwright(context, endpoint)
+            data = await fetch_json_with_stealth(context, endpoint)
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found (empty JSON response)")
             return data[0]["id"]
@@ -180,14 +160,11 @@ async def fetch_category_id(context: BrowserContext, base_url: str, slug: str) -
 async def fetch_posts(context: BrowserContext, base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
     logging.info(f"Fetching posts for category {cat_id}...")
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            data = await fetch_json_with_playwright(context, endpoint)
-            return data or []
-        except Exception as e:
-            delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(f"Error fetching posts: {e}; retry in {delay:.1f}s")
-            await asyncio.sleep(delay)
+    try:
+        data = await fetch_json_with_stealth(context, endpoint)
+        return data or []
+    except Exception as e:
+        logging.warning(f"Error fetching posts: {e}")
     return []
 
 async def save_image(context: BrowserContext, src_url: str, folder: Path) -> Optional[str]:
@@ -196,7 +173,6 @@ async def save_image(context: BrowserContext, src_url: str, folder: Path) -> Opt
     fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
     dest = folder / fn
     try:
-        # Используем встроенный в Playwright HTTP клиент, он наследует куки и заголовки.
         response = await context.request.get(src_url, timeout=60000)
         if response.ok:
             dest.write_bytes(await response.body())
@@ -221,13 +197,11 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     orig_title = sanitize_text(raw_title)
 
-    if stopwords:
-        if any(phrase in orig_title.lower() for phrase in stopwords):
-            logging.info(f"Stopword found in ID={aid}. Skipping.")
-            return None
+    if stopwords and any(phrase in orig_title.lower() for phrase in stopwords):
+        logging.info(f"Stopword found in ID={aid}. Skipping.")
+        return None
 
     logging.info(f"Processing ID={aid}: {link}")
-    
     page = None
     try:
         page = await context.new_page()
@@ -238,8 +212,7 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         logging.error(f"Playwright fetch error ID={aid}: {e}")
         return None
     finally:
-        if page:
-            await page.close()
+        if page: await page.close()
 
     current_hash = hashlib.sha256(page_html.encode()).hexdigest()
     if meta_path.exists():
@@ -255,7 +228,7 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         logging.error(f"Title translation failed for ID={aid}")
         return None
     title = sanitize_text(title)
-    
+
     soup = BeautifulSoup(page_html, "html.parser")
     for junk in soup.find_all(["span", "div", "script", "style", "iframe", "ins"]):
         if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", [])):
@@ -268,10 +241,8 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
             rel.decompose()
         for p in article_content.find_all("p"):
             p_text = p.get_text(strip=True)
-            if p_text:
-                clean_p = sanitize_text(p_text)
-                if clean_p:
-                    paras.append(clean_p)
+            if p_text and (clean_p := sanitize_text(p_text)):
+                paras.append(clean_p)
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
@@ -283,7 +254,6 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         for img in article_content.find_all("img"):
             if u := extract_img_url(img): srcs.add(u)
             
-    # Загружаем изображения асинхронно
     image_tasks = [save_image(context, url, img_dir) for url in list(srcs)[:10]]
     image_paths = await asyncio.gather(*image_tasks)
     images = [path for path in image_paths if path]
@@ -317,8 +287,6 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
         json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
 
-# --- ГЛАВНАЯ ФУНКЦИЯ (ТЕПЕРЬ АСИНХРОННАЯ) ---
-
 async def main():
     parser = argparse.ArgumentParser(description="Parser")
     parser.add_argument("--base-url", type=str, required=True, help="WP site base URL")
@@ -347,8 +315,7 @@ async def main():
                 if str(post.get("id")) not in posted_ids:
                     tasks.append(parse_and_save(context, post, args.lang, stopwords))
             
-            processed_articles_meta = await asyncio.gather(*tasks)
-            processed_articles_meta = [meta for meta in processed_articles_meta if meta]
+            processed_articles_meta = [meta for meta in await asyncio.gather(*tasks) if meta]
             
             if processed_articles_meta:
                 for meta in processed_articles_meta:
@@ -359,11 +326,6 @@ async def main():
             else:
                 print("NEW_ARTICLES_STATUS:false")
         
-        except Exception as e:
-            logging.exception("Fatal error:")
-            # exit(1) не работает с asyncio, просто позволяем завершиться
-            raise e
-        
         finally:
             await context.close()
             await browser.close()
@@ -371,5 +333,6 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except Exception:
+    except Exception as e:
+        logging.exception(f"Fatal error in main execution: {e}")
         exit(1)
