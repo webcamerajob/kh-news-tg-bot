@@ -133,22 +133,29 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
 # --- ПОЛНОСТЬЮ ПЕРЕПИСАННЫЕ СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT ---
 
 async def fetch_json_with_playwright(context: BrowserContext, url: str) -> Optional[Any]:
-    """Загружает и возвращает JSON с URL, используя Playwright."""
+    """Загружает и возвращает JSON с URL, используя Playwright (ИСПРАВЛЕННАЯ ВЕРСИЯ)."""
     page = None
     try:
         page = await context.new_page()
-        await page.goto(url, timeout=60000, wait_until='domcontentloaded')
         
-        # Проверяем на Cloudflare/WAF. Ждем до 15 секунд, если есть проверка.
-        if await page.query_selector('h1:text-is("Verify you are human")'):
-             logging.warning("Cloudflare challenge detected. Waiting for it to solve...")
-             # Playwright обычно проходит проверку сам. Дадим ему время.
-             await page.wait_for_timeout(15000)
+        # 1. Выполняем переход и получаем объект ответа
+        response = await page.goto(url, timeout=60000, wait_until='domcontentloaded')
 
-        json_text = await page.evaluate('() => document.body.innerText')
-        if not json_text:
-             raise ValueError("Empty response body from API endpoint.")
-        return json.loads(json_text)
+        # 2. ПЕРВАЯ и ГЛАВНАЯ проверка: был ли ответ успешным (статус 2xx)?
+        if not response.ok:
+            # Если статус 403, 404, 500, то тело ответа - это не JSON.
+            # Вызываем ошибку с понятным сообщением.
+            raise RuntimeError(f"Request failed with status {response.status}: {response.status_text}")
+
+        # 3. Теперь, когда мы знаем что статус 2xx, можно безопасно парсить JSON.
+        # Это правильный способ получить JSON из ответа.
+        return await response.json()
+
+    except Exception as e:
+        # Логируем ошибку, чтобы она не пропадала молча и чтобы сработал цикл retry
+        logging.error(f"Error in fetch_json_with_playwright for {url}: {e}")
+        raise e
+        
     finally:
         if page:
             await page.close()
