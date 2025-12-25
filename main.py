@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 
 # НОВЫЕ ИМПОРТЫ (С ПРАВИЛЬНЫМ ПУТЕМ)
 from playwright.async_api import async_playwright, BrowserContext
-from playwright_stealth import stealth_async
+from playwright_stealth.stealth import stealth_async
 
 # СТАРЫЕ ИМПОРТЫ
 os.environ["translators_default_region"] = "EN"
