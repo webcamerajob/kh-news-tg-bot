@@ -4,4 +4,3 @@ httpx
 translators
 playwright
 playwright-stealth
-fcntl
