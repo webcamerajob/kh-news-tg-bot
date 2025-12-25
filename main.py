@@ -11,9 +11,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# НОВЫЕ ИМПОРТЫ (С ПРАВИЛЬНЫМ ПУТЕМ)
-from playwright.async_api import async_playwright, BrowserContext
-from playwright_stealth.stealth import stealth_async
+# НОВЫЕ ИМПОРТЫ ДЛЯ НАДЕЖНОЙ БИБЛИОТЕКИ
+from playwright_extra.async_api import async_playwright, BrowserContext
 
 # СТАРЫЕ ИМПОРТЫ
 os.environ["translators_default_region"] = "EN"
@@ -128,13 +127,12 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
     except Exception:
         return []
 
-# --- СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT-STEALTH ---
+# --- СЕТЕВЫЕ ФУНКЦИИ С PLAYWRIGHT-EXTRA (БОЛЬШЕ НЕ НУЖНЫ ЯВНЫЕ ВЫЗОВЫ STEALTH) ---
 
-async def fetch_json_with_stealth(context: BrowserContext, url: str) -> Optional[Any]:
+async def fetch_json(context: BrowserContext, url: str) -> Optional[Any]:
     page = None
     try:
         page = await context.new_page()
-        await stealth_async(page)
         response = await page.goto(url, timeout=60000, wait_until='domcontentloaded')
         if not response or not response.ok:
             raise RuntimeError(f"Request failed with status {response.status if response else 'N/A'}")
@@ -147,7 +145,7 @@ async def fetch_category_id(context: BrowserContext, base_url: str, slug: str) -
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            data = await fetch_json_with_stealth(context, endpoint)
+            data = await fetch_json(context, endpoint)
             if not data:
                 raise RuntimeError(f"Category '{slug}' not found (empty JSON response)")
             return data[0]["id"]
@@ -161,7 +159,7 @@ async def fetch_posts(context: BrowserContext, base_url: str, cat_id: int, per_p
     logging.info(f"Fetching posts for category {cat_id}...")
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     try:
-        data = await fetch_json_with_stealth(context, endpoint)
+        data = await fetch_json(context, endpoint)
         return data or []
     except Exception as e:
         logging.warning(f"Error fetching posts: {e}")
@@ -205,7 +203,6 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
     page = None
     try:
         page = await context.new_page()
-        await stealth_async(page)
         await page.goto(link, timeout=90000, wait_until='networkidle')
         page_html = await page.content()
     except Exception as e:
@@ -297,38 +294,42 @@ async def main():
     parser.add_argument("--stopwords-file", type=str, help="Path to stopwords file")
     args = parser.parse_args()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
-        )
-        try:
-            cid = await fetch_category_id(context, args.base_url, args.slug)
-            posts = await fetch_posts(context, args.base_url, cid, per_page=(args.limit or 10) * 3)
-            
-            catalog = load_catalog()
-            posted_ids = load_posted_ids(Path(args.posted_state_file))
-            stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
-            
-            tasks = []
-            for post in posts:
-                if str(post.get("id")) not in posted_ids:
-                    tasks.append(parse_and_save(context, post, args.lang, stopwords))
-            
-            processed_articles_meta = [meta for meta in await asyncio.gather(*tasks) if meta]
-            
-            if processed_articles_meta:
-                for meta in processed_articles_meta:
-                    catalog = [item for item in catalog if item.get("id") != meta.get("id")]
-                    catalog.append(meta)
-                save_catalog(catalog)
-                print("NEW_ARTICLES_STATUS:true")
-            else:
-                print("NEW_ARTICLES_STATUS:false")
+    # ИСПОЛЬЗУЕМ async_playwright ИЗ PLAYWRIGHT-EXTRA
+    pw = await async_playwright().start()
+    
+    # PLAYWRIGHT-EXTRA АВТОМАТИЧЕСКИ ПРИМЕНЯЕТ STEALTH К БРАУЗЕРУ
+    browser = await pw.chromium.launch(headless=True)
+    context = await browser.new_context(
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+    )
+    try:
+        cid = await fetch_category_id(context, args.base_url, args.slug)
+        posts = await fetch_posts(context, args.base_url, cid, per_page=(args.limit or 10) * 3)
         
-        finally:
-            await context.close()
-            await browser.close()
+        catalog = load_catalog()
+        posted_ids = load_posted_ids(Path(args.posted_state_file))
+        stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
+        
+        tasks = []
+        for post in posts:
+            if str(post.get("id")) not in posted_ids:
+                tasks.append(parse_and_save(context, post, args.lang, stopwords))
+        
+        processed_articles_meta = [meta for meta in await asyncio.gather(*tasks) if meta]
+        
+        if processed_articles_meta:
+            for meta in processed_articles_meta:
+                catalog = [item for item in catalog if item.get("id") != meta.get("id")]
+                catalog.append(meta)
+            save_catalog(catalog)
+            print("NEW_ARTICLES_STATUS:true")
+        else:
+            print("NEW_ARTICLES_STATUS:false")
+    
+    finally:
+        await context.close()
+        await browser.close()
+        await pw.stop()
 
 if __name__ == "__main__":
     try:
