@@ -44,6 +44,12 @@ jobs:
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          
+      - name: 🔍 Verify Public IP Address
+        run: |
+          echo "Checking public IP address after VPN setup..."
+          IP_ADDR=$(curl -s ifconfig.me)
+          echo "Current Public IP: $IP_ADDR"
 
       - name: Run parser
         id: parse_step
