@@ -35,31 +35,15 @@ jobs:
 
       - name: Install requirements
         run: |
-          # Устанавливаем зависимости парсера с флагами для принудительной переустановки
-          if [ -f requirements-parser.txt ]; then
-            pip install --no-cache-dir --force-reinstall -r requirements-parser.txt
-          fi
-          
-          # Устанавливаем зависимости постера
-          if [ -f requirements-poster.txt ]; then
-            pip install --no-cache-dir --force-reinstall -r requirements-poster.txt
-          fi
-       
-      - name: Install Playwright Browsers
-        run: python -m playwright install --with-deps chromium
-        
+          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
+          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+      
       - name: 🔐 Setup WireGuard
         run: |
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-          
-      - name: 🔍 Verify Public IP Address
-        run: |
-          echo "Checking public IP address after VPN setup..."
-          IP_ADDR=$(curl -s ifconfig.me)
-          echo "Current Public IP: $IP_ADDR"
 
       - name: Run parser
         id: parse_step
