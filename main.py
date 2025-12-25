@@ -25,7 +25,7 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# --- УСИЛЕНИЕ СКРЕЙПЕРА ---
+# --- УСИЛЕНИЕ СКРЕЙПЕРА (ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
 DEFAULT_HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -33,11 +33,14 @@ DEFAULT_HEADERS = {
     'accept-encoding': 'gzip, deflate, br',
     'upgrade-insecure-requests': '1',
 }
+
+# 1. Создаем объект скрейпера без заголовков
 SCRAPER = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
-    delay=10,
-    request_headers=DEFAULT_HEADERS
+    delay=10
 )
+# 2. Устанавливаем заголовки ПОСЛЕ создания объекта
+SCRAPER.headers.update(DEFAULT_HEADERS)
 SCRAPER_TIMEOUT = (15.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
@@ -282,7 +285,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
                 if path := fut.result(): 
                     images.append(path)
 
-    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
+    if not images and "_embedded" in post and (media := post["_embedded"].get("wp_featuredmedia")):
         if isinstance(media, list) and (u := media[0].get("source_url")):
             if path := save_image(u, img_dir): 
                 images.append(path)
