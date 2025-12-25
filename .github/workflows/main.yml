@@ -35,8 +35,15 @@ jobs:
 
       - name: Install requirements
         run: |
-          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
-          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+          # Устанавливаем зависимости парсера с флагами для принудительной переустановки
+          if [ -f requirements-parser.txt ]; then
+            pip install --no-cache-dir --force-reinstall -r requirements-parser.txt
+          fi
+          
+          # Устанавливаем зависимости постера
+          if [ -f requirements-poster.txt ]; then
+            pip install --no-cache-dir --force-reinstall -r requirements-poster.txt
+          fi
        
       - name: Install Playwright Browsers
         run: python -m playwright install --with-deps chromium
