@@ -138,6 +138,7 @@ async def fetch_json_with_playwright(context: BrowserContext, url: str) -> Optio
     page = None
     try:
         page = await context.new_page()
+        await stealth_async(page)
         
         # 1. Выполняем переход и получаем объект ответа
         response = await page.goto(url, timeout=60000, wait_until='domcontentloaded')
@@ -230,6 +231,7 @@ async def parse_and_save(context: BrowserContext, post: Dict[str, Any], translat
     page = None
     try:
         page = await context.new_page()
+        await stealth_async(page)
         await page.goto(link, timeout=90000, wait_until='networkidle')
         page_html = await page.content()
     except Exception as e:
