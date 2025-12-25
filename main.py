@@ -25,8 +25,20 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-SCRAPER = cloudscraper.create_scraper()
-SCRAPER_TIMEOUT = (10.0, 60.0)
+# --- УСИЛЕНИЕ СКРЕЙПЕРА ---
+DEFAULT_HEADERS = {
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'accept-language': 'en-US,en;q=0.9,ru;q=0.8',
+    'accept-encoding': 'gzip, deflate, br',
+    'upgrade-insecure-requests': '1',
+}
+SCRAPER = cloudscraper.create_scraper(
+    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
+    delay=10,
+    request_headers=DEFAULT_HEADERS
+)
+SCRAPER_TIMEOUT = (15.0, 60.0)
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
@@ -39,15 +51,10 @@ def normalize_text(text: str) -> str:
 
 def sanitize_text(text: str) -> str:
     """Полная стерилизация текста от HTML-тегов и мусора редактора."""
-    if not text:
-        return ""
-    # 1. Декодируем HTML-сущности (&nbsp;, &quot; и т.д.)
+    if not text: return ""
     text = html.unescape(text)
-    # 2. Удаляем любые HTML-теги физически через регулярку
     text = re.sub(r'<[^>]+>', '', text)
-    # 3. Удаляем специфические метки TinyMCE / WordPress
     text = re.sub(r'mce_SELRES_[^ ]+', '', text)
-    # 4. Убираем лишние пробелы и пустые строки (более 2 подряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -63,11 +70,7 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    """Извлекает URL изображения из тега <img>, проверяя множество атрибутов."""
-    attributes_to_check = [
-        "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
-        "data-original", "srcset", "src",
-    ]
+    attributes_to_check = ["data-brsrcset", "data-breeze", "data-src", "data-lazy-src", "data-original", "srcset", "src"]
     for attr in attributes_to_check:
         if src_val := img_tag.get(attr):
             return src_val.split(',')[0].split()[0]
@@ -80,18 +83,25 @@ def fetch_category_id(base_url: str, slug: str) -> int:
         try:
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
-            try:
-                data = r.json()
-            except json.JSONDecodeError as jde:
-                logging.error(f"JSON Decode Error for {endpoint}: {jde}.")
-                raise
             
-            if not data: raise RuntimeError(f"Category '{slug}' not found")
+            content_type = r.headers.get('Content-Type', '')
+            if 'application/json' not in content_type:
+                raise RuntimeError(f"Expected JSON response, but got '{content_type}'. Body: {r.text[:300]}...")
+            
+            data = r.json()
+            if not data:
+                raise RuntimeError(f"Category '{slug}' not found (empty JSON response)")
+            
             return data[0]["id"]
+            
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
-            logging.warning(f"Error fetching category: {e}; retry in {delay:.1f}s")
+            response_text_snippet = ""
+            if 'r' in locals() and hasattr(r, 'text') and r.text:
+                response_text_snippet = f" | Response Body: {r.text[:300]}..."
+            logging.warning(f"Error fetching category: {e}{response_text_snippet}; retry in {delay:.1f}s")
             time.sleep(delay)
+            
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
@@ -169,10 +179,13 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
             for i, chunk in enumerate(chunks):
                 if i > 0: time.sleep(0.5)
                 res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
-                if res: translated_chunks.append(res)
-                else: raise ValueError("Empty chunk")
+                if res and isinstance(res, str): 
+                    translated_chunks.append(res)
+                else: 
+                    raise ValueError("Empty or invalid chunk translation")
             return "".join(translated_chunks)
-        except Exception: continue
+        except Exception: 
+            continue
     return None
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
@@ -180,7 +193,8 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             return [line.strip().lower() for line in f if line.strip()]
-    except Exception: return []
+    except Exception: 
+        return []
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
@@ -192,7 +206,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
-    # Извлекаем и ЧИСТИМ заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     orig_title = sanitize_text(raw_title)
     
@@ -219,33 +232,31 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
             if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
                 logging.info(f"No changes for ID={aid}. Skipping.")
                 return existing_meta
-        except Exception: pass
+        except Exception: 
+            pass
 
-    # Перевод заголовка
     title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
-    title = sanitize_text(title)
+    if title:
+        title = sanitize_text(title)
+    else:
+        logging.error(f"Title translation failed for ID={aid}")
+        return None
 
     soup = BeautifulSoup(page_html, "html.parser")
     
-    # 1. ГЛУБОКАЯ ОЧИСТКА BS4: Удаляем все технические элементы
     for junk in soup.find_all(["span", "div", "script", "style", "iframe"]):
-        # Удаляем если есть признаки закладок TinyMCE или рекламных блоков
         if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", "")):
             junk.decompose()
             
     article_content = soup.find("div", class_="entry-content")
     
-    # Сбор и ЧИСТКА параграфов
     paras = []
     if article_content:
-        # Удаляем блоки похожих записей внутри контента
         for rel in article_content.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")):
             rel.decompose()
-            
         for p in article_content.find_all("p"):
             p_text = p.get_text(strip=True)
             if p_text:
-                # Финальная стерилизация параграфа через sanitize_text
                 clean_p = sanitize_text(p_text)
                 if clean_p:
                     paras.append(clean_p)
@@ -253,25 +264,28 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # Картинки
     img_dir = art_dir / "images"
     srcs = set()
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
-        if h := link_tag.get("href"): srcs.add(h)
+        if h := link_tag.get("href"): 
+            srcs.add(h)
     if article_content:
         for img in article_content.find_all("img"):
-            if u := extract_img_url(img): srcs.add(u)
+            if u := extract_img_url(img): 
+                srcs.add(u)
 
     images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
             futures = {ex.submit(save_image, url, img_dir): url for url in list(srcs)[:10]}
             for fut in as_completed(futures):
-                if path := fut.result(): images.append(path)
+                if path := fut.result(): 
+                    images.append(path)
 
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and (u := media[0].get("source_url")):
-            if path := save_image(u, img_dir): images.append(path)
+            if path := save_image(u, img_dir): 
+                images.append(path)
 
     if not images:
         logging.warning(f"No images for ID={aid}. Skipping.")
@@ -292,7 +306,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
              logging.error(f"Translation failed ID={aid}.")
              return None
         
-        # Стерилизуем перевод (некоторые API добавляют свои теги)
         trans_text = sanitize_text(trans_text)
         
         trans_file_path = art_dir / f"content.{translate_to}.txt"
@@ -323,13 +336,13 @@ def main():
         
         processed_articles_meta = []
         for post in posts:
-            if str(post["id"]) not in posted_ids:
+            if str(post.get("id")) not in posted_ids:
                 if meta := parse_and_save(post, args.lang, stopwords):
                     processed_articles_meta.append(meta)
         
         if processed_articles_meta:
             for meta in processed_articles_meta:
-                catalog = [item for item in catalog if item.get("id") != meta["id"]]
+                catalog = [item for item in catalog if item.get("id") != meta.get("id")]
                 catalog.append(meta)
             save_catalog(catalog)
             print("NEW_ARTICLES_STATUS:true")
