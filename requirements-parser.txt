@@ -1,5 +1,5 @@
 requests
 beautifulsoup4
 httpx
-cloudscraper
 translators
+playwright
