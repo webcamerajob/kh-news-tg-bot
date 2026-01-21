@@ -1,4 +1,4 @@
-import requests
+from curl_cffi import requests as cffi_requests  # Импортируем спец. библиотеку
 import argparse
 import logging
 import json
@@ -96,35 +96,32 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    # Используем безопасный лимит
+    # Лимит 15, чтобы не наглеть
     safe_per_page = 15 
     logging.info(f"Fetching posts for category {cat_id} (limit={safe_per_page})...")
     
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={safe_per_page}&_embed"
     
-    # Притворяемся обычным браузером Chrome, чтобы сайт не блокировал нас
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
-
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logging.info(f"DEBUG: Requesting URL (via requests): {endpoint}")
+            logging.info(f"DEBUG: Requesting URL via curl_cffi: {endpoint}")
             
-            # ВМЕСТО SCRAPER.get ИСПОЛЬЗУЕМ requests.get
-            # Это решает проблему "maximum recursion depth exceeded"
-            r = requests.get(endpoint, headers=headers, timeout=30)
+            # МАГИЯ ЗДЕСЬ: impersonate="chrome"
+            # Это заставляет Cloudflare думать, что мы реальный браузер Chrome
+            r = cffi_requests.get(endpoint, impersonate="chrome120", timeout=30)
             
             logging.info(f"DEBUG: Status Code: {r.status_code}")
 
             if r.status_code == 403:
-                logging.warning("DEBUG: 403 Forbidden. The API might be protected by Cloudflare.")
-                # Если обычный запрос не прошел, тут ничего не поделаешь, 
-                # но чаще всего API открыто.
-            
+                logging.warning("DEBUG: 403 Forbidden. Still blocked? Waiting longer...")
+                time.sleep(5)
+                continue # Пробуем еще раз
+
+            if r.status_code == 429:
+                logging.warning("DEBUG: 429 Too Many Requests. We are rate limited.")
+                time.sleep(10)
+                continue
+
             r.raise_for_status()
             data = r.json()
             
