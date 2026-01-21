@@ -158,21 +158,73 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
     return chunks
 
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    if not text: return ""
-    providers = ["yandex", "google", "bing"]
+    """
+    Безопасный перевод текста. 
+    1. Не отправляет пустые строки (избегает 422).
+    2. Сохраняет форматирование (переносы строк).
+    3. Если перевод не удался, возвращает оригинал куска.
+    """
+    if not text:
+        return ""
+    
+    # Сначала пробуем Bing (стабильнее держит лимиты), потом Google
+    providers = ["bing", "google", "yandex"] 
     normalized_text = normalize_text(text)
+    
+    # Если весь текст пустой/пробельный — возвращаем пустоту сразу
+    if not normalized_text.strip():
+        return ""
+
     for provider in providers:
         limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
+            # Разбиваем на куски
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
+            
             for i, chunk in enumerate(chunks):
-                if i > 0: time.sleep(0.5)
-                res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
-                if res: translated_chunks.append(res)
-                else: raise ValueError("Empty chunk")
+                # ПРОВЕРКА 1: Если кусок состоит только из пробелов/переносов (\n\n)
+                if not chunk.strip():
+                    # Мы НЕ шлем его в API (чтобы не получить 422),
+                    # но мы ОБЯЗАТЕЛЬНО добавляем его в список, чтобы сохранить абзацы.
+                    translated_chunks.append(chunk)
+                    continue
+
+                # Небольшая пауза между запросами, чтобы не банили
+                if i > 0: 
+                    time.sleep(1.0) 
+                
+                # Попытка перевода
+                try:
+                    res = ts.translate_text(
+                        chunk, 
+                        translator=provider, 
+                        from_language="en", 
+                        to_language=to_lang, 
+                        timeout=45
+                    )
+                except Exception:
+                    res = None
+
+                # ПРОВЕРКА 2: Сохранение данных
+                if res and res.strip(): 
+                    # Если перевод пришел нормальный — используем его
+                    translated_chunks.append(res)
+                else:
+                    # Если переводчик глюкнул или вернул пустоту —
+                    # ВСТАВЛЯЕМ ОРИГИНАЛ, чтобы не потерять смысл текста.
+                    logging.warning(f"Chunk translation failed or empty via {provider}. Keeping original.")
+                    translated_chunks.append(chunk)
+                
+            # Собираем всё обратно в единый текст
             return "".join(translated_chunks)
-        except Exception: continue
+            
+        except Exception as e:
+            # Если провайдер упал глобально (например, бан IP), пробуем следующего
+            logging.warning(f"Provider {provider} crashed: {e}. Switching to next...")
+            time.sleep(2)
+            continue
+            
     return None
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
