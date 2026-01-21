@@ -322,10 +322,34 @@ def main():
         stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
         
         processed_articles_meta = []
-        for post in posts:
-            if str(post["id"]) not in posted_ids:
-                if meta := parse_and_save(post, args.lang, stopwords):
-                    processed_articles_meta.append(meta)
+        print(f"DEBUG: Loaded {len(posted_ids)} IDs from local database.")
+        
+        for i, post in enumerate(posts):
+            pid = str(post["id"])
+            ptitle = post["title"]["rendered"]
+            pdate = post["date"]
+            
+            # 1. Проверяем, есть ли ID в базе
+            if pid in posted_ids:
+                # Если статья старая — молча пропускаем (чтобы не засорять лог),
+                # но для первых 3 штук выведем инфо для проверки.
+                if i < 3:
+                    print(f"DEBUG: SKIP OLD: ID={pid} | {ptitle[:30]}...")
+                continue
+            
+            # 2. Если ID новый — кричим об этом в лог
+            print(f"DEBUG: FOUND NEW CANDIDATE: ID={pid} Date={pdate} | {ptitle}")
+
+            # 3. Пробуем обработать
+            meta = parse_and_save(post, args.lang, stopwords)
+            
+            # 4. Смотрим результат обработки
+            if meta:
+                print(f"DEBUG: SUCCESS! Article {pid} saved.")
+                processed_articles_meta.append(meta)
+            else:
+                # Если parse_and_save вернул None — значит, статья была отфильтрована
+                print(f"DEBUG: REJECTED: Article {pid} failed validation (check logs above for reason).")
         
         if processed_articles_meta:
             for meta in processed_articles_meta:
