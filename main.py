@@ -12,9 +12,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
 import fcntl
 
-# --- ИЗМЕНЕНИЕ 1: Импорт curl_cffi вместо cloudscraper ---
+# --- ИЗМЕНЕНИЕ 1: Меняем библиотеку для обхода защиты ---
+# from bs4 import BeautifulSoup
+# import cloudscraper <-- УДАЛЕНО (вызывало ошибки)
 from bs4 import BeautifulSoup
-from curl_cffi import requests as cffi_requests 
+from curl_cffi import requests as cffi_requests # <-- ДОБАВЛЕНО (Safari)
 import translators as ts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -24,8 +26,11 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# --- ИЗМЕНЕНИЕ 2: Настройка Safari для обхода Cloudflare ---
-# Создаем глобальную сессию
+# --- ИЗМЕНЕНИЕ 2: Настраиваем "Safari" вместо Cloudscraper ---
+# SCRAPER = cloudscraper.create_scraper() <-- УДАЛЕНО
+# SCRAPER_TIMEOUT = (10.0, 60.0) <-- УДАЛЕНО
+
+# Создаем сессию, которая притворяется Safari 15.5 (MacOS)
 SCRAPER = cffi_requests.Session(impersonate="safari15_5")
 SCRAPER.headers = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
@@ -33,8 +38,7 @@ SCRAPER.headers = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/"
 }
-# curl_cffi использует просто число для таймаута
-SCRAPER_TIMEOUT = 30 
+SCRAPER_TIMEOUT = 30 # curl_cffi принимает int, а не кортеж
 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
@@ -49,13 +53,13 @@ def sanitize_text(text: str) -> str:
     """Полная стерилизация текста от HTML-тегов и мусора редактора."""
     if not text:
         return ""
-    # 1. Декодируем HTML-сущности
+    # 1. Декодируем HTML-сущности (&nbsp;, &quot; и т.д.)
     text = html.unescape(text)
-    # 2. Удаляем любые HTML-теги
+    # 2. Удаляем любые HTML-теги физически через регулярку
     text = re.sub(r'<[^>]+>', '', text)
     # 3. Удаляем специфические метки TinyMCE / WordPress
     text = re.sub(r'mce_SELRES_[^ ]+', '', text)
-    # 4. Убираем лишние пробелы
+    # 4. Убираем лишние пробелы и пустые строки (более 2 подряд)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -71,6 +75,7 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
+    """Извлекает URL изображения из тега <img>, проверяя множество атрибутов."""
     attributes_to_check = [
         "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
         "data-original", "srcset", "src",
@@ -85,7 +90,6 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     endpoint = f"{base_url}/wp-json/wp/v2/categories?slug={slug}"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            # Используем curl_cffi
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
             try:
@@ -103,18 +107,22 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    # Используем безопасный лимит
-    safe_per_page = 15 
-    logging.info(f"Fetching posts for category {cat_id} (limit={safe_per_page})...")
+    # ВАЖНО: Принудительно ограничиваем запрос 15 постами. 
+    # Запрос >15 постов с _embed вешает сервер и вызывает 403/429 ошибку.
+    safe_per_page = 15
+    logging.info(f"Fetching posts for category {cat_id} (requested={per_page}, safe_limit={safe_per_page})...")
+    
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={safe_per_page}&_embed"
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            time.sleep(2) # Пауза перед запросом
+            # Небольшая пауза перед запросом
+            time.sleep(2)
             
-            # --- ИЗМЕНЕНИЕ 3: Обработка ошибок Cloudflare ---
+            # Используем curl_cffi
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
             
+            # Обработка блокировок
             if r.status_code == 403:
                 logging.warning("DEBUG: 403 Forbidden. Waiting...")
                 time.sleep(5)
@@ -141,7 +149,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
         try:
             r = SCRAPER.get(src_url, timeout=SCRAPER_TIMEOUT)
             r.raise_for_status()
-            # curl_cffi возвращает bytes в content
+            # curl_cffi возвращает bytes в .content (убрали .raw)
             dest.write_bytes(r.content)
             return str(dest)
         except Exception as e:
@@ -183,51 +191,44 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
         text = text[chunk_end:].lstrip()
     return chunks
 
-# --- ИЗМЕНЕНИЕ 4: Безопасная функция перевода (Anti-422) ---
+# --- ИЗМЕНЕНИЕ 3: Безопасная функция перевода (защита от ошибки 422) ---
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     if not text: return ""
-    # Нормализуем, но не удаляем структуру
+    providers = ["bing", "google", "yandex"] # Bing обычно стабильнее
     normalized_text = normalize_text(text)
+    
+    # Если текст пустой после нормализации - выход
     if not normalized_text.strip(): return ""
 
-    providers = ["bing", "google", "yandex"] 
     for provider in providers:
         limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
-            
             for i, chunk in enumerate(chunks):
-                # ВАЖНО: Пропускаем пустые куски, чтобы не злить API
+                # ВАЖНО: Если кусок пустой (пробелы/энтер) — не шлем в API (избегаем 422)
+                # но добавляем в результат, чтобы сохранить абзацы.
                 if not chunk.strip():
                     translated_chunks.append(chunk)
                     continue
 
-                if i > 0: time.sleep(1.0) 
+                if i > 0: time.sleep(1.0)
                 
                 try:
-                    res = ts.translate_text(
-                        chunk, 
-                        translator=provider, 
-                        from_language="en", 
-                        to_language=to_lang, 
-                        timeout=45
-                    )
+                    res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
                 except Exception:
-                    res = None
-                
-                # Если перевелось - сохраняем, если нет - оригинал
+                    res = None # Если ошибка - просто вернем None, не падаем
+
                 if res and res.strip(): 
                     translated_chunks.append(res)
                 else:
+                    # Если перевода нет - добавляем оригинал, чтобы не потерять текст
                     translated_chunks.append(chunk)
-            
+
             return "".join(translated_chunks)
-            
-        except Exception as e:
-            logging.warning(f"Provider {provider} failed: {e}. Switching...")
+        except Exception: 
             time.sleep(2)
-            continue
+            continue # Пробуем следующего провайдера
     return None
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
@@ -260,7 +261,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
 
     logging.info(f"Processing ID={aid}: {link}")
     try:
-        # Используем curl_cffi
+        # Используем новый SCRAPER
         page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
         page_response.raise_for_status()
         page_html = page_response.text
@@ -283,8 +284,9 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
 
     soup = BeautifulSoup(page_html, "html.parser")
     
-    # 1. ГЛУБОКАЯ ОЧИСТКА BS4
+    # 1. ГЛУБОКАЯ ОЧИСТКА BS4: Удаляем все технические элементы
     for junk in soup.find_all(["span", "div", "script", "style", "iframe"]):
+        # Удаляем если есть признаки закладок TinyMCE или рекламных блоков
         if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", "")):
             junk.decompose()
             
@@ -293,12 +295,14 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     # Сбор и ЧИСТКА параграфов
     paras = []
     if article_content:
+        # Удаляем блоки похожих записей внутри контента
         for rel in article_content.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")):
             rel.decompose()
             
         for p in article_content.find_all("p"):
             p_text = p.get_text(strip=True)
             if p_text:
+                # Финальная стерилизация параграфа через sanitize_text
                 clean_p = sanitize_text(p_text)
                 if clean_p:
                     paras.append(clean_p)
@@ -345,6 +349,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
              logging.error(f"Translation failed ID={aid}.")
              return None
         
+        # Стерилизуем перевод (некоторые API добавляют свои теги)
         trans_text = sanitize_text(trans_text)
         
         trans_file_path = art_dir / f"content.{translate_to}.txt"
@@ -368,8 +373,8 @@ def main():
 
     try:
         cid = fetch_category_id(args.base_url, args.slug)
-        # Ограничиваем запрос 15 постами для безопасности
-        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10)) 
+        # В fetch_posts мы принудительно используем 15, чтобы не получить бан.
+        posts = fetch_posts(args.base_url, cid, per_page=(args.limit or 10))
         
         catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
@@ -380,6 +385,8 @@ def main():
 
         for post in posts:
             if str(post["id"]) not in posted_ids:
+                # Добавил принт для наглядности (можно убрать)
+                print(f"DEBUG: Processing NEW Article ID={post['id']}")
                 if meta := parse_and_save(post, args.lang, stopwords):
                     processed_articles_meta.append(meta)
         
