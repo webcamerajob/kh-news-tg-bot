@@ -4,3 +4,4 @@ httpx
 cloudscraper
 translators
 psutil
+curl_cffi
