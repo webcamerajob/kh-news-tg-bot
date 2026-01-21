@@ -191,13 +191,13 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
         text = text[chunk_end:].lstrip()
     return chunks
 
-# --- ИЗМЕНЕНИЕ 3: Безопасная функция перевода (защита от ошибки 422) ---
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     if not text: return ""
-    providers = ["bing", "google", "yandex"] # Bing обычно стабильнее
-    normalized_text = normalize_text(text)
     
-    # Если текст пустой после нормализации - выход
+    # 1. Меняем приоритет: Google первый, он лучше держит объемы
+    providers = ["google", "bing", "yandex"] 
+    
+    normalized_text = normalize_text(text)
     if not normalized_text.strip(): return ""
 
     for provider in providers:
@@ -205,30 +205,44 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
         try:
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
+            
             for i, chunk in enumerate(chunks):
-                # ВАЖНО: Если кусок пустой (пробелы/энтер) — не шлем в API (избегаем 422)
-                # но добавляем в результат, чтобы сохранить абзацы.
                 if not chunk.strip():
                     translated_chunks.append(chunk)
                     continue
 
-                if i > 0: time.sleep(1.0)
+                # 2. Увеличиваем паузу до 2-3 секунд, чтобы не злить API
+                if i > 0: 
+                    time.sleep(2.0) 
                 
                 try:
-                    res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
-                except Exception:
-                    res = None # Если ошибка - просто вернем None, не падаем
+                    # Пытаемся перевести
+                    res = ts.translate_text(
+                        chunk, 
+                        translator=provider, 
+                        from_language="en", 
+                        to_language=to_lang, 
+                        timeout=60 # Даем больше времени на раздумья
+                    )
+                except Exception as e:
+                    # 3. ВЫВОДИМ ОШИБКУ, чтобы понять причину
+                    print(f"DEBUG: Chunk translation error ({provider}): {e}")
+                    res = None
 
                 if res and res.strip(): 
                     translated_chunks.append(res)
                 else:
-                    # Если перевода нет - добавляем оригинал, чтобы не потерять текст
+                    # Если перевод не удался - оставляем оригинал
+                    print(f"WARNING: Chunk failed. Keeping EN original.")
                     translated_chunks.append(chunk)
 
             return "".join(translated_chunks)
-        except Exception: 
-            time.sleep(2)
-            continue # Пробуем следующего провайдера
+            
+        except Exception as e:
+            print(f"WARNING: Provider {provider} failed globally: {e}. Switching...")
+            time.sleep(3)
+            continue
+            
     return None
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
