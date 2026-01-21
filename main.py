@@ -95,16 +95,36 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     raise RuntimeError("Failed fetching category id")
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    logging.info(f"Fetching posts for category {cat_id}...")
-    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
+    # Уменьшаем лимит, чтобы сервер не пугался (если было 45, станет 15)
+    safe_per_page = 15 
+    logging.info(f"Fetching posts for category {cat_id} (limit={safe_per_page})...")
+    
+    endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={safe_per_page}&_embed"
+    
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            logging.info(f"DEBUG: Requesting URL: {endpoint}")
             r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
+            
+            # ВАЖНО: Выводим статус и первые 100 символов ответа
+            logging.info(f"DEBUG: Status Code: {r.status_code}")
+            logging.info(f"DEBUG: Response Preview: {r.text[:200]}...")
+
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            
+            if not data:
+                logging.warning("DEBUG: API returned an empty list []!")
+            else:
+                logging.info(f"DEBUG: Successfully fetched {len(data)} posts.")
+                
+            return data
+            
         except Exception as e:
             delay = BASE_DELAY * 2 ** (attempt - 1)
+            logging.warning(f"Error fetching posts: {e}; retry in {delay:.1f}s")
             time.sleep(delay)
+            
     return []
 
 def save_image(src_url: str, folder: Path) -> Optional[str]:
