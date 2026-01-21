@@ -158,60 +158,22 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
     return chunks
 
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    # ОТЛАДКА: Если вы не видите этой надписи в логе — значит работает СТАРЫЙ код
-    print(f"DEBUG: Translating text length {len(text) if text else 0} chars...")
-
-    if not text:
-        return ""
-    
+    if not text: return ""
+    providers = ["yandex", "google", "bing"]
     normalized_text = normalize_text(text)
-    if not normalized_text.strip():
-        return ""
-
-    providers = ["bing", "google", "yandex"] 
-
     for provider in providers:
+        limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
-            limit = PROVIDER_LIMITS.get(provider, 3000)
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
-            
             for i, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    translated_chunks.append(chunk)
-                    continue
-
-                if i > 0: time.sleep(1.5) 
-                
-                # ЖЕСТКАЯ ЗАЩИТА
-                try:
-                    res = ts.translate_text(
-                        chunk, 
-                        translator=provider, 
-                        from_language="en", 
-                        to_language=to_lang, 
-                        timeout=45
-                    )
-                    # Если вернулась 422 или ошибка, res может быть None или raise Error
-                    if res and res.strip():
-                        translated_chunks.append(res)
-                    else:
-                        translated_chunks.append(chunk)
-
-                except Exception as inner_e:
-                    # Ловим ошибку конкретного куска
-                    print(f"WARNING: Chunk failed in {provider}: {inner_e}")
-                    translated_chunks.append(chunk) # Оставляем оригинал
-                
+                if i > 0: time.sleep(0.5)
+                res = ts.translate_text(chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45)
+                if res: translated_chunks.append(res)
+                else: raise ValueError("Empty chunk")
             return "".join(translated_chunks)
-
-        except Exception as e:
-            print(f"WARNING: Provider {provider} failed globally: {e}")
-            time.sleep(2)
-            continue
-            
-    print("ERROR: All translators failed. Returning original text.")
-    return normalized_text # Если всё сломалось — возвращаем оригинал, но НЕ ПАДАЕМ
+        except Exception: continue
+    return None
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
     if not file_path or not file_path.exists(): return []
