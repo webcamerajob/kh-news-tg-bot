@@ -333,29 +333,37 @@ def main():
 
     try:
         cid = fetch_category_id(args.base_url, args.slug)
-        # Запрашиваем чуть больше лимита, но не перегибаем (макс 20)
-        fetch_limit = min(args.limit + 5, 20)
-        posts = fetch_posts(args.base_url, cid, per_page=fetch_limit)
+        
+        # 1. РАЦИОНАЛЬНЫЙ ЗАПРОС
+        # Просим у сервера (Limit + 5) статей на случай дублей.
+        # Но ставим потолок 20, чтобы не получить тайм-аут или бан.
+        fetch_count = min(args.limit + 5, 20)
+        posts = fetch_posts(args.base_url, cid, per_page=fetch_count)
         
         catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
-        stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
+        sw_file = Path(args.stopwords_file) if args.stopwords_file else None
+        stopwords = load_stopwords(sw_file)
         
         processed_articles_meta = []
-        count = 0
+        count = 0 # Счетчик реально обработанных НОВЫХ статей
 
         for post in posts:
-            # Прерываем, если уже обработали нужное количество (args.limit)
+            # 2. ЖЕСТКИЙ ЛИМИТ
+            # Если мы уже набрали нужное количество статей — СТОП МАШИНА.
+            # Не идем дальше, не тратим лимиты переводчика и время.
             if count >= args.limit:
                 break
 
             if str(post["id"]) not in posted_ids:
+                # Тяжелая операция (парсинг + перевод) запускается только если мы еще не достигли лимита
                 if meta := parse_and_save(post, args.lang, stopwords):
                     processed_articles_meta.append(meta)
-                    count += 1 # Увеличиваем счетчик успешных обработок
+                    count += 1
         
         if processed_articles_meta:
             for meta in processed_articles_meta:
+                # Обновляем каталог, убирая старые версии если были
                 catalog = [item for item in catalog if item.get("id") != meta["id"]]
                 catalog.append(meta)
             save_catalog(catalog)
@@ -363,9 +371,9 @@ def main():
         else:
             print("NEW_ARTICLES_STATUS:false")
 
-    except Exception as e:
+    except Exception:
         logging.exception("Fatal error:")
         exit(1)
 
 if __name__ == "__main__":
-    main()
+    main() 
