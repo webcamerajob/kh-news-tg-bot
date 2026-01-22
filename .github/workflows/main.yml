@@ -14,7 +14,7 @@ on:
     
 env:
   POST_DELAY: 10
-  BATCH_LIMIT: 15
+  BATCH_LIMIT: 1
   TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
   WG_CONFIG:        ${{ secrets.WG_CONFIG }}
