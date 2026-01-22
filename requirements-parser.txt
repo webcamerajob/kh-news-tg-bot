@@ -1,3 +1,4 @@
 curl_cffi
 beautifulsoup4
 translators
+google-generativeai
