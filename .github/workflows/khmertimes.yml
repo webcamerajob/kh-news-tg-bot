@@ -1,9 +1,9 @@
 name: "Khmertimes: AI Parse & Post"
 
 on:
-  workflow_dispatch: # Ручной запуск
+  workflow_dispatch:
   schedule:
-    - cron: '0 0,6,12,18 * * *' # 4 раза в день (Камбоджийское время: 7:00, 13:00, 19:00, 1:00)
+    - cron: '0 0,6,12,18 * * *'
 
 permissions:
   contents: write
@@ -29,7 +29,6 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements-ai.txt
-          # Если у poster.py свои требования:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
 
       - name: 🔐 Setup WireGuard
@@ -42,17 +41,19 @@ jobs:
         run: python3 test_ai.py
 
       - name: 🔍 Step 2: Run Parser
-        id: parse
+        id: parse_step
         run: |
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
-            --limit 10 \
-            --posted-state-file articles/posted.json | tee parser_out.txt
+            --limit 15 \
+            --posted-state-file articles/posted.json | tee parser_output.txt
           
-          # Проверяем, есть ли новые статьи
-          if grep -q "NEW_ARTICLES_STATUS:true" parser_out.txt; then
-            echo "new_data=true" >> $GITHUB_OUTPUT
+          # Извлекаем статус и передаем его в GitHub Output
+          if grep -q "NEW_ARTICLES_STATUS:true" parser_output.txt; then
+            echo "new_articles_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_articles_found=false" >> $GITHUB_OUTPUT
           fi
 
       - name: 🛑 Teardown WireGuard
@@ -60,7 +61,7 @@ jobs:
         run: sudo wg-quick down wg0 || true
 
       - name: 🚀 Step 3: Run Poster
-        if: steps.parse.outputs.new_data == 'true'
+        if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
           python3 poster.py \
             --parsed-dir articles \
@@ -71,5 +72,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add articles/posted.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "update: sync posted.json" && git push)
+          if [ -f "articles/posted.json" ]; then
+            git add articles/posted.json
+            git diff --quiet && git diff --staged --quiet || (git commit -m "update: sync posted.json" && git push)
+          fi
