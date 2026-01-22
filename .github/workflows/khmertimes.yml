@@ -1,4 +1,4 @@
-name: "Khmertimes: AI Parse & Post"
+name: Khmertimes AI Parse and Post
 
 on:
   workflow_dispatch:
@@ -18,36 +18,37 @@ jobs:
       WG_CONFIG: ${{ secrets.WG_CONFIG }}
 
     steps:
-      - name: Checkout
+      - name: "Checkout code"
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: "Set up Python"
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install Dependencies
+      - name: "Install Dependencies"
         run: |
           pip install -r requirements-parser.txt
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
 
-      - name: 🔐 Setup WireGuard
+      - name: "Setup WireGuard"
         run: |
-          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
 
-      - name: 🧪 Step 1: Test AI Connection
+      - name: "Test AI Connection"
         run: python3 test_ai.py
 
-      - name: 🔍 Step 2: Run Parser
+      - name: "Run Parser"
         id: parse_step
         run: |
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
             --limit 15 \
-            --posted-state-file articles/posted.json | tee parser_output.txt
+            --posted-state-file "articles/posted.json" | tee parser_output.txt
           
           if grep -q "NEW_ARTICLES_STATUS:true" parser_output.txt; then
             echo "new_articles_found=true" >> $GITHUB_OUTPUT
@@ -55,18 +56,18 @@ jobs:
             echo "new_articles_found=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: 🛑 Teardown WireGuard
+      - name: "Teardown WireGuard"
         if: always()
         run: sudo wg-quick down wg0 || true
 
-      - name: 🚀 Step 3: Run Poster
+      - name: "Run Poster"
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
           python3 poster.py \
-            --parsed-dir articles \
-            --state-file articles/posted.json
+            --parsed-dir "articles" \
+            --state-file "articles/posted.json"
 
-      - name: 💾 Step 4: Save Progress
+      - name: "Save Progress"
         if: always()
         run: |
           git config user.name "github-actions[bot]"
