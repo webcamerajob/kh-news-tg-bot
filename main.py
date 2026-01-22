@@ -13,10 +13,8 @@ from typing import Any, Dict, List, Optional, Set
 import fcntl
 
 from bs4 import BeautifulSoup
-from curl_cffi import requests as cffi_requests 
+from curl_cffi import requests as cffi_requests, CurlHttpVersion
 import translators as ts
-# ВАЖНО: Добавляем этот импорт для настройки версии HTTP
-from curl_cffi.requests import CurlHttpVersion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
