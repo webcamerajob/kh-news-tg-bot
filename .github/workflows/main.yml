@@ -53,15 +53,16 @@ jobs:
           cat /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
-      - name: Run parser
+      - name: "Run Parser"
         id: parse_step
         run: |
-          python3 main.py --limit 10 \
+          python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
+            --limit $BATCH_LIMIT \
             --lang 'ru' \
             --posted-state-file articles/posted.json \
-            --stopwords-file stopwords.txt | tee parser_output.txt # <-- ДОБАВЛЕНА ЭТА СТРОКА
+            --stopwords-file stopwords.txt | tee parser_output.txt
           
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
