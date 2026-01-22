@@ -301,40 +301,48 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
         json.dump(minimal, f, ensure_ascii=False, indent=2)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", required=True)
-    parser.add_argument("--slug", default="national")
-    parser.add_argument("-n", "--limit", type=int, default=10)
-    parser.add_argument("-l", "--lang", default="ru")
-    parser.add_argument("--posted-state-file", default="articles/posted.json")
-    parser.add_argument("--stopwords-file")
+    parser = argparse.ArgumentParser(description="Parser")
+    parser.add_argument("--base-url", type=str, required=True, help="WP site base URL")
+    parser.add_argument("--slug", type=str, default="national", help="Category slug")
+    parser.add_argument("-n", "--limit", type=int, default=10, help="Max posts to parse")
+    parser.add_argument("-l", "--lang", type=str, default="ru", help="Translate to language code")
+    parser.add_argument("--posted-state-file", type=str, default="articles/posted.json", help="State file path")
+    parser.add_argument("--stopwords-file", type=str, help="Path to stopwords file")
     args = parser.parse_args()
 
     try:
         cid = fetch_category_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, per_page=args.limit)
+        # Запрашиваем чуть больше лимита, но не перегибаем (макс 20)
+        fetch_limit = min(args.limit + 5, 20)
+        posts = fetch_posts(args.base_url, cid, per_page=fetch_limit)
+        
         catalog = load_catalog()
         posted_ids = load_posted_ids(Path(args.posted_state_file))
+        stopwords = load_stopwords(Path(args.stopwords_file) if args.stopwords_file else None)
         
-        sw_file = Path(args.stopwords_file) if args.stopwords_file else None
-        stopwords = [l.strip().lower() for l in sw_file.read_text(encoding='utf-8').splitlines() if l.strip()] if sw_file and sw_file.exists() else []
-        
-        processed = []
+        processed_articles_meta = []
+        count = 0
+
         for post in posts:
+            # Прерываем, если уже обработали нужное количество (args.limit)
+            if count >= args.limit:
+                break
+
             if str(post["id"]) not in posted_ids:
                 if meta := parse_and_save(post, args.lang, stopwords):
-                    processed.append(meta)
+                    processed_articles_meta.append(meta)
+                    count += 1 # Увеличиваем счетчик успешных обработок
         
-        if processed:
-            for m in processed:
-                catalog = [i for i in catalog if i.get("id") != m["id"]]
-                catalog.append(m)
+        if processed_articles_meta:
+            for meta in processed_articles_meta:
+                catalog = [item for item in catalog if item.get("id") != meta["id"]]
+                catalog.append(meta)
             save_catalog(catalog)
             print("NEW_ARTICLES_STATUS:true")
         else:
             print("NEW_ARTICLES_STATUS:false")
 
-    except Exception:
+    except Exception as e:
         logging.exception("Fatal error:")
         exit(1)
 
