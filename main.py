@@ -73,56 +73,64 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
 
 # --- ЛОГИКА ПЕРЕВОДА ---
 
-PROVIDER_LIMITS = {"google": 3000, "bing": 3000}
+PROVIDER_LIMITS = {"google": 4800, "bing": 4500, "yandex": 4000}
 
 def chunk_text_by_limit(text: str, limit: int) -> List[str]:
     chunks = []
     while text:
         if len(text) <= limit:
-            chunks.append(text); break
+            chunks.append(text)
+            break
         split_pos = text.rfind('\n\n', 0, limit)
         if split_pos == -1: split_pos = text.rfind('. ', 0, limit)
+        if split_pos == -1: split_pos = text.rfind(' ', 0, limit)
         if split_pos == -1: split_pos = limit
+        
+        # ЗАЩИТА: Гарантируем сдвиг минимум на 1 символ, чтобы не зациклиться
         chunk_end = max(1, split_pos + (2 if text[split_pos:split_pos+2] == '\n\n' else 1))
+        
         chunks.append(text[:chunk_end])
         text = text[chunk_end:].lstrip()
     return chunks
-
-def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    if not text or not text.strip(): return ""
     
-    providers = ["google", "bing"] 
+def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
+    if not text: return ""
+    # Твой приоритет провайдеров
+    providers = ["google", "bing", "yandex"]
     normalized_text = normalize_text(text)
-
+    
     for provider in providers:
         limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
-            provider_failed = False
             
             for i, chunk in enumerate(chunks):
-                if i > 0: time.sleep(1.5) 
+                # Твоя пауза
+                if i > 0: time.sleep(0.5)
                 
-                try:
-                    res = ts.translate_text(chunk, translator=provider, to_language=to_lang, timeout=20)
-                    if res:
-                        translated_chunks.append(res)
-                    else:
-                        provider_failed = True; break
-                except Exception as e:
-                    logging.warning(f"   [!] {provider} error: {e}")
-                    provider_failed = True
-                    if "resolve" in str(e).lower() or "name" in str(e).lower():
-                        break
-                    break
-
-            if not provider_failed and translated_chunks:
-                return "".join(translated_chunks)
-        except Exception:
+                # Твой таймаут 45 секунд
+                res = ts.translate_text(
+                    chunk, 
+                    translator=provider, 
+                    from_language="en", 
+                    to_language=to_lang, 
+                    timeout=45
+                )
+                if res: 
+                    translated_chunks.append(res)
+                else: 
+                    raise ValueError("Empty chunk")
+            
+            return "".join(translated_chunks)
+            
+        except Exception as e:
+            # ЗАЩИТА: Если ошибка DNS/сети, не ждем таймаутов, идем к следующему
+            if "resolve" in str(e).lower() or "name" in str(e).lower():
+                logging.warning(f"Ошибка сети у {provider}, переключаем...")
             continue
             
-    return normalized_text 
+    return None
 
 # --- РАБОТА С САЙТОМ ---
 
@@ -297,6 +305,8 @@ def load_catalog() -> List[Dict[str, Any]]:
     if not CATALOG_PATH.exists(): return []
     try:
         with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+            # Обязательная блокировка на чтение
+            fcntl.flock(f, fcntl.LOCK_SH)
             return [item for item in json.load(f) if isinstance(item, dict) and "id" in item]
     except Exception: return []
 
@@ -304,8 +314,12 @@ def save_catalog(catalog: List[Dict[str, Any]]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     minimal = [{"id": item["id"], "hash": item.get("hash", ""), "translated_to": item.get("translated_to", "")}
                for item in catalog if isinstance(item, dict) and "id" in item]
-    with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(minimal, f, ensure_ascii=False, indent=2)
+    try:
+        with open(CATALOG_PATH, "w", encoding="utf-8") as f:
+            # Обязательная блокировка на запись
+            fcntl.flock(f, fcntl.LOCK_EX)
+            json.dump(minimal, f, ensure_ascii=False, indent=2)
+    except IOError: pass
 
 def main():
     parser = argparse.ArgumentParser(description="Parser")
