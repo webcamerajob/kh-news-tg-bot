@@ -92,36 +92,36 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     normalized_text = normalize_text(text)
 
     for provider in providers:
-        limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
-            chunks = chunk_text_by_limit(normalized_text, limit)
+            # Оригинальная логика чанков (сохраняем функционал для длинных текстов)
+            chunks = chunk_text_by_limit(normalized_text, 3000)
             translated_chunks = []
             provider_failed = False
             
             for i, chunk in enumerate(chunks):
-                logging.info(f"   --- Перевод чанка {i+1}/{len(chunks)} ({provider})...")
-                if i > 0: time.sleep(2.5) 
+                if i > 0: time.sleep(1.5) 
                 
                 try:
-                    res = ts.translate_text(chunk, translator=provider, to_language=to_lang, timeout=12)
-                    if res and res.strip():
+                    # УВЕЛИЧИВАЕМ ТАЙМАУТ до 20 секунд (для медленных VPN)
+                    res = ts.translate_text(chunk, translator=provider, to_language=to_lang, timeout=20)
+                    if res:
                         translated_chunks.append(res)
                     else:
                         provider_failed = True; break
                 except Exception as e:
-                    logging.warning(f"   [!] Ошибка чанка {provider}: {e}")
-                    provider_failed = True; break
+                    logging.warning(f"   [!] {provider} error: {e}")
+                    provider_failed = True
+                    # Если DNS не работает, сразу выходим из этого провайдера
+                    if "resolve" in str(e).lower() or "name" in str(e).lower():
+                        break
+                    break
 
-            if not provider_failed:
+            if not provider_failed and translated_chunks:
                 return "".join(translated_chunks)
+        except Exception:
+            continue
             
-            # Если DNS не резолвится, нет смысла пробовать чанки дальше
-            if "resolve" in str(provider_failed).lower(): break 
-        except Exception: continue
-            
-    return normalized_text 
-
-# --- WP API ---
+    return normalized_text # Fallback к оригиналу
 
 def fetch_category_id(base_url: str, slug: str) -> int:
     logging.info(f"Получение ID категории '{slug}'...")
