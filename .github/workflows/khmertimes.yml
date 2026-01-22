@@ -28,7 +28,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install -r requirements-ai.txt
+          pip install -r requirements-parser.txt
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
 
       - name: 🔐 Setup WireGuard
@@ -49,7 +49,6 @@ jobs:
             --limit 15 \
             --posted-state-file articles/posted.json | tee parser_output.txt
           
-          # Извлекаем статус и передаем его в GitHub Output
           if grep -q "NEW_ARTICLES_STATUS:true" parser_output.txt; then
             echo "new_articles_found=true" >> $GITHUB_OUTPUT
           else
