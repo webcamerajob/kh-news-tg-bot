@@ -43,8 +43,14 @@ jobs:
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
-          # ФИКС DNS: Без этого шага переводчики будут "висеть"
-          sudo ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
+          
+          # ФИКС: Удаляем битую ссылку и создаем статический файл DNS
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
+          
+          # Проверка (для логов)
+          echo "Текущий DNS:"
+          cat /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: Run parser
