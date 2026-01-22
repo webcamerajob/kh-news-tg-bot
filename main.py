@@ -192,57 +192,28 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
     return chunks
 
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    if not text: return ""
+    if not text or not text.strip(): return ""
     
-    # Список провайдеров
-    providers = ["google", "bing", "yandex"] 
+    providers = ["google", "bing"] # Оставим два самых быстрых
     normalized_text = normalize_text(text)
-    
+
     for provider in providers:
-        limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
-            chunks = chunk_text_by_limit(normalized_text, limit)
-            translated_chunks = []
-            provider_failed = False # Флаг поломки текущего провайдера
-            
-            for i, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    translated_chunks.append(chunk)
-                    continue
-
-                if i > 0: time.sleep(2.0) 
-                
-                try:
-                    res = ts.translate_text(
-                        chunk, 
-                        translator=provider, 
-                        from_language="en", 
-                        to_language=to_lang, 
-                        timeout=30
-                    )
-                    if res and res.strip():
-                        translated_chunks.append(res)
-                    else:
-                        provider_failed = True # Провайдер вернул пустоту
-                        break # Выходим из цикла чанков
-                except Exception as e:
-                    print(f"DEBUG: Chunk error ({provider}): {e}")
-                    provider_failed = True # Провайдер выдал ошибку (DNS/429)
-                    break 
-
-            # Если провайдер перевел ВСЕ части без ошибок — возвращаем результат
-            if not provider_failed:
-                return "".join(translated_chunks)
-            
-            # Если была ошибка — цикл пойдет к следующему провайдеру в списке
-            print(f"WARNING: Provider {provider} failed. Trying next...")
-            
+            # УМЕНЬШАЕМ ТАЙМАУТ до 10 секунд
+            res = ts.translate_text(
+                normalized_text[:4000], # Ограничим длину для теста
+                translator=provider,
+                to_language=to_lang,
+                timeout=10 
+            )
+            if res: return res
         except Exception as e:
-            continue
-            
-    # Если мы дошли сюда — значит ни один провайдер не справился
-    print("CRITICAL: All translation providers failed. Returning original English.")
-    return normalized_text
+            logging.warning(f"Провайдер {provider} недоступен. Пробуем следующий...")
+            # Если ошибка DNS, можно сразу прервать цикл
+            if "resolve" in str(e).lower():
+                break 
+    
+    return normalized_text # Если всё упало, возвращаем оригинал быстро
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
     if not file_path or not file_path.exists(): return []
