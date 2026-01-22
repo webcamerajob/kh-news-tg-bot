@@ -249,6 +249,7 @@ def main():
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--slug", default="national")
     parser.add_argument("-n", "--limit", type=int, default=10)
+    parser.add_argument("-l", "--lang", default="ru")
     parser.add_argument("--posted-state-file", default="articles/posted.json")
     parser.add_argument("--stopwords-file")
     args = parser.parse_args()
