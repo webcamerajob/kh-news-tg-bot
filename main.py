@@ -163,95 +163,127 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
 # --- ОБРАБОТКА СТАТЬИ ---
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
-    aid = str(post["id"])
-    link = post.get("link")
+    # --- АНТИ-БАН ПАУЗА (6 секунд) ---
+    # Этого времени достаточно, чтобы сервер не считал ваши запросы агрессивной атакой
     time.sleep(6) 
 
-    art_dir = OUTPUT_DIR / f"{aid}_{post['slug']}"
+    aid = str(post["id"])
+    slug = post["slug"]
+    link = post.get("link")
+    if not link: return None
+
+    art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
+    # Извлекаем и ЧИСТИМ заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     orig_title = sanitize_text(raw_title)
     
-    if any(phrase in orig_title.lower() for phrase in stopwords):
-        logging.info(f"Стоп-слово в ID={aid}. Пропуск.")
-        return None
+    if stopwords:
+        normalized_title = orig_title.lower()
+        for phrase in stopwords:
+            if phrase in normalized_title:
+                logging.info(f"Stopword '{phrase}' found in ID={aid}. Skipping.")
+                return None
 
-    logging.info(f"Обработка ID={aid}: {link}")
+    logging.info(f"Processing ID={aid}: {link}")
     try:
         page_response = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT)
         page_response.raise_for_status()
         page_html = page_response.text
     except Exception as e:
-        logging.error(f"Ошибка загрузки ID={aid}: {e}"); return None
+        logging.error(f"Fetch error ID={aid}: {e}")
+        return None
 
-    title = translate_text(orig_title, translate_to) if translate_to else orig_title
+    current_hash = hashlib.sha256(page_html.encode()).hexdigest()
+    if meta_path.exists():
+        try:
+            existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if existing_meta.get("hash") == current_hash and existing_meta.get("translated_to", "") == translate_to:
+                logging.info(f"No changes for ID={aid}. Skipping.")
+                return existing_meta
+        except Exception: pass
+
+    # Перевод заголовка
+    title = translate_text(orig_title, to_lang=translate_to) if translate_to else orig_title
     title = sanitize_text(title)
 
     soup = BeautifulSoup(page_html, "html.parser")
+    
+    # 1. ГЛУБОКАЯ ОЧИСТКА BS4: Удаляем все технические элементы
     for junk in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", "")):
             junk.decompose()
             
-    content_div = soup.find("div", class_="entry-content")
-    paras = [sanitize_text(p.get_text(strip=True)) for p in content_div.find_all("p")] if content_div else []
-    raw_text = "\n\n".join([p for p in paras if p])
+    article_content = soup.find("div", class_="entry-content")
+    
+    # Сбор и ЧИСТКА параграфов
+    paras = []
+    if article_content:
+        for rel in article_content.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")):
+            rel.decompose()
+            
+        for p in article_content.find_all("p"):
+            p_text = p.get_text(strip=True)
+            if p_text:
+                clean_p = sanitize_text(p_text)
+                if clean_p:
+                    paras.append(clean_p)
+    
+    raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # ПРАВКА: Умный сбор качественных картинок
+    # Картинки
     img_dir = art_dir / "images"
     srcs = set()
+    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
+        if h := link_tag.get("href"): srcs.add(h)
+    if article_content:
+        for img in article_content.find_all("img"):
+            if u := extract_img_url(img): srcs.add(u)
 
-    # 1. Приоритет: Featured Image (обложка) из WordPress API
-    if "_embedded" in post and "wp:featuredmedia" in post["_embedded"]:
-        fm_list = post["_embedded"]["wp:featuredmedia"]
-        if isinstance(fm_list, list) and len(fm_list) > 0:
-            if fm_url := fm_list[0].get("source_url"):
-                srcs.add(fm_url)
-
-    # 2. Сбор картинок из текста с фильтрацией мусора
-    if content_div:
-        for img in content_div.find_all("img"):
-            u = extract_img_url(img)
-            if u:
-                # Игнорируем гифки, баннеры и логотипы платежных систем
-                if not any(x in u.lower() for x in ["gif", "logo", "banner", "advertis", "payway", "mastercard"]):
-                    srcs.add(u)
-
-    images = []
+    images: List[str] = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
-            # Ограничиваем до 10 фото, чтобы не перегружать пост
             futures = {ex.submit(save_image, url, img_dir): url for url in list(srcs)[:10]}
             for fut in as_completed(futures):
                 if path := fut.result(): images.append(path)
 
+    if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
+        if isinstance(media, list) and (u := media[0].get("source_url")):
+            if path := save_image(u, img_dir): images.append(path)
+
     if not images:
-        logging.warning(f"Нет валидных картинок для ID={aid}. Пропуск.")
+        logging.warning(f"No images for ID={aid}. Skipping.")
         return None
     
-    (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
-
+    text_file_path = art_dir / "content.txt"
     meta = {
-        "id": aid, "slug": post["slug"], "date": post.get("date"), "link": link,
-        "title": title, "text_file": "content.txt",
+        "id": aid, "slug": slug, "date": post.get("date"), "link": link,
+        "title": title, "text_file": text_file_path.name,
         "images": sorted([Path(p).name for p in images]), "posted": False,
-        "hash": hashlib.sha256(page_html.encode()).hexdigest(), "translated_to": ""
+        "hash": current_hash, "translated_to": ""
     }
+    text_file_path.write_text(raw_text, encoding="utf-8")
 
     if translate_to:
         trans_text = translate_text(raw_text, to_lang=translate_to)
-        if trans_text:
-            trans_text = sanitize_text(trans_text)
-            trans_file = art_dir / f"content.{translate_to}.txt"
-            trans_file.write_text(f"{title}\n\n{trans_text}", encoding="utf-8")
-            meta.update({"translated_to": translate_to, "text_file": trans_file.name})
+        if not trans_text:
+             logging.error(f"Translation failed ID={aid}.")
+             return None
+        
+        trans_text = sanitize_text(trans_text)
+        
+        trans_file_path = art_dir / f"content.{translate_to}.txt"
+        final_translated_text = f"{title}\n\n{trans_text}"
+        trans_file_path.write_text(final_translated_text, encoding="utf-8")
+        meta.update({"translated_to": translate_to, "text_file": trans_file_path.name})
 
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
-
+    
 # --- УПРАВЛЕНИЕ КАТАЛОГОМ ---
 
 def load_catalog() -> List[Dict[str, Any]]:
