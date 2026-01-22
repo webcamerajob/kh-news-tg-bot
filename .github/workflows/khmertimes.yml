@@ -1,0 +1,75 @@
+name: "Khmertimes: AI Parse & Post"
+
+on:
+  workflow_dispatch: # Ручной запуск
+  schedule:
+    - cron: '0 0,6,12,18 * * *' # 4 раза в день (Камбоджийское время: 7:00, 13:00, 19:00, 1:00)
+
+permissions:
+  contents: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+      WG_CONFIG: ${{ secrets.WG_CONFIG }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements-parser.txt
+          # Если у poster.py свои требования:
+          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+
+      - name: 🔐 Setup WireGuard
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
+          echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo wg-quick up wg0
+
+      - name: 🧪 Step 1: Test AI Connection
+        run: python3 test_ai.py
+
+      - name: 🔍 Step 2: Run Parser
+        id: parse
+        run: |
+          python3 main.py \
+            --base-url "https://www.khmertimeskh.com" \
+            --slug "national" \
+            --limit 10 \
+            --posted-state-file articles/posted.json | tee parser_out.txt
+          
+          # Проверяем, есть ли новые статьи
+          if grep -q "NEW_ARTICLES_STATUS:true" parser_out.txt; then
+            echo "new_data=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down wg0 || true
+
+      - name: 🚀 Step 3: Run Poster
+        if: steps.parse.outputs.new_data == 'true'
+        run: |
+          python3 poster.py \
+            --parsed-dir articles \
+            --state-file articles/posted.json
+
+      - name: 💾 Step 4: Save Progress
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add articles/posted.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "update: sync posted.json" && git push)
