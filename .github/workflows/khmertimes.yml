@@ -28,7 +28,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install -r requirements-parser.txt
+          pip install -r requirements-ai.txt
           # Если у poster.py свои требования:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
 
