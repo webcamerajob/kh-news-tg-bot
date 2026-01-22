@@ -194,56 +194,55 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
 def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     if not text: return ""
     
-    # 1. Меняем приоритет: Google первый, он лучше держит объемы
+    # Список провайдеров
     providers = ["google", "bing", "yandex"] 
-    
     normalized_text = normalize_text(text)
-    if not normalized_text.strip(): return ""
-
+    
     for provider in providers:
         limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
             chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
+            provider_failed = False # Флаг поломки текущего провайдера
             
             for i, chunk in enumerate(chunks):
                 if not chunk.strip():
                     translated_chunks.append(chunk)
                     continue
 
-                # 2. Увеличиваем паузу до 2-3 секунд, чтобы не злить API
-                if i > 0: 
-                    time.sleep(2.0) 
+                if i > 0: time.sleep(2.0) 
                 
                 try:
-                    # Пытаемся перевести
                     res = ts.translate_text(
                         chunk, 
                         translator=provider, 
                         from_language="en", 
                         to_language=to_lang, 
-                        timeout=60 # Даем больше времени на раздумья
+                        timeout=30
                     )
+                    if res and res.strip():
+                        translated_chunks.append(res)
+                    else:
+                        provider_failed = True # Провайдер вернул пустоту
+                        break # Выходим из цикла чанков
                 except Exception as e:
-                    # 3. ВЫВОДИМ ОШИБКУ, чтобы понять причину
-                    print(f"DEBUG: Chunk translation error ({provider}): {e}")
-                    res = None
+                    print(f"DEBUG: Chunk error ({provider}): {e}")
+                    provider_failed = True # Провайдер выдал ошибку (DNS/429)
+                    break 
 
-                if res and res.strip(): 
-                    translated_chunks.append(res)
-                else:
-                    # Если перевод не удался - оставляем оригинал
-                    print(f"WARNING: Chunk failed. Keeping EN original.")
-                    translated_chunks.append(chunk)
-
-            return "".join(translated_chunks)
+            # Если провайдер перевел ВСЕ части без ошибок — возвращаем результат
+            if not provider_failed:
+                return "".join(translated_chunks)
+            
+            # Если была ошибка — цикл пойдет к следующему провайдеру в списке
+            print(f"WARNING: Provider {provider} failed. Trying next...")
             
         except Exception as e:
-            print(f"WARNING: Provider {provider} failed globally: {e}. Switching...")
-            time.sleep(3)
             continue
             
-    return None
+    # Если мы дошли сюда — значит ни один провайдер не справился
+    print("CRITICAL: All translation providers failed. Returning original English.")
+    return normalized_text
 
 def load_stopwords(file_path: Optional[Path]) -> List[str]:
     if not file_path or not file_path.exists(): return []
