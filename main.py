@@ -60,32 +60,15 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
     except Exception: return set()
 
-# ПРАВКА: Извлечение самого высокого разрешения и фильтрация мусора
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    # 1. Сначала ищем самое высокое разрешение в srcset
-    srcset = img_tag.get("srcset") or img_tag.get("data-srcset")
-    if srcset:
-        try:
-            parts = srcset.split(',')
-            links = []
-            for p in parts:
-                match = re.search(r'(\S+)\s+(\d+)w', p.strip())
-                if match:
-                    links.append((int(match.group(2)), match.group(1)))
-            if links:
-                # Сортируем по ширине и берем самую большую
-                return sorted(links, key=lambda x: x[0], reverse=True)[0][1]
-        except Exception:
-            pass
-
-    # 2. Если srcset нет, проверяем атрибуты в порядке убывания качества
-    attrs = ["data-orig-file", "data-large-file", "src", "data-src", "data-original"]
-    for attr in attrs:
-        if val := img_tag.get(attr):
-            # Пропускаем баннеры, рекламные гифки и логотипы банков
-            if any(x in val.lower() for x in ["gif", "logo", "banner", "mastercard", "aba-", "payway", "advertis"]):
-                continue
-            return val
+    """Извлекает URL изображения из тега <img>, проверяя множество атрибутов."""
+    attributes_to_check = [
+        "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
+        "data-original", "srcset", "src",
+    ]
+    for attr in attributes_to_check:
+        if src_val := img_tag.get(attr):
+            return src_val.split(',')[0].split()[0]
     return None
 
 # --- ЛОГИКА ПЕРЕВОДА ---
