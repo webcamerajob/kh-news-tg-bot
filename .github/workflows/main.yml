@@ -56,11 +56,10 @@ jobs:
       - name: Run parser
         id: parse_step
         run: |
-          python3 main.py --limit 3 \
+          python3 main.py --limit 10 \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
             --lang 'ru' \
-            --limit 15 \
             --posted-state-file articles/posted.json \
             --stopwords-file stopwords.txt | tee parser_output.txt # <-- ДОБАВЛЕНА ЭТА СТРОКА
           
