@@ -23,7 +23,7 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# --- ЭМУЛЯЦИЯ SAFARI (Обход Cloudflare) ---
+# --- НАСТРОЙКА ЭМУЛЯЦИИ SAFARI (Обход Cloudflare) ---
 SCRAPER = cffi_requests.Session(impersonate="safari15_5")
 SCRAPER.headers = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
@@ -60,11 +60,32 @@ def load_posted_ids(state_file_path: Path) -> Set[str]:
         return set()
     except Exception: return set()
 
+# ПРАВКА: Извлечение самого высокого разрешения и фильтрация мусора
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    attrs = ["data-brsrcset", "data-breeze", "data-src", "data-lazy-src", "data-original", "srcset", "src"]
+    # 1. Сначала ищем самое высокое разрешение в srcset
+    srcset = img_tag.get("srcset") or img_tag.get("data-srcset")
+    if srcset:
+        try:
+            parts = srcset.split(',')
+            links = []
+            for p in parts:
+                match = re.search(r'(\S+)\s+(\d+)w', p.strip())
+                if match:
+                    links.append((int(match.group(2)), match.group(1)))
+            if links:
+                # Сортируем по ширине и берем самую большую
+                return sorted(links, key=lambda x: x[0], reverse=True)[0][1]
+        except Exception:
+            pass
+
+    # 2. Если srcset нет, проверяем атрибуты в порядке убывания качества
+    attrs = ["data-orig-file", "data-large-file", "src", "data-src", "data-original"]
     for attr in attrs:
         if val := img_tag.get(attr):
-            return val.split(',')[0].split()[0]
+            # Пропускаем баннеры, рекламные гифки и логотипы банков
+            if any(x in val.lower() for x in ["gif", "logo", "banner", "mastercard", "aba-", "payway", "advertis"]):
+                continue
+            return val
     return None
 
 # --- ЛОГИКА ПЕРЕВОДА ---
@@ -79,7 +100,6 @@ def chunk_text_by_limit(text: str, limit: int) -> List[str]:
         split_pos = text.rfind('\n\n', 0, limit)
         if split_pos == -1: split_pos = text.rfind('. ', 0, limit)
         if split_pos == -1: split_pos = limit
-        # Гарантируем продвижение вперед
         chunk_end = max(1, split_pos + (2 if text[split_pos:split_pos+2] == '\n\n' else 1))
         chunks.append(text[:chunk_end])
         text = text[chunk_end:].lstrip()
@@ -92,9 +112,9 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
     normalized_text = normalize_text(text)
 
     for provider in providers:
+        limit = PROVIDER_LIMITS.get(provider, 3000)
         try:
-            # Оригинальная логика чанков (сохраняем функционал для длинных текстов)
-            chunks = chunk_text_by_limit(normalized_text, 3000)
+            chunks = chunk_text_by_limit(normalized_text, limit)
             translated_chunks = []
             provider_failed = False
             
@@ -102,7 +122,6 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
                 if i > 0: time.sleep(1.5) 
                 
                 try:
-                    # УВЕЛИЧИВАЕМ ТАЙМАУТ до 20 секунд (для медленных VPN)
                     res = ts.translate_text(chunk, translator=provider, to_language=to_lang, timeout=20)
                     if res:
                         translated_chunks.append(res)
@@ -111,7 +130,6 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
                 except Exception as e:
                     logging.warning(f"   [!] {provider} error: {e}")
                     provider_failed = True
-                    # Если DNS не работает, сразу выходим из этого провайдера
                     if "resolve" in str(e).lower() or "name" in str(e).lower():
                         break
                     break
@@ -121,7 +139,9 @@ def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
         except Exception:
             continue
             
-    return normalized_text # Fallback к оригиналу
+    return normalized_text 
+
+# --- РАБОТА С САЙТОМ ---
 
 def fetch_category_id(base_url: str, slug: str) -> int:
     logging.info(f"Получение ID категории '{slug}'...")
@@ -133,7 +153,7 @@ def fetch_category_id(base_url: str, slug: str) -> int:
     return data[0]["id"]
 
 def fetch_posts(base_url: str, cat_id: int, per_page: int = 10) -> List[Dict[str, Any]]:
-    time.sleep(5) # Пауза перед листингом
+    time.sleep(5) 
     endpoint = f"{base_url}/wp-json/wp/v2/posts?categories={cat_id}&per_page={per_page}&_embed"
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -162,7 +182,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     aid = str(post["id"])
     link = post.get("link")
-    time.sleep(6) # Анти-бан пауза
+    time.sleep(6) 
 
     art_dir = OUTPUT_DIR / f"{aid}_{post['slug']}"
     art_dir.mkdir(parents=True, exist_ok=True)
@@ -196,21 +216,36 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     raw_text = "\n\n".join([p for p in paras if p])
     raw_text = BAD_RE.sub("", raw_text)
 
+    # ПРАВКА: Умный сбор качественных картинок
     img_dir = art_dir / "images"
     srcs = set()
+
+    # 1. Приоритет: Featured Image (обложка) из WordPress API
+    if "_embedded" in post and "wp:featuredmedia" in post["_embedded"]:
+        fm_list = post["_embedded"]["wp:featuredmedia"]
+        if isinstance(fm_list, list) and len(fm_list) > 0:
+            if fm_url := fm_list[0].get("source_url"):
+                srcs.add(fm_url)
+
+    # 2. Сбор картинок из текста с фильтрацией мусора
     if content_div:
         for img in content_div.find_all("img"):
-            if u := extract_img_url(img): srcs.add(u)
+            u = extract_img_url(img)
+            if u:
+                # Игнорируем гифки, баннеры и логотипы платежных систем
+                if not any(x in u.lower() for x in ["gif", "logo", "banner", "advertis", "payway", "mastercard"]):
+                    srcs.add(u)
 
     images = []
     if srcs:
         with ThreadPoolExecutor(max_workers=5) as ex:
+            # Ограничиваем до 10 фото, чтобы не перегружать пост
             futures = {ex.submit(save_image, url, img_dir): url for url in list(srcs)[:10]}
             for fut in as_completed(futures):
                 if path := fut.result(): images.append(path)
 
     if not images:
-        logging.warning(f"Нет картинок для ID={aid}. Пропуск.")
+        logging.warning(f"Нет валидных картинок для ID={aid}. Пропуск.")
         return None
     
     (art_dir / "content.txt").write_text(raw_text, encoding="utf-8")
@@ -234,7 +269,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
 
-# --- ЗАПУСК ---
+# --- УПРАВЛЕНИЕ КАТАЛОГОМ ---
 
 def load_catalog() -> List[Dict[str, Any]]:
     if not CATALOG_PATH.exists(): return []
