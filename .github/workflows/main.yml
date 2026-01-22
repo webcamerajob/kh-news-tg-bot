@@ -47,9 +47,6 @@ jobs:
 
       - name: Run parser
         id: parse_step
-        # ВАЖНО: Добавляем переменную окружения с ключом для ИИ
-        env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
@@ -57,7 +54,7 @@ jobs:
             --lang 'ru' \
             --limit 15 \
             --posted-state-file articles/posted.json \
-            --stopwords-file stopwords.txt | tee parser_output.txt
+            --stopwords-file stopwords.txt | tee parser_output.txt # <-- ДОБАВЛЕНА ЭТА СТРОКА
           
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
@@ -79,6 +76,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # ИСПРАВЛЕНО: Сохраняем ТОЛЬКО журнал опубликованных статей.
+          # Папки со статьями и кэш catalog.json больше не коммитим.
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
