@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
-          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
+          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 
       - name: Run parser
         id: parse_step
