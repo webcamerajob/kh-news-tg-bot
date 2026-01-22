@@ -25,11 +25,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
+          
       - name: "Install Dependencies"
         run: |
-          pip install -r requirements-parser.txt
-          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+          python -m pip install --upgrade pip
+          # Устанавливаем библиотеки напрямую, чтобы исключить ошибки с файлами
+          pip install curl_cffi beautifulsoup4 google-genai psutil
+          # Проверяем установку (выведет список в лог)
+          pip list | grep google
 
       - name: "Setup WireGuard"
         run: |
