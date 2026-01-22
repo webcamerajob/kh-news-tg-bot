@@ -15,6 +15,8 @@ import fcntl
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests 
 import translators as ts
+# ВАЖНО: Добавляем этот импорт для настройки версии HTTP
+from curl_cffi.requests import CurlHttpVersion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -23,8 +25,12 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# --- НАСТРОЙКА ЭМУЛЯЦИИ SAFARI (Обход Cloudflare) ---
-SCRAPER = cffi_requests.Session(impersonate="safari15_5")
+# --- НАСТРОЙКА ЭМУЛЯЦИИ SAFARI (Обход Cloudflare + FIX HTTP/3) ---
+SCRAPER = cffi_requests.Session(
+    impersonate="safari15_5",
+    http_version=CurlHttpVersion.V2_0 # Принудительно используем HTTP/2
+)
+
 SCRAPER.headers = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -32,7 +38,6 @@ SCRAPER.headers = {
     "Referer": "https://www.google.com/"
 }
 SCRAPER_TIMEOUT = 30 
-
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
