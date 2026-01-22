@@ -15,20 +15,29 @@ import fcntl
 # --- ИМПОРТЫ ---
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests 
-import google.generativeai as genai # <-- ГЛАВНОЕ ИЗМЕНЕНИЕ: ИИ вместо translators
+
+# --- НОВАЯ БИБЛИОТЕКА GOOGLE (v1.0+) ---
+# Если у вас Python < 3.9, это может вызвать ошибку, но в GitHub Actions (3.12) всё ок.
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# --- НАСТРОЙКА ИИ (GEMINI) ---
+# --- НАСТРОЙКА КЛИЕНТА GOOGLE ---
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    # Используем модель Flash (быстрая, дешевая/бесплатная, умная)
-    MODEL = genai.GenerativeModel('gemini-1.5-flash')
+AI_CLIENT = None
+
+if GOOGLE_API_KEY and genai:
+    try:
+        # Инициализация нового клиента
+        AI_CLIENT = genai.Client(api_key=GOOGLE_API_KEY)
+    except Exception as e:
+        logging.warning(f"⚠️ Failed to initialize Google AI Client: {e}")
 else:
-    # Если ключа нет, скрипт не упадет сразу, но перевод работать не будет
-    MODEL = None
-    logging.warning("⚠️ GOOGLE_API_KEY not found! AI translation will be skipped.")
+    logging.warning("⚠️ GOOGLE_API_KEY not found or library missing! AI translation will be skipped.")
 
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
@@ -155,20 +164,18 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
             return [line.strip().lower() for line in f if line.strip()]
     except Exception: return []
 
-# --- НОВАЯ ФУНКЦИЯ: Обработка через ИИ ---
+# --- НОВАЯ ФУНКЦИЯ: Обработка через НОВЫЙ ИИ SDK ---
 def process_article_with_ai(title_en: str, text_en: str) -> Optional[Dict[str, str]]:
     """
-    Отправляет статью в Gemini.
-    Возвращает словарь: {'title': 'Русский заголовок', 'text': 'Очищенный русский текст'}
+    Отправляет статью в Gemini (через google-genai SDK).
     """
-    if not MODEL:
-        logging.error("AI Model not initialized (Check GOOGLE_API_KEY)")
+    if not AI_CLIENT:
+        logging.error("AI Client not initialized")
         return None
 
     if not text_en or len(text_en) < 50:
         return None
 
-    # ИНСТРУКЦИЯ ДЛЯ ИИ (ПРОМПТ)
     prompt = f"""
     You are a professional news editor for a Russian Telegram channel about Cambodia.
     
@@ -195,17 +202,23 @@ def process_article_with_ai(title_en: str, text_en: str) -> Optional[Dict[str, s
     """
 
     try:
-        # Пауза, чтобы не упереться в лимиты бесплатного тарифа
-        time.sleep(4)
-        response = MODEL.generate_content(prompt)
+        time.sleep(4) # Пауза для Rate Limiting
+        
+        # --- НОВЫЙ ВЫЗОВ (v1.0 SDK) ---
+        response = AI_CLIENT.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3 # Меньше фантазии, больше точности
+            )
+        )
         
         if not response.text:
             return None
 
-        # Парсим ответ ИИ
         text_out = response.text
         
-        # Извлекаем заголовок
+        # Парсинг ответа
         title_match = re.search(r'\[TITLE_START\](.*?)\[TITLE_END\]', text_out, re.DOTALL)
         body_match = re.search(r'\[BODY_START\](.*?)\[BODY_END\]', text_out, re.DOTALL)
         
@@ -215,11 +228,11 @@ def process_article_with_ai(title_en: str, text_en: str) -> Optional[Dict[str, s
                 "text": body_match.group(1).strip()
             }
         else:
-            # Если ИИ накосячил с форматом, пробуем вернуть весь текст как тело
             logging.warning("AI format mismatch, using raw response.")
             return {"title": title_en, "text": text_out}
 
     except Exception as e:
+        # Ловим специфические ошибки нового SDK
         logging.error(f"AI Processing Failed: {e}")
         return None
 
@@ -233,7 +246,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     art_dir.mkdir(parents=True, exist_ok=True)
     meta_path = art_dir / "meta.json"
 
-    # 1. Получаем сырой заголовок (но пока не переводим)
+    # 1. Получаем сырой заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     orig_title = sanitize_text(raw_title)
     
@@ -265,7 +278,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
                 return existing_meta
         except Exception: pass
 
-    # 3. Парсим HTML и достаем английский текст
+    # 3. Парсим HTML
     soup = BeautifulSoup(page_html, "html.parser")
     for junk in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if junk.get("data-mce-type") or "mce_SELRES" in str(junk.get("class", "")):
@@ -309,10 +322,9 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
         logging.warning(f"No images for ID={aid}. Skipping.")
         return None
 
-    # Сохраняем оригинал (на всякий случай)
     (art_dir / "content.en.txt").write_text(f"{orig_title}\n\n{raw_text_en}", encoding="utf-8")
 
-    # 5. МАГИЯ: Отправляем в ИИ для перевода и чистки
+    # 5. МАГИЯ: Отправляем в ИИ
     logging.info(f"Sending ID={aid} to AI for processing...")
     ai_result = process_article_with_ai(orig_title, raw_text_en)
 
