@@ -162,6 +162,13 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
 
 # --- ОБРАБОТКА СТАТЬИ ---
 
+def load_stopwords(file_path: Optional[Path]) -> List[str]:
+    if not file_path or not file_path.exists(): return []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return [line.strip().lower() for line in f if line.strip()]
+    except Exception: return []
+        
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
     # --- АНТИ-БАН ПАУЗА (6 секунд) ---
     # Этого времени достаточно, чтобы сервер не считал ваши запросы агрессивной атакой
