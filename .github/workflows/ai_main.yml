@@ -18,6 +18,7 @@ env:
   TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
   WG_CONFIG:        ${{ secrets.WG_CONFIG }}
+  # Глобальная переменная (на всякий случай оставим и здесь)
   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
 jobs:
@@ -56,6 +57,9 @@ jobs:
 
       - name: "Run Parser"
         id: parse_step
+        # 🔥 ВСТРОЕННАЯ ПРАВКА: Явно передаем ключ в этот шаг
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           python3 ai_main.py \
             --base-url "https://www.khmertimeskh.com" \
@@ -86,7 +90,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # ИСПРАВЛЕНО: Сохраняем ТОЛЬКО журнал опубликованных статей.
-          # Папки со статьями и кэш catalog.json больше не коммитим.
           if [ -f "articles/posted.json" ]; then
             git add articles/posted.json
           fi
