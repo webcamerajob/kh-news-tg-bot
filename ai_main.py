@@ -5,49 +5,42 @@ import logging
 import requests
 import main  # Твой оригинальный main.py
 
-# --- СПИСОК РАБОЧИХ БЕСПЛАТНЫХ МОДЕЛЕЙ ---
+# --- СПИСОК МОДЕЛЕЙ ---
 AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemini-2.0-pro-exp-02-05:free",
+    "google/gemini-2.0-flash-exp:free",      # Быстрая и умная (идеальна для саммари)
+    "google/gemini-2.0-pro-exp-02-05:free",  # Если нужен более глубокий анализ
     "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
+    "deepseek/deepseek-r1-distill-llama-70b:free",
 ]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 def format_paragraphs(text: str) -> str:
-    """
-    Добавляет 'красную строку' (отступ) перед каждым абзацем.
-    Использует неразрывные пробелы, чтобы Telegram их не удалял.
-    """
-    # 1. Разбиваем текст на абзацы по переносам строки
-    # (учитываем, что ИИ может дать один \n или два \n\n)
+    """Делает красивые отступы и разделяет абзацы."""
     paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
-    
-    # 2. Собираем обратно, добавляя отступ (3 неразрывных пробела)
-    # \u00A0 - это неразрывный пробел
     indent = "\u00A0\u00A0\u00A0" 
-    
-    # Соединяем двойным переносом строки (для воздуха между абзацами)
-    formatted_text = "\n\n".join([f"{indent}{p}" for p in paragraphs])
-    return formatted_text
+    return "\n\n".join([f"{indent}{p}" for p in paragraphs])
 
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
     if not text or not text.strip(): return ""
-    
-    if not OPENROUTER_API_KEY:
-        logging.warning("⚠️ [AI] API KEY НЕ НАЙДЕН! Возвращаем оригинал.")
+    if not OPENROUTER_API_KEY: 
+        logging.warning("⚠️ [AI] Ключ не найден. Возврат оригинала.")
         return text
 
-    logging.info(f"🤖 [AI] Попытка перевода статьи ({len(text)} симв.)...")
+    logging.info(f"🤖 [AI] Генерация краткого пересказа ({len(text)} симв.)...")
 
+    # --- НОВЫЙ ПРОМПТ: ПЕРЕСКАЗ ВМЕСТО ПЕРЕВОДА ---
     prompt = (
-        f"Translate the text below into Russian language.\n"
-        "RULES:\n"
-        "1. REMOVE 'Related Articles', ads, and links.\n"
-        "2. OUTPUT ONLY the Russian translation.\n"
-        "3. Keep paragraphs separated.\n\n"
-        f"TEXT:\n{text[:15000]}"
+        f"You are a professional news editor for a Russian Telegram channel.\n"
+        f"TASK: Read the English news below and write a CONCISE SUMMARY in Russian.\n\n"
+        "GUIDELINES:\n"
+        "1. DO NOT translate word-for-word. Write naturally in Russian.\n"
+        "2. BE BRIEF: Cut out fluff, repetition, and minor details. Keep it tight.\n"
+        "3. FACTS: Preserve all names, dates, numbers, and locations accurately.\n"
+        "4. STRUCTURE: Use short paragraphs.\n"
+        "5. TONE: Neutral, journalistic, factual.\n"
+        "6. CLEAN: No ads, no 'Related Articles', no intros like 'Here is the summary'.\n\n"
+        f"SOURCE TEXT:\n{text[:15000]}"
     )
 
     for model in AI_MODELS:
@@ -63,29 +56,29 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
                 data=json.dumps({
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3
+                    "temperature": 0.4 # Чуть повышаем креативность для хорошего слога
                 }),
-                timeout=45
+                timeout=50
             )
 
             if response.status_code == 200:
                 result = response.json()
                 if 'choices' in result and result['choices']:
-                    raw_translated = result['choices'][0]['message']['content'].strip()
+                    raw_text = result['choices'][0]['message']['content'].strip()
                     
-                    # --- ПРИМЕНЯЕМ ФОРМАТИРОВАНИЕ ---
-                    final_text = format_paragraphs(raw_translated)
+                    # Форматируем (отступы)
+                    final_text = format_paragraphs(raw_text)
                     
-                    logging.info(f"✅ [AI] Успех! Перевел модель: {model}")
+                    logging.info(f"✅ [AI] Успешный пересказ через {model}")
                     return final_text
             else:
                 logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}. Пробуем следующую...")
         
         except Exception as e:
-            logging.error(f"⚠️ [AI] Сбой подключения к {model}: {e}")
+            logging.error(f"⚠️ [AI] Ошибка {model}: {e}")
             continue
 
-    logging.error("❌ [AI] ВСЕ МОДЕЛИ ОТКАЗАЛИ. Возвращаем оригинал.")
+    logging.error("❌ [AI] Все модели недоступны. Возвращаем оригинал.")
     return text
 
 # --- ЗАПУСК ---
