@@ -5,46 +5,53 @@ import logging
 import requests
 import main  # Твой оригинальный main.py
 
-# --- СПИСОК РАБОЧИХ БЕСПЛАТНЫХ МОДЕЛЕЙ (ОБНОВЛЕН) ---
+# --- СПИСОК РАБОЧИХ БЕСПЛАТНЫХ МОДЕЛЕЙ ---
 AI_MODELS = [
-    # 1. Самая стабильная на данный момент (Flash Experimental)
     "google/gemini-2.0-flash-exp:free",
-    
-    # 2. Новая мощная Pro версия (если Flash занята)
     "google/gemini-2.0-pro-exp-02-05:free",
-    
-    # 3. Llama от Meta (хороший запасной вариант)
     "meta-llama/llama-3.3-70b-instruct:free",
-    
-    # 4. Легкая модель для крайнего случая
     "meta-llama/llama-3.2-3b-instruct:free",
 ]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+def format_paragraphs(text: str) -> str:
+    """
+    Добавляет 'красную строку' (отступ) перед каждым абзацем.
+    Использует неразрывные пробелы, чтобы Telegram их не удалял.
+    """
+    # 1. Разбиваем текст на абзацы по переносам строки
+    # (учитываем, что ИИ может дать один \n или два \n\n)
+    paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
+    
+    # 2. Собираем обратно, добавляя отступ (3 неразрывных пробела)
+    # \u00A0 - это неразрывный пробел
+    indent = "\u00A0\u00A0\u00A0" 
+    
+    # Соединяем двойным переносом строки (для воздуха между абзацами)
+    formatted_text = "\n\n".join([f"{indent}{p}" for p in paragraphs])
+    return formatted_text
+
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
     if not text or not text.strip(): return ""
     
-    # Если ключа нет — сразу пишем Warning, но возвращаем оригинал, чтобы процесс не падал
     if not OPENROUTER_API_KEY:
         logging.warning("⚠️ [AI] API KEY НЕ НАЙДЕН! Возвращаем оригинал.")
         return text
 
     logging.info(f"🤖 [AI] Попытка перевода статьи ({len(text)} симв.)...")
 
-    # Жесткий промпт на русский язык
     prompt = (
         f"Translate the text below into Russian language.\n"
         "RULES:\n"
         "1. REMOVE 'Related Articles', ads, and links.\n"
-        "2. OUTPUT ONLY the Russian translation.\n\n"
+        "2. OUTPUT ONLY the Russian translation.\n"
+        "3. Keep paragraphs separated.\n\n"
         f"TEXT:\n{text[:15000]}"
     )
 
-    # Перебор моделей (Ротация)
     for model in AI_MODELS:
         try:
-            # logging.info(f"Trying model: {model}...") 
             response = requests.post(
                 url="https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -64,11 +71,14 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
             if response.status_code == 200:
                 result = response.json()
                 if 'choices' in result and result['choices']:
-                    translated = result['choices'][0]['message']['content'].strip()
+                    raw_translated = result['choices'][0]['message']['content'].strip()
+                    
+                    # --- ПРИМЕНЯЕМ ФОРМАТИРОВАНИЕ ---
+                    final_text = format_paragraphs(raw_translated)
+                    
                     logging.info(f"✅ [AI] Успех! Перевел модель: {model}")
-                    return translated
+                    return final_text
             else:
-                # Если 404 или 400 - пробуем следующую
                 logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}. Пробуем следующую...")
         
         except Exception as e:
@@ -80,8 +90,5 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
 
 # --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Подменяем функцию перевода
     main.translate_text = translate_with_ai
-    
-    # Запускаем основной скрипт
     main.main()
