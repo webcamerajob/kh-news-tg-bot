@@ -7,14 +7,15 @@ import re
 import os
 import shutil
 import html
+import urllib.parse
+import fcntl
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
-import fcntl
 
+import requests  # Используем стандартный requests для перевода
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
-import translators as ts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -24,14 +25,13 @@ MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
 # --- НАСТРОЙКА (HTTP/1.1 для стабильности) ---
-# ИЗМЕНЕНИЕ: Отключили HTTP/2 и сменили Safari на Chrome, чтобы убрать ошибки протокола
+# Chrome + HTTP/1.1 = Максимальная стабильность, никаких DowngradeError
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110",          
-    http_version=CurlHttpVersion.V1_1 
+    impersonate="chrome110",
+    http_version=CurlHttpVersion.V1_1
 )
 
 SCRAPER.headers = {
-    # Обновили User-Agent под Chrome
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -39,6 +39,51 @@ SCRAPER.headers = {
 }
 SCRAPER_TIMEOUT = 30 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
+
+# --- ПРЯМОЙ ПЕРЕВОДЧИК (GOOGLE GTX) ---
+# Заменяет глючную библиотеку translators. Работает мгновенно.
+def translate_text(text: str, to_lang: str = "ru") -> str:
+    if not text: return ""
+    
+    # Разбиваем текст на куски (~1800 символов), чтобы URL не был слишком длинным
+    chunks = []
+    current_chunk = ""
+    for paragraph in text.split('\n'):
+        if len(current_chunk) + len(paragraph) < 1800:
+            current_chunk += paragraph + "\n"
+        else:
+            chunks.append(current_chunk)
+            current_chunk = paragraph + "\n"
+    if current_chunk: chunks.append(current_chunk)
+    
+    translated_parts = []
+    url = "https://translate.googleapis.com/translate_a/single"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
+    
+    for chunk in chunks:
+        if not chunk.strip():
+            translated_parts.append("")
+            continue
+        try:
+            params = {
+                "client": "gtx", "sl": "en", "tl": to_lang, "dt": "t", "q": chunk.strip()
+            }
+            # Обычный requests не пытается использовать HTTP/3, поэтому ошибок не будет
+            r = requests.get(url, params=params, headers=headers, timeout=10)
+            
+            if r.status_code == 200:
+                data = r.json()
+                # Google возвращает список списков, склеиваем их
+                text_part = "".join([item[0] for item in data[0] if item and item[0]])
+                translated_parts.append(text_part)
+            else:
+                translated_parts.append(chunk) # Если сбой - возвращаем оригинал
+            
+            time.sleep(0.3) # Микро-пауза
+        except Exception:
+            translated_parts.append(chunk)
+            
+    return "\n".join(translated_parts)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
@@ -72,7 +117,7 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
             return [line.strip().lower() for line in f if line.strip()]
     except Exception: return []
 
-# ОТКАТ: Твоя старая простая функция (без srcset и фильтров)
+# Твоя версия функции картинок (ОТКАТ)
 def extract_img_url(img_tag: Any) -> Optional[str]:
     attributes_to_check = [
         "data-brsrcset", "data-breeze", "data-src", "data-lazy-src",
@@ -81,52 +126,6 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
     for attr in attributes_to_check:
         if src_val := img_tag.get(attr):
             return src_val.split(',')[0].split()[0]
-    return None
-
-# --- ЛОГИКА ПЕРЕВОДА ---
-
-PROVIDER_LIMITS = {"google": 4800, "bing": 4500, "yandex": 4000}
-
-def chunk_text_by_limit(text: str, limit: int) -> List[str]:
-    chunks = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text); break
-        split_pos = text.rfind('\n\n', 0, limit)
-        if split_pos == -1: split_pos = text.rfind('. ', 0, limit)
-        if split_pos == -1: split_pos = text.rfind(' ', 0, limit)
-        if split_pos == -1: split_pos = limit
-        
-        # Защита от зацикливания (оставил, так как это багфикс, а не фича)
-        chunk_end = max(1, split_pos + (2 if text[split_pos:split_pos+2] == '\n\n' else 1))
-        
-        chunks.append(text[:chunk_end])
-        text = text[chunk_end:].lstrip()
-    return chunks
-
-def translate_text(text: str, to_lang: str = "ru") -> Optional[str]:
-    if not text: return ""
-    providers = ["yandex", "google", "bing"]
-    normalized_text = normalize_text(text)
-    
-    for provider in providers:
-        limit = PROVIDER_LIMITS.get(provider, 3000)
-        try:
-            chunks = chunk_text_by_limit(normalized_text, limit)
-            translated_chunks = []
-            
-            for i, chunk in enumerate(chunks):
-                if i > 0: time.sleep(0.5)
-                res = ts.translate_text(
-                    chunk, translator=provider, from_language="en", to_language=to_lang, timeout=45
-                )
-                if res: translated_chunks.append(res)
-                else: raise ValueError("Empty chunk")
-            
-            return "".join(translated_chunks)
-        except Exception as e:
-            if "resolve" in str(e).lower() or "name" in str(e).lower(): break
-            continue
     return None
 
 # --- РАБОТА С САЙТОМ ---
@@ -165,7 +164,7 @@ def save_image(src_url: str, folder: Path) -> Optional[str]:
 # --- ОБРАБОТКА СТАТЬИ ---
 
 def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]) -> Optional[Dict[str, Any]]:
-    time.sleep(6) # Анти-бан
+    time.sleep(3) # Пауза уменьшена, так как мы используем стабильный Chrome
 
     aid = str(post["id"])
     slug = post["slug"]
@@ -199,6 +198,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
                 return existing_meta
         except Exception: pass
 
+    # Переводим заголовок нашей новой функцией
     title = translate_text(orig_title, translate_to) if translate_to else orig_title
     title = sanitize_text(title)
 
@@ -218,7 +218,6 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
     raw_text = "\n\n".join(paras)
     raw_text = BAD_RE.sub("", raw_text)
 
-    # ОТКАТ: Старый метод сбора картинок (ci-lightbox + img + fallback на featured)
     img_dir = art_dir / "images"
     srcs = set()
     
@@ -238,7 +237,7 @@ def parse_and_save(post: Dict[str, Any], translate_to: str, stopwords: List[str]
             for fut in as_completed(futures):
                 if path := fut.result(): images.append(path)
 
-    # 3. Fallback на Featured, если ничего не нашли
+    # 3. Fallback на Featured
     if not images and "_embedded" in post and (media := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(media, list) and (u := media[0].get("source_url")):
             if path := save_image(u, img_dir): images.append(path)
@@ -296,7 +295,6 @@ def main():
 
     try:
         cid = fetch_category_id(args.base_url, args.slug)
-        # Рациональность: берем Limit + 5
         fetch_limit = min(args.limit + 5, 20)
         posts = fetch_posts(args.base_url, cid, per_page=fetch_limit)
         
@@ -308,7 +306,7 @@ def main():
         processed = []
         count = 0
         for post in posts:
-            if count >= args.limit: break # Рациональный тормоз
+            if count >= args.limit: break
             if str(post["id"]) not in posted_ids:
                 if meta := parse_and_save(post, args.lang, stopwords):
                     processed.append(meta)
