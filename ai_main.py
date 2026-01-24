@@ -8,9 +8,8 @@ import translators as ts  # Библиотека для обычного пер�
 import main  # Твой оригинальный main.py
 
 # --- СПИСОК МОДЕЛЕЙ ---
-# Используем Llama 3.3 как основную, она отлично структурирует английский текст
 AI_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",      # Отлично понимает запреты
     "google/gemini-2.0-flash-exp:free",
     "deepseek/deepseek-r1-distill-llama-70b:free",
     "meta-llama/llama-3.2-3b-instruct:free",
@@ -18,20 +17,12 @@ AI_MODELS = [
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# --- ФУНКЦИЯ ОБЫЧНОГО ПЕРЕВОДА (ГУГЛ/БИНГ) ---
+# --- ОБЫЧНЫЙ ПЕРЕВОД ---
 def standard_translate(text: str, to_lang: str = "ru") -> str:
-    """
-    Берет чистый английский текст и переводит через провайдеров.
-    """
     if not text: return ""
-    
-    # Список провайдеров по приоритету
     providers = ["google", "bing", "yandex"]
-    
     for provider in providers:
         try:
-            # logging.info(f"   🌍 Перевод через {provider}...")
-            # sleep чтобы не банили
             time.sleep(1) 
             result = ts.translate_text(
                 query_text=text,
@@ -41,49 +32,68 @@ def standard_translate(text: str, to_lang: str = "ru") -> str:
                 timeout=20
             )
             return result
-        except Exception as e:
-            # logging.warning(f"   ⚠️ {provider} не смог: {e}")
-            continue
+        except Exception: continue
             
-    # Если никто не смог перевести, возвращаем английский (лучше чем ничего)
     logging.error("❌ Все провайдеры перевода отказали.")
     return text
 
-# --- ФУНКЦИЯ ФОРМАТИРОВАНИЯ ---
+# --- ФОРМАТИРОВАНИЕ ---
 def format_paragraphs(text: str) -> str:
-    """Делает двойные переносы строк для читаемости в Telegram."""
     paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
     return "\n\n".join(paragraphs)
+
+# --- УДАЛЕНИЕ ВСТУПЛЕНИЙ (ПОСТ-ОБРАБОТКА) ---
+def strip_ai_chatter(text: str) -> str:
+    """Удаляет типичный мусор, если ИИ все-таки ослушался."""
+    bad_prefixes = [
+        "Here is a summary", "Here is the summary", "In this article", 
+        "The article discusses", "According to the report", "Summary:",
+        "Вот краткое содержание", "Эта статья о том", "Резюме:"
+    ]
+    # Если текст начинается с мусора, ищем первое двоеточие или новую строку
+    for prefix in bad_prefixes:
+        if text.lower().startswith(prefix.lower()):
+            # Пробуем обрезать по двоеточию (Here is the summary: News...)
+            parts = text.split(':', 1)
+            if len(parts) > 1:
+                return parts[1].strip()
+            # Или просто выкидываем первую строку
+            parts = text.split('\n', 1)
+            if len(parts) > 1:
+                return parts[1].strip()
+    return text
 
 # --- ГЛАВНАЯ ЛОГИКА ---
 def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
     if not text or not text.strip(): return ""
     
-    # Если ключа нет — используем только обычный переводчик на грязном тексте
     if not OPENROUTER_API_KEY: 
-        logging.warning("⚠️ [AI] Ключ не найден. Используем обычный перевод оригинала.")
+        logging.warning("⚠️ [AI] Ключ не найден. Используем обычный перевод.")
         return standard_translate(text, to_lang)
 
-    # 1. ЭТАП ОЧИСТКИ (ИИ)
     logging.info("⏳ Пауза 5 сек перед ИИ...")
     time.sleep(5) 
-    logging.info(f"🤖 [AI] 1. Чистка и саммари на английском...")
+    logging.info(f"🤖 [AI] Чистка (Strict Mode)...")
 
-    # Промпт: просим сделать чистое резюме на АНГЛИЙСКОМ
+    # 🔥 ЖЕСТКИЙ ПРОМПТ 🔥
     prompt = (
-        f"You are a professional news editor.\n"
-        f"TASK: Read the raw text below and write a CONCISE SUMMARY in ENGLISH.\n\n"
-        "GUIDELINES:\n"
-        "1. LANGUAGE: English only.\n"
-        "2. CONTENT: Remove ads, 'Related Articles', links, and fluff.\n"
-        "3. STYLE: Journalistic, objective, factual.\n"
-        "4. STRUCTURE: Keep paragraphs clear.\n\n"
+        f"You are a backend news processor API.\n"
+        f"INPUT: Raw news text with ads and noise.\n"
+        f"OUTPUT: A clean, concise summary in ENGLISH.\n\n"
+        "STRICT NEGATIVE CONSTRAINTS (DO NOT IGNORE):\n"
+        "1. NO INTRODUCTIONS (Never write 'Here is a summary', 'The text says', etc.).\n"
+        "2. NO OUTROS (No 'Hope this helps').\n"
+        "3. NO LABELS (Do not write 'Summary:' or 'Headline:').\n"
+        "4. NO META-TALK. Start directly with the first word of the news story.\n\n"
+        "CONTENT RULES:\n"
+        "- Remove ads, links, and 'Related Articles'.\n"
+        "- Keep dates, names, and locations exact.\n"
+        "- Use neutral, journalistic tone.\n\n"
         f"RAW TEXT:\n{text[:15000]}"
     )
 
     clean_english_text = ""
 
-    # Цикл по моделям
     for model in AI_MODELS:
         try:
             response = requests.post(
@@ -97,7 +107,7 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
                 data=json.dumps({
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3 # Пониже, чтобы было четко
+                    "temperature": 0.2 # Минимальная температура = меньше отсебятины
                 }),
                 timeout=55
             )
@@ -107,35 +117,27 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
                 if 'choices' in result and result['choices']:
                     clean_english_text = result['choices'][0]['message']['content'].strip()
                     logging.info(f"✅ [AI] Очистка успешна ({model}).")
-                    break # Выходим из цикла моделей
-            
+                    break
             elif response.status_code == 429:
-                logging.warning(f"⚠️ [AI] {model} (429). Ждем...")
                 time.sleep(2)
             else:
                 logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}.")
         
-        except Exception as e:
-            logging.error(f"⚠️ [AI] Сбой {model}: {e}")
-            continue
+        except Exception: continue
 
-    # Если ИИ не справился, используем оригинальный текст как "чистый"
     if not clean_english_text:
-        logging.error("❌ [AI] Не удалось очистить текст. Переводим оригинал.")
+        logging.error("❌ [AI] Сбой. Переводим оригинал.")
         clean_english_text = text
 
-    # 2. ЭТАП ПЕРЕВОДА (ПРОВАЙДЕРЫ)
-    logging.info(f"🌍 [Translators] 2. Перевод чистого текста на русский...")
-    
+    # Дополнительная страховка: чистим мусорные фразы программно
+    clean_english_text = strip_ai_chatter(clean_english_text)
+
+    # 2. ПЕРЕВОД
+    logging.info(f"🌍 [Translators] Перевод чистого текста...")
     final_russian_text = standard_translate(clean_english_text, to_lang)
     
-    # Финальное форматирование
     return format_paragraphs(final_russian_text)
 
-# --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Подменяем функцию перевода в main на нашу гибридную
     main.translate_text = ai_clean_and_then_translate
-    
-    # Запускаем
     main.main()
