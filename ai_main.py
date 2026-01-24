@@ -7,8 +7,8 @@ import main  # Твой оригинальный main.py
 
 # --- СПИСОК МОДЕЛЕЙ ---
 AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",      # Быстрая и умная (идеальна для саммари)
-    "google/gemini-2.0-pro-exp-02-05:free",  # Если нужен более глубокий анализ
+    "google/gemini-2.0-flash-exp:free",      # Быстрая и умная
+    "google/gemini-2.0-pro-exp-02-05:free",  # Если нужен глубокий анализ
     "meta-llama/llama-3.3-70b-instruct:free",
     "deepseek/deepseek-r1-distill-llama-70b:free",
 ]
@@ -16,20 +16,26 @@ AI_MODELS = [
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 def format_paragraphs(text: str) -> str:
-    """Делает красивые отступы и разделяет абзацы."""
+    """
+    Убирает отступы, но разделяет абзацы пустой строкой.
+    """
+    # 1. Разбиваем текст на абзацы и чистим их от лишних пробелов по краям
     paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
-    indent = "\u00A0\u00A0\u00A0" 
-    return "\n\n".join([f"{indent}{p}" for p in paragraphs])
+    
+    # 2. Соединяем обратно ДВОЙНЫМ переносом строки
+    # Это создаст "воздух" между абзацами без отступа слева
+    return "\n\n".join(paragraphs)
 
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
     if not text or not text.strip(): return ""
+    
     if not OPENROUTER_API_KEY: 
         logging.warning("⚠️ [AI] Ключ не найден. Возврат оригинала.")
         return text
 
     logging.info(f"🤖 [AI] Генерация краткого пересказа ({len(text)} симв.)...")
 
-    # --- НОВЫЙ ПРОМПТ: ПЕРЕСКАЗ ВМЕСТО ПЕРЕВОДА ---
+    # --- ПРОМПТ ДЛЯ ПЕРЕСКАЗА (SUMMARY) ---
     prompt = (
         f"You are a professional news editor for a Russian Telegram channel.\n"
         f"TASK: Read the English news below and write a CONCISE SUMMARY in Russian.\n\n"
@@ -56,7 +62,7 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
                 data=json.dumps({
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.4 # Чуть повышаем креативность для хорошего слога
+                    "temperature": 0.4
                 }),
                 timeout=50
             )
@@ -66,7 +72,7 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
                 if 'choices' in result and result['choices']:
                     raw_text = result['choices'][0]['message']['content'].strip()
                     
-                    # Форматируем (отступы)
+                    # Применяем новое форматирование (без отступа)
                     final_text = format_paragraphs(raw_text)
                     
                     logging.info(f"✅ [AI] Успешный пересказ через {model}")
