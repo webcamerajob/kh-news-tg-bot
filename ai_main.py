@@ -1,76 +1,87 @@
 import os
+import sys
 import json
 import logging
 import requests
 import main  # Твой оригинальный main.py
 
-# --- НАСТРОЙКИ ---
-# Берем ключ из секретов GitHub
+# --- СПИСОК РАБОЧИХ БЕСПЛАТНЫХ МОДЕЛЕЙ (ОБНОВЛЕН) ---
+AI_MODELS = [
+    # 1. Самая стабильная на данный момент (Flash Experimental)
+    "google/gemini-2.0-flash-exp:free",
+    
+    # 2. Новая мощная Pro версия (если Flash занята)
+    "google/gemini-2.0-pro-exp-02-05:free",
+    
+    # 3. Llama от Meta (хороший запасной вариант)
+    "meta-llama/llama-3.3-70b-instruct:free",
+    
+    # 4. Легкая модель для крайнего случая
+    "meta-llama/llama-3.2-3b-instruct:free",
+]
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Модель (выбрал самую стабильную из бесплатных на сегодня)
-MODEL = "google/gemini-2.0-flash-lite-preview-02-05:free"
-
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
-    """
-    Функция-обертка, которая заменяет стандартный перевод на ИИ.
-    """
-    if not text or not text.strip():
-        return ""
-
+    if not text or not text.strip(): return ""
+    
+    # Если ключа нет — сразу пишем Warning, но возвращаем оригинал, чтобы процесс не падал
     if not OPENROUTER_API_KEY:
-        logging.error("❌ [AI ERROR] API ключ не найден в переменных окружения!")
+        logging.warning("⚠️ [AI] API KEY НЕ НАЙДЕН! Возвращаем оригинал.")
         return text
 
-    logging.info(f"🤖 [AI] Перевод и очистка через {MODEL}...")
+    logging.info(f"🤖 [AI] Попытка перевода статьи ({len(text)} симв.)...")
 
-    # Просим перевести и убрать мусор
+    # Жесткий промпт на русский язык
     prompt = (
-        f"Translate the following news article to {to_lang}. "
-        "Strictly remove all advertisements, social media 'follow us' links, and 'Related Articles' sections. "
-        "Return ONLY the translated text in Russian.\n\n"
-        f"ARTICLE TEXT:\n{text}"
+        f"Translate the text below into Russian language.\n"
+        "RULES:\n"
+        "1. REMOVE 'Related Articles', ads, and links.\n"
+        "2. OUTPUT ONLY the Russian translation.\n\n"
+        f"TEXT:\n{text[:15000]}"
     )
 
-    try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/your-repo", # Для OpenRouter Free
-                "X-Title": "News Parser Bot",
-            },
-            data=json.dumps({
-                "model": MODEL,
-                "messages": [
-                    {"role": "system", "content": "You are a professional editor. Translate English to Russian accurately and remove clutter."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3
-            }),
-            timeout=60
-        )
+    # Перебор моделей (Ротация)
+    for model in AI_MODELS:
+        try:
+            # logging.info(f"Trying model: {model}...") 
+            response = requests.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/parser-bot",
+                    "X-Title": "NewsBot",
+                },
+                data=json.dumps({
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3
+                }),
+                timeout=45
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and result['choices']:
+                    translated = result['choices'][0]['message']['content'].strip()
+                    logging.info(f"✅ [AI] Успех! Перевел модель: {model}")
+                    return translated
+            else:
+                # Если 404 или 400 - пробуем следующую
+                logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}. Пробуем следующую...")
         
-        if response.status_code != 200:
-            logging.error(f"❌ [AI ERROR] OpenRouter вернул {response.status_code}: {response.text}")
-            return text
+        except Exception as e:
+            logging.error(f"⚠️ [AI] Сбой подключения к {model}: {e}")
+            continue
 
-        result = response.json()
-        if 'choices' in result and len(result['choices']) > 0:
-            return result['choices'][0]['message']['content'].strip()
-        else:
-            logging.error(f"❌ [AI ERROR] Странный ответ от API: {result}")
-            return text
-            
-    except Exception as e:
-        logging.error(f"❌ [AI ERROR] Ошибка при обращении к ИИ: {e}")
-        return text
+    logging.error("❌ [AI] ВСЕ МОДЕЛИ ОТКАЗАЛИ. Возвращаем оригинал.")
+    return text
 
-# --- МОНКЕЙ-ПАТЧИНГ (Та самая магия подмены) ---
-# Теперь имена совпадают: присваиваем нашу функцию оригинальной
-main.translate_text = translate_with_ai
-
+# --- ЗАПУСК ---
 if __name__ == "__main__":
-    # Запускаем оригинальный main() из твоего файла
+    # Подменяем функцию перевода
+    main.translate_text = translate_with_ai
+    
+    # Запускаем основной скрипт
     main.main()
