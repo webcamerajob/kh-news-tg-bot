@@ -23,14 +23,16 @@ CATALOG_PATH = OUTPUT_DIR / "catalog.json"
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
 
-# --- НАСТРОЙКА (HTTP/2 для скорости) ---
+# --- НАСТРОЙКА (HTTP/1.1 для стабильности) ---
+# ИЗМЕНЕНИЕ: Отключили HTTP/2 и сменили Safari на Chrome, чтобы убрать ошибки протокола
 SCRAPER = cffi_requests.Session(
-    impersonate="safari15_5",
-    http_version=CurlHttpVersion.V2_0
+    impersonate="chrome110",          
+    http_version=CurlHttpVersion.V1_1 
 )
 
 SCRAPER.headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
+    # Обновили User-Agent под Chrome
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/"
