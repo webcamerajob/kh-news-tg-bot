@@ -73,10 +73,11 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
         f"INPUT: Raw news text.\n"
         f"OUTPUT: A cleaned-up version of the story in ENGLISH.\n\n"
         "EDITING RULES:\n"
-        "1. RETAIN DETAIL: Keep all facts, names, dates, and the full story structure.\n"
-        "2. REMOVE FLUFF: Delete ads, 'Related Articles', repetitive sentences, and overly formal diplomatic praise.\n"
-        "3. TIGHTEN: Rewrite wordy sentences to be direct and clear, but DO NOT summarize the whole story into one paragraph.\n"
-        "4. NO META-TALK: Do not write 'Here is the cleaned text'. Start with the story.\n\n"
+        "1. REMOVE REDUNDANT QUOTES: If a quote simply repeats what was just stated in the narrative, DELETE the quote. Only keep quotes that add unique opinion, emotion, or specific new details.\n"
+        "2. RETAIN DETAIL: Keep all facts, names, dates, and structure.\n"
+        "3. REMOVE FLUFF: Delete ads, 'Related Articles', and overly formal diplomatic praise.\n"
+        "4. TIGHTEN: Rewrite wordy sentences to be direct.\n"
+        "5. NO META-TALK: Start with the story immediately.\n\n"
         f"RAW TEXT:\n{text[:15000]}"
     )
 
