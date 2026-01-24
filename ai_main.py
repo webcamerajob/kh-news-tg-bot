@@ -1,34 +1,32 @@
 import os
-import sys
 import json
 import logging
 import requests
-import main  # Импортируем твой основной скрипт
+import main  # Твой основной файл main.py
 
-# --- НАСТРОЙКИ OPENROUTER ---
-# Укажи свой ключ здесь или в переменной окружения
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "YOUR_API_KEY_HERE")
-MODEL = "google/gemini-2.0-flash-lite-001:free"
+# --- НАСТРОЙКИ ---
+# Проверь, чтобы в GitHub Secrets имя было в точности OPENROUTER_API_KEY
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Список моделей для пробы (если одна выдаст 404, можно будет легко сменить)
+# Попробуй сначала эту (сейчас она самая актуальная из бесплатных Flash):
+MODEL = "google/gemini-2.0-flash-lite-preview-02-05:free" 
 
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
-    """
-    Новая функция перевода через ИИ, которая заменяет стандартную.
-    Она не только переводит, но и чистит текст по инструкции.
-    """
-    if not text.strip():
+    if not text or not text.strip():
         return ""
 
-    logging.info(f"🤖 [AI] Перевод и очистка статьи через {MODEL}...")
+    if not OPENROUTER_API_KEY:
+        logging.error("❌ [AI ERROR] API ключ не найден! Проверь переменные окружения.")
+        return text
+
+    logging.info(f"🤖 [AI] Пробуем перевод через {MODEL}...")
 
     prompt = (
-        f"Ты — профессиональный новостной редактор. Переведи текст на язык '{to_lang}'.\n"
-        "СТРОГИЕ ПРАВИЛА:\n"
-        "1. УДАЛИ все блоки 'Related Articles', 'Read also', ссылки на другие новости.\n"
-        "2. УДАЛИ призывы подписаться на соцсети (Follow us on...).\n"
-        "3. УДАЛИ рекламные вставки, баннеры и промо-тексты.\n"
-        "4. ОСТАВЬ только суть новости и заголовок.\n"
-        "5. Верни ТОЛЬКО переведенный текст новости без лишних комментариев от себя.\n\n"
-        f"ТЕКСТ ДЛЯ ОБРАБОТКИ:\n{text}"
+        f"Translate this news article to {to_lang}. "
+        "Remove all ads, social media links, and 'Related Articles' blocks. "
+        "Return ONLY the translated Russian text.\n\n"
+        f"TEXT:\n{text}"
     )
 
     try:
@@ -37,27 +35,36 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
+                # OpenRouter просит эти два заголовка для корректной работы бесплатных моделей:
+                "HTTP-Referer": "https://github.com/your-repo", 
+                "X-Title": "News Parser Bot",
             },
             data=json.dumps({
                 "model": MODEL,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [
+                    {"role": "system", "content": "You are a professional translator. English to Russian."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3
             }),
             timeout=60
         )
-        response.raise_for_status()
+        
+        # Если получили ошибку, выводим подробности
+        if response.status_code != 200:
+            logging.error(f"❌ [AI ERROR] OpenRouter вернул {response.status_code}: {response.text}")
+            return text
+
         result = response.json()
         translated_text = result['choices'][0]['message']['content']
         return translated_text.strip()
-    
+            
     except Exception as e:
-        logging.error(f"❌ [AI ERROR] Ошибка OpenRouter: {e}. Откат к оригиналу.")
-        return text # В случае ошибки возвращаем оригинал
+        logging.error(f"❌ [AI ERROR] Критическая ошибка: {e}")
+        return text
 
-# --- МОНКЕЙ-ПАТЧИНГ ---
-# Подменяем функцию в модуле main до того, как он начнет работу
-main.translate_text = translate_with_ai
+# Подменяем функцию
+main.translate_text = translate_text
 
 if __name__ == "__main__":
-    # Запускаем main() из твоего оригинального файла
-    # Все аргументы командной строки (--base-url и т.д.) подхватятся автоматически
     main.main()
