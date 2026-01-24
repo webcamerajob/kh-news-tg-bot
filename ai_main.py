@@ -2,28 +2,23 @@ import os
 import sys
 import json
 import logging
+import time      # <--- Добавили модуль времени
 import requests
-import main  # Твой оригинальный main.py
+import main      # Твой оригинальный main.py
 
-# --- СПИСОК МОДЕЛЕЙ ---
+# --- СПИСОК МОДЕЛЕЙ (Llama 3.3 сейчас самая надежная) ---
 AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",      # Быстрая и умная
-    "google/gemini-2.0-pro-exp-02-05:free",  # Если нужен глубокий анализ
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",      # Ставим первой, она реже дает 429
+    "google/gemini-2.0-flash-exp:free",            # Вторая (быстрая, но часто занята)
+    "deepseek/deepseek-r1-distill-llama-70b:free", # Резерв
+    "meta-llama/llama-3.2-3b-instruct:free",       # На самый крайний случай
 ]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 def format_paragraphs(text: str) -> str:
-    """
-    Убирает отступы, но разделяет абзацы пустой строкой.
-    """
-    # 1. Разбиваем текст на абзацы и чистим их от лишних пробелов по краям
+    """Убирает лишние отступы, делает пустую строку между абзацами."""
     paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
-    
-    # 2. Соединяем обратно ДВОЙНЫМ переносом строки
-    # Это создаст "воздух" между абзацами без отступа слева
     return "\n\n".join(paragraphs)
 
 def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
@@ -33,9 +28,14 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
         logging.warning("⚠️ [AI] Ключ не найден. Возврат оригинала.")
         return text
 
+    # --- 🛑 COOL-DOWN: Пауза 10 секунд перед запросом ---
+    # Это снизит шанс получить ошибку 429 (Too Many Requests)
+    logging.info("⏳ Пауза 5 сек перед обращением к ИИ...")
+    time.sleep(5) 
+
     logging.info(f"🤖 [AI] Генерация краткого пересказа ({len(text)} симв.)...")
 
-    # --- ПРОМПТ ДЛЯ ПЕРЕСКАЗА (SUMMARY) ---
+    # Промпт для Summary (Краткий пересказ)
     prompt = (
         f"You are a professional news editor for a Russian Telegram channel.\n"
         f"TASK: Read the English news below and write a CONCISE SUMMARY in Russian.\n\n"
@@ -45,7 +45,7 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
         "3. FACTS: Preserve all names, dates, numbers, and locations accurately.\n"
         "4. STRUCTURE: Use short paragraphs.\n"
         "5. TONE: Neutral, journalistic, factual.\n"
-        "6. CLEAN: No ads, no 'Related Articles', no intros like 'Here is the summary'.\n\n"
+        "6. CLEAN: No ads, no 'Related Articles', no intros.\n\n"
         f"SOURCE TEXT:\n{text[:15000]}"
     )
 
@@ -64,27 +64,30 @@ def translate_with_ai(text: str, to_lang: str = "ru", provider: str = "ai") -> s
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.4
                 }),
-                timeout=50
+                timeout=55
             )
 
             if response.status_code == 200:
                 result = response.json()
                 if 'choices' in result and result['choices']:
                     raw_text = result['choices'][0]['message']['content'].strip()
-                    
-                    # Применяем новое форматирование (без отступа)
                     final_text = format_paragraphs(raw_text)
-                    
-                    logging.info(f"✅ [AI] Успешный пересказ через {model}")
+                    logging.info(f"✅ [AI] Успех! ({model})")
                     return final_text
+            
+            # Обработка ошибки 429 (Too Many Requests)
+            elif response.status_code == 429:
+                logging.warning(f"⚠️ [AI] {model} перегружена (429). Ждем 2 сек и меняем модель...")
+                time.sleep(2) # Маленькая пауза перед сменой модели
+            
             else:
-                logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}. Пробуем следующую...")
+                logging.warning(f"⚠️ [AI] {model} ошибка {response.status_code}. Следующая...")
         
         except Exception as e:
-            logging.error(f"⚠️ [AI] Ошибка {model}: {e}")
+            logging.error(f"⚠️ [AI] Сбой {model}: {e}")
             continue
 
-    logging.error("❌ [AI] Все модели недоступны. Возвращаем оригинал.")
+    logging.error("❌ [AI] Все модели заняты. Возвращаем оригинал.")
     return text
 
 # --- ЗАПУСК ---
