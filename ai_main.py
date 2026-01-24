@@ -8,7 +8,6 @@ import translators as ts
 import main  # Твой оригинальный main.py
 
 # --- СПИСОК МОДЕЛЕЙ ---
-# Llama 3.3 лучше всех чувствует баланс между "сократить" и "оставить суть"
 AI_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
@@ -17,12 +16,17 @@ AI_MODELS = [
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# --- ОБЫЧНЫЙ ПЕРЕВОД ---
+# --- ОБЫЧНЫЙ ПЕРЕВОД (FIXED) ---
 def standard_translate(text: str, to_lang: str = "ru") -> str:
     if not text: return ""
-    providers = ["google", "bing", "yandex"]
+    
+    # ИЗМЕНЕНИЕ: Google смещен в конец списка из-за ошибок HTTP/3
+    # Bing работает мгновенно и без сбоев протокола
+    providers = ["google", "yandex", "bing"]
+    
     for provider in providers:
         try:
+            # logging.info(f"   Trying {provider}...")
             time.sleep(1)
             result = ts.translate_text(
                 query_text=text,
@@ -32,7 +36,9 @@ def standard_translate(text: str, to_lang: str = "ru") -> str:
                 timeout=30
             )
             return result
-        except Exception: continue
+        except Exception: 
+            continue
+            
     logging.error("❌ Все провайдеры перевода отказали.")
     return text
 
@@ -42,8 +48,7 @@ def format_paragraphs(text: str) -> str:
     return "\n\n".join(paragraphs)
 
 def strip_ai_chatter(text: str) -> str:
-    """Страховка от вступлений."""
-    bad_prefixes = ["Here is", "The article", "This text", "Summary:", "Revised text:"]
+    bad_prefixes = ["Here is", "The article", "This text", "Summary:", "Revised text:", "Cleaned text:"]
     for prefix in bad_prefixes:
         if text.lower().startswith(prefix.lower()):
             parts = text.split('\n', 1)
@@ -63,7 +68,6 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
     time.sleep(5) 
     logging.info(f"🤖 [AI] Редакторская чистка (без сжатия)...")
 
-    # 🔥 ПРОМПТ: "УМНАЯ ЧИСТКА" (Balanced Mode) 🔥
     prompt = (
         f"You are a professional news editor.\n"
         f"INPUT: Raw news text.\n"
@@ -91,7 +95,7 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
                 data=json.dumps({
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3 # Чуть выше, чтобы сохранить стиль
+                    "temperature": 0.3
                 }),
                 timeout=60
             )
@@ -111,7 +115,7 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
 
     clean_english_text = strip_ai_chatter(clean_english_text)
 
-    logging.info(f"🌍 [Translators] Перевод очищенного текста...")
+    logging.info(f"🌍 [Translators] Перевод очищенного текста (через Bing)...")
     final_russian_text = standard_translate(clean_english_text, to_lang)
     
     return format_paragraphs(final_russian_text)
