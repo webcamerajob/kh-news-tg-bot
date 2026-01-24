@@ -1,4 +1,4 @@
-name: Parse & Post Articles (Khmertimes)
+name: AI Parse & Post Articles (Khmertimes)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
