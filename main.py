@@ -289,7 +289,7 @@ def fetch_posts(url, cid, limit):
     except Exception as e:
         logging.error(f"Ошибка получения постов: {e}")
         return []
-
+        
 def parse_and_save(post, lang, stopwords):
     time.sleep(2)
     aid, slug, link = str(post["id"]), post["slug"], post.get("link")
@@ -304,7 +304,6 @@ def parse_and_save(post, lang, stopwords):
                 return None
 
     try:
-        # Используем SCRAPER (Safari) для загрузки HTML
         html_txt = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT).text
     except Exception: return None
 
@@ -322,7 +321,20 @@ def parse_and_save(post, lang, stopwords):
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
+    # --- [НОВОЕ] ИЩЕМ ВИДЕО ДО ОЧИСТКИ ---
+    video_url = None
+    # Ищем все фреймы
+    for iframe in soup.find_all("iframe"):
+        src = iframe.get("src", "")
+        # Если это ютуб - берем и останавливаемся (берем только первое видео)
+        if "youtube" in src or "youtu.be" in src:
+            video_url = src
+            logging.info(f"🎥 Найдено видео: {video_url}")
+            break
+    # -------------------------------------
+
     for r in soup.find_all("div", class_="post-widget-thumbnail"): r.decompose()
+    # Теперь можно удалять iframe, мы уже спасли ссылку
     for j in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
@@ -358,8 +370,8 @@ def parse_and_save(post, lang, stopwords):
              if "300x200" not in u and "150x150" not in u and "logo" not in u.lower():
                 if p:=save_image(u, OUTPUT_DIR / f"{aid}_{slug}" / "images"): images.append(p)
 
-    if not images:
-        logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
+    if not images and not video_url: # Если нет ни фото, ни видео - пропускаем
+        logging.warning(f"⚠️ ID={aid}: Нет медиа (фото/видео). Skip.")
         return None
 
     # ОБРАБОТКА + ПЕРЕВОД
@@ -379,7 +391,8 @@ def parse_and_save(post, lang, stopwords):
         "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": final_title, "text_file": "content.txt",
         "images": sorted([Path(p).name for p in images]), "posted": False,
-        "hash": curr_hash, "translated_to": ""
+        "hash": curr_hash, "translated_to": "",
+        "video_url": video_url  # <--- [НОВОЕ] Сохраняем ссылку для бота
     }
 
     if translated_body:
@@ -388,7 +401,7 @@ def parse_and_save(post, lang, stopwords):
 
     with open(meta_path, "w", encoding="utf-8") as f: json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
-
+    
 # --- MAIN ---
 def main():
     parser = argparse.ArgumentParser()
