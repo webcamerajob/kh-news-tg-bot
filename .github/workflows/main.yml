@@ -9,7 +9,6 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/5 * * * *'
     - cron: '30 22-23 * * *'
     - cron: '30 0-11 * * *'
     
