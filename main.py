@@ -259,31 +259,16 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
             if not is_junk(clean_val): return clean_val
     return None
 
-def save_image(src_url: str, folder: Path) -> Optional[str]:
-    if not src_url or not src_url.startswith('http'):
-        return None
-
+def save_image(url, folder):
     folder.mkdir(parents=True, exist_ok=True)
-
-    orig_fn = src_url.rsplit('/', 1)[-1].split('?', 1)[0]
-    if not orig_fn or len(orig_fn) > 100:
-        orig_fn = "image.jpg"
-    url_hash = hashlib.md5(src_url.encode()).hexdigest()[:8]
-    fn = f"{url_hash}_{orig_fn}"
-    
+    fn = url.rsplit('/',1)[-1].split('?',1)[0]
+    if len(fn) > 50: fn = hashlib.md5(fn.encode()).hexdigest() + ".jpg"
     dest = folder / fn
     try:
-        logging.info(f"   📥 Downloading: {fn}")
-        
-        r = SCRAPER.get(src_url, timeout=SCRAPER_TIMEOUT)
-        r.raise_for_status()
-        dest.write_bytes(r.content)
-        apply_watermark_to_image(dest)
-
+        # Для скачивания картинок тоже используем SCRAPER (Safari)
+        dest.write_bytes(SCRAPER.get(url, timeout=SCRAPER_TIMEOUT).content)
         return str(dest)
-    except Exception as e:
-        logging.error(f"   ❌ Failed to save {src_url}: {e}")
-        return None
+    except Exception: return None
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
