@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import requests
-import main  # Твой обновленный main.py (где вырезан translators)
+import main  # Твой main.py с умным фильтром картинок
 
 # --- СПИСОК МОДЕЛЕЙ ---
 AI_MODELS = [
@@ -15,15 +15,19 @@ AI_MODELS = [
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# --- ПРЯМОЙ GOOGLE ПЕРЕВОД (МГНОВЕННЫЙ) ---
+# --- ПРЯМОЙ GOOGLE ПЕРЕВОД (GTX) ---
 def direct_google_translate(text: str, to_lang: str = "ru") -> str:
-    """Переводит текст без использования тяжелых библиотек."""
+    """
+    Переводит текст напрямую через Google API.
+    Режет текст на куски по 1800 символов, чтобы не было ошибок длины URL.
+    """
     if not text: return ""
     
-    # Режем на куски, чтобы Google не отклонил запрос
     chunks = []
     current_chunk = ""
+    # Разбиваем по строкам, чтобы не рвать предложения
     for paragraph in text.split('\n'):
+        # Если чанк переполняется, сохраняем его и начинаем новый
         if len(current_chunk) + len(paragraph) < 1800:
             current_chunk += paragraph + "\n"
         else:
@@ -32,7 +36,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
     if current_chunk: chunks.append(current_chunk)
     
     translated_parts = []
-    # Используем публичный мобильный API Google (GTX)
     url = "https://translate.googleapis.com/translate_a/single"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
     
@@ -48,6 +51,7 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
                 text_part = "".join([item[0] for item in data[0] if item and item[0]])
                 translated_parts.append(text_part)
             else:
+                # Если сбой, возвращаем оригинал куска, чтобы не терять текст
                 translated_parts.append(chunk)
             time.sleep(0.2)
         except Exception:
@@ -55,12 +59,13 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
 
     return "\n".join(translated_parts)
 
-# --- ФОРМАТИРОВАНИЕ ---
+# --- УТИЛИТЫ ---
 def format_paragraphs(text: str) -> str:
     paragraphs = [p.strip() for p in text.replace('\r', '').split('\n') if p.strip()]
     return "\n\n".join(paragraphs)
 
 def strip_ai_chatter(text: str) -> str:
+    # Удаляет вступления типа "Here is the summary"
     bad_prefixes = ["Here is", "The article", "Summary:", "Cleaned text:"]
     for prefix in bad_prefixes:
         if text.lower().startswith(prefix.lower()):
@@ -68,24 +73,37 @@ def strip_ai_chatter(text: str) -> str:
             if len(parts) > 1: return parts[1].strip()
     return text
 
-# --- ГЛАВНАЯ ЛОГИКА ---
+# --- ГЛАВНАЯ ЛОГИКА (AI + CONTEXT) ---
 def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = "ai") -> str:
     if not text or not text.strip(): return ""
 
-    # 🛑 ФИЛЬТР ЗАГОЛОВКОВ (Чтобы не запускать ИИ 2 раза) 🛑
-    # Если текст короткий (меньше 500 символов), это скорее всего заголовок.
-    # Просто переводим его Google-ом без ИИ-чистки.
-    if len(text) < 500:
-        # logging.info(f"⚡ [Fast Translate] Короткий текст ({len(text)} симв.), пропускаем ИИ...")
+    # 1. ПРОВЕРЯЕМ РАЗДЕЛИТЕЛЬ ИЗ MAIN.PY
+    # main.py отправляет нам строку вида: "Заголовок ||| Текст статьи"
+    DELIMITER = " ||| "
+    title_part = ""
+    body_part = text
+    has_delimiter = False
+
+    if DELIMITER in text:
+        parts = text.split(DELIMITER, 1)
+        title_part = parts[0]
+        body_part = parts[1]
+        has_delimiter = True
+
+    # 2. ЕСЛИ ТЕКСТ КОРОТКИЙ - НЕ ТРАТИМ ВРЕМЯ НА ИИ
+    # Переводим сразу всю склейку, контекст заголовка сохранится
+    if len(body_part) < 500:
         return direct_google_translate(text, to_lang)
     
-    # Если текст длинный — запускаем тяжелую артиллерию (ИИ)
+    # 3. ЕСЛИ ТЕКСТ ДЛИННЫЙ - ЧИСТИМ ТОЛЬКО ТЕЛО (BODY)
+    clean_body_english = body_part
+
     if OPENROUTER_API_KEY: 
         logging.info("⏳ Пауза 5 сек перед ИИ...")
         time.sleep(5) 
         logging.info(f"🤖 [AI] Глубокая чистка текста...")
 
-        # ПРОМПТ: Слияние дублей + Удаление воды
+        # Промпт: удаляем воду и дублирующиеся цитаты
         prompt = (
             f"You are a ruthless news editor.\n"
             f"INPUT: Raw news text.\n"
@@ -95,10 +113,10 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
             "2. KEEP UNIQUE DETAILS: Only keep quotes if they add numbers, dates, or emotion.\n"
             "3. REMOVE FLUFF: Delete ads and diplomatic praise.\n"
             "4. NO META-TALK: Start with the story immediately.\n\n"
-            f"RAW TEXT:\n{text[:15000]}"
+            f"RAW TEXT:\n{body_part[:15000]}"
         )
 
-        clean_english_text = ""
+        ai_result = ""
         for model in AI_MODELS:
             try:
                 response = requests.post(
@@ -119,25 +137,34 @@ def ai_clean_and_then_translate(text: str, to_lang: str = "ru", provider: str = 
                 if response.status_code == 200:
                     result = response.json()
                     if 'choices' in result and result['choices']:
-                        clean_english_text = result['choices'][0]['message']['content'].strip()
+                        ai_result = result['choices'][0]['message']['content'].strip()
                         logging.info(f"✅ [AI] Чистка успешна ({model}).")
                         break
                 elif response.status_code == 429:
                     time.sleep(2)
             except Exception: continue
 
-        if not clean_english_text: clean_english_text = text
-        clean_english_text = strip_ai_chatter(clean_english_text)
-    else:
-        clean_english_text = text
-
-    # 2. ПЕРЕВОД (Google)
-    logging.info(f"🌍 [Google Direct] Перевод основного текста...")
-    final_russian_text = direct_google_translate(clean_english_text, to_lang)
+        # Если ИИ ответил - используем его, иначе оставляем оригинал
+        if ai_result:
+            clean_body_english = strip_ai_chatter(ai_result)
+        else:
+            clean_body_english = body_part 
     
-    return format_paragraphs(final_russian_text)
+    # 4. СКЛЕИВАЕМ ОБРАТНО ДЛЯ ПЕРЕВОДА
+    # Оригинальный заголовок + ||| + Очищенный текст
+    if has_delimiter:
+        final_text_to_translate = f"{title_part}{DELIMITER}{clean_body_english}"
+    else:
+        final_text_to_translate = clean_body_english
+
+    # 5. ПЕРЕВОДИМ СКЛЕЙКУ
+    logging.info(f"🌍 [Google Direct] Перевод (контекстный)...")
+    translated_text = direct_google_translate(final_text_to_translate, to_lang)
+    
+    # Возвращаем строку с разделителем. main.py сам её разрежет и сохранит жирный заголовок.
+    return translated_text
 
 if __name__ == "__main__":
-    # Подменяем функцию в main.py на нашу умную
+    # Монтируем нашу функцию в main.py
     main.translate_text = ai_clean_and_then_translate
     main.main()
