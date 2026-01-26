@@ -12,8 +12,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
 
+# Для перевода используем requests (стабильно работает с Google GTX)
 import requests 
 from bs4 import BeautifulSoup
+# Для парсинга используем curl_cffi с профилем Safari (чтобы сайт не банил)
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -26,29 +28,29 @@ BASE_DELAY = 1.0
 MAX_POSTED_RECORDS = 100 
 FETCH_DEPTH = 100 
 
-# Ключ для ИИ (берется из переменных окружения)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Список моделей для чистки текста
 AI_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
     "deepseek/deepseek-r1-distill-llama-70b:free",
 ]
 
-# --- НАСТРОЙКИ СЕТИ ---
+# --- НАСТРОЙКИ СЕТИ (PARSER) ---
+# ИСПРАВЛЕНО: Вернул Safari и убрал принудительный HTTP/1.1
+# Это решит проблему с Timeout при парсинге.
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110",
-    http_version=CurlHttpVersion.V1_1
+    impersonate="safari15_5"
 )
 
 SCRAPER.headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/"
 }
-SCRAPER_TIMEOUT = 30 
+# Увеличил таймаут до 60 сек для медленных прокси/VPN
+SCRAPER_TIMEOUT = 60 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
@@ -69,6 +71,7 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
     
     translated_parts = []
     url = "https://translate.googleapis.com/translate_a/single"
+    # Обычный User-Agent для requests (Google его нормально принимает)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
     
     for chunk in chunks:
@@ -77,21 +80,21 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
             continue
         try:
             params = {"client": "gtx", "sl": "en", "tl": to_lang, "dt": "t", "q": chunk.strip()}
-            r = requests.get(url, params=params, headers=headers, timeout=5)
+            # Таймаут 10 сек на кусок перевода
+            r = requests.get(url, params=params, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 text_part = "".join([item[0] for item in data[0] if item and item[0]])
                 translated_parts.append(text_part)
             else:
                 translated_parts.append(chunk)
-            time.sleep(0.2)
+            time.sleep(0.3)
         except Exception:
             translated_parts.append(chunk)
             
     return "\n".join(translated_parts)
 
 def strip_ai_chatter(text: str) -> str:
-    """Удаляет вступления ИИ."""
     bad_prefixes = ["Here is", "The article", "Summary:", "Cleaned text:"]
     for prefix in bad_prefixes:
         if text.lower().startswith(prefix.lower()):
@@ -100,20 +103,13 @@ def strip_ai_chatter(text: str) -> str:
     return text
 
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
-    """
-    Основная логика:
-    1. Если есть ключ API -> Чистим тело статьи через ИИ.
-    2. Склеиваем Заголовок + Тело.
-    3. Переводим Google (с контекстом).
-    4. Возвращаем (Переведенный заголовок, Переведенный текст).
-    """
     clean_body = body
 
-    # --- ЭТАП 1: ИИ ЧИСТКА (Если есть ключ и текст не слишком короткий) ---
+    # ИИ ЧИСТКА
     if OPENROUTER_API_KEY and len(body) > 500:
         logging.info("⏳ Пауза 3 сек перед ИИ...")
         time.sleep(3)
-        logging.info(f"🤖 [AI] Чистка текста (удаление воды и дублей)...")
+        logging.info(f"🤖 [AI] Чистка текста...")
         
         prompt = (
             f"You are a ruthless news editor.\n"
@@ -158,8 +154,7 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
         if ai_result:
             clean_body = strip_ai_chatter(ai_result)
 
-    # --- ЭТАП 2: КОНТЕКСТНЫЙ ПЕРЕВОД ---
-    # Склеиваем, чтобы Google понял контекст заголовка
+    # КОНТЕКСТНЫЙ ПЕРЕВОД
     DELIMITER = " ||| "
     combined_text = f"{title}{DELIMITER}{clean_body}"
     
@@ -169,7 +164,6 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     final_title = title
     final_text = clean_body
 
-    # Разрезаем обратно
     if translated_full:
         if DELIMITER in translated_full:
             parts = translated_full.split(DELIMITER, 1)
@@ -180,7 +174,6 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
             final_title = parts[0].strip()
             final_text = parts[1].strip()
         else:
-            # Fallback: Если разделитель пропал, бьем по первой строке
             parts = translated_full.split('\n', 1)
             final_title = parts[0].strip()
             final_text = parts[1].strip() if len(parts) > 1 else ""
@@ -231,21 +224,17 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
 # --- БЛОК 3: УМНЫЙ ПОИСК КАРТИНОК ---
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    # 1. Фильтр по ширине в атрибуте
     width_attr = img_tag.get("width")
     if width_attr and width_attr.isdigit():
         if int(width_attr) < 400: return None
 
-    # Вспомогательный фильтр мусора
     def is_junk(url_str: str) -> bool:
         u = url_str.lower()
         bad = ["gif", "logo", "banner", "icon", "avatar", "button", "share", "pixel", "tracker"]
         if any(b in u for b in bad): return True
-        # Паттерн мелких тумб (example-150x150.jpg)
         if re.search(r'-\d{2,3}x\d{2,3}\.', u): return True
         return False
 
-    # 2. Ищем в SRCSET (приоритет качества)
     srcset = img_tag.get("srcset") or img_tag.get("data-srcset")
     if srcset:
         try:
@@ -263,7 +252,6 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
                     return best_link.split('?')[0]
         except Exception: pass
     
-    # 3. Fallback: Обычные атрибуты
     attrs = ["data-orig-file", "data-large-file", "data-src", "data-lazy-src", "src"]
     for attr in attrs:
         if val := img_tag.get(attr):
@@ -277,6 +265,7 @@ def save_image(url, folder):
     if len(fn) > 50: fn = hashlib.md5(fn.encode()).hexdigest() + ".jpg"
     dest = folder / fn
     try:
+        # Для скачивания картинок тоже используем SCRAPER (Safari)
         dest.write_bytes(SCRAPER.get(url, timeout=SCRAPER_TIMEOUT).content)
         return str(dest)
     except Exception: return None
@@ -305,7 +294,6 @@ def parse_and_save(post, lang, stopwords):
     time.sleep(2)
     aid, slug, link = str(post["id"]), post["slug"], post.get("link")
     
-    # Заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = sanitize_text(raw_title)
 
@@ -316,10 +304,10 @@ def parse_and_save(post, lang, stopwords):
                 return None
 
     try:
+        # Используем SCRAPER (Safari) для загрузки HTML
         html_txt = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT).text
     except Exception: return None
 
-    # Проверка хэша
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
     if meta_path.exists():
@@ -334,7 +322,6 @@ def parse_and_save(post, lang, stopwords):
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
-    # Чистка HTML от мусора
     for r in soup.find_all("div", class_="post-widget-thumbnail"): r.decompose()
     for j in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
@@ -346,10 +333,8 @@ def parse_and_save(post, lang, stopwords):
         for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
-    # Собираем сырой текст
     raw_body_text = BAD_RE.sub("", "\n\n".join(paras))
     
-    # --- СБОР КАРТИНОК ---
     srcs = set()
     # 1. Lightbox
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
@@ -367,7 +352,7 @@ def parse_and_save(post, lang, stopwords):
             for f in as_completed(futs):
                 if p:=f.result(): images.append(p)
     
-    # 3. Fallback на Featured
+    # 3. Fallback
     if not images and "_embedded" in post and (m:=post["_embedded"].get("wp:featuredmedia")):
         if isinstance(m, list) and (u:=m[0].get("source_url")):
              if "300x200" not in u and "150x150" not in u and "logo" not in u.lower():
@@ -377,22 +362,17 @@ def parse_and_save(post, lang, stopwords):
         logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
         return None
 
-    # --- ГЛАВНАЯ МАГИЯ: ОБРАБОТКА + ПЕРЕВОД ---
+    # ОБРАБОТКА + ПЕРЕВОД
     final_title = title
     translated_body = ""
 
     if lang:
-        # Вызываем нашу умную функцию, которая сама решит, нужен ИИ или нет
         final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
-        
-        # Финальная зачистка от спецсимволов HTML
         final_title = sanitize_text(final_title)
 
-    # Сохраняем результат
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     
-    # Оригинал (для истории)
     (art_dir / "content.txt").write_text(raw_body_text, encoding="utf-8")
     
     meta = {
@@ -403,7 +383,6 @@ def parse_and_save(post, lang, stopwords):
     }
 
     if translated_body:
-        # Формат для постера: Жирный заголовок + энтеры + Текст
         (art_dir / f"content.{lang}.txt").write_text(f"{final_title}\n\n{translated_body}", encoding="utf-8")
         meta.update({"translated_to": lang, "text_file": f"content.{lang}.txt"})
 
