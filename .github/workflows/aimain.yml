@@ -1,7 +1,7 @@
 name: AI Parse & Post Articles
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
   
 permissions:
   contents: write
