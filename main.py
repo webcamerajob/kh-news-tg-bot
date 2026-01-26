@@ -13,10 +13,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
 
+# Стабильные библиотеки
 import requests 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
+# Максимально подробный лог
 logging.basicConfig(
     level=logging.INFO, 
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -27,8 +29,6 @@ logger = logging.getLogger(__name__)
 # --- КОНФИГУРАЦИЯ ---
 OUTPUT_DIR = Path("articles")
 CATALOG_PATH = OUTPUT_DIR / "catalog.json"
-MAX_RETRIES = 3
-BASE_DELAY = 1.0
 MAX_POSTED_RECORDS = 100 
 FETCH_DEPTH = 100 
 
@@ -94,7 +94,7 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
         time.sleep(3)
         prompt = (
             f"You are a ruthless news editor.\nINPUT: Raw news text.\nOUTPUT: A cleaned-up version of the story in ENGLISH.\n\n"
-            "STRICT EDITING RULES:\n1. CONSOLIDATE NARRATIVE & SPEECH.\n"
+            "STRICT EDITING RULES: Consolidate narrative, remove meta-talk, remove fluff.\n"
             f"RAW TEXT:\n{body[:15000]}"
         )
         ai_result = ""
@@ -156,7 +156,7 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
             return [line.strip().lower() for line in f if line.strip()]
     except: return []
 
-# --- БЛОК 3: МЕДИА (ВИДЕО И ФОТО) ---
+# --- БЛОК 3: МЕДИА ---
 
 def apply_watermark_to_image(img_path: Path, watermark_path: str = "watermark.png"):
     if not os.path.exists(watermark_path) or not img_path.exists(): return
@@ -191,7 +191,7 @@ def process_video_logic(video_url, watermark_path="watermark.png"):
         
         if not download_url: return None
 
-        # ИСПРАВЛЕНО: Загрузка без контекстного менеджера Response
+        # ИСПРАВЛЕНО: Загрузка без лишних оберток
         r = session.get(download_url, stream=True)
         with open(raw, 'wb') as f:
             for chunk in r.iter_content(8192):
@@ -211,16 +211,15 @@ def process_video_logic(video_url, watermark_path="watermark.png"):
         return None
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    # ИСПРАВЛЕНО: Игнорируем base64 данные
     for attr in ["data-orig-file", "data-large-file", "data-src", "src"]:
         if val := img_tag.get(attr):
             clean_val = val.split()[0].split(',')[0].split('?')[0]
-            if clean_val.startswith("http"):
+            if clean_val.startswith("http"): # Фильтр Base64
                 return clean_val
     return None
 
 def save_image(url, folder):
-    if not url or not url.startswith("http"): return None
+    if not url: return None
     folder.mkdir(parents=True, exist_ok=True)
     fn = hashlib.md5(url.encode()).hexdigest() + ".jpg"
     dest = folder / fn
@@ -230,7 +229,7 @@ def save_image(url, folder):
         return str(dest)
     except: return None
 
-# --- БЛОК 4: API И ПАРСИНГ ---
+# --- БЛОК 4: ПАРСИНГ ---
 
 def fetch_posts(url, cid, limit):
     logger.info(f"📡 Запрашиваем {limit} последних статей...") 
@@ -285,7 +284,6 @@ def parse_and_save(post, lang, stopwords):
     text_file_name = f"content.{lang}.txt"
     (art_dir / text_file_name).write_text(f"{final_title}\n\n{translated_body}", encoding="utf-8")
     
-    # ИСПРАВЛЕНО: Добавлен ключ text_file, чтобы постер его видел
     meta = {
         "id": aid, "slug": slug, "title": final_title,
         "text_file": text_file_name,
@@ -293,9 +291,11 @@ def parse_and_save(post, lang, stopwords):
         "video_url": video_url, "hash": curr_hash
     }
     with open(meta_path, "w", encoding="utf-8") as f: json.dump(meta, f, indent=2, ensure_ascii=False)
+    logger.info(f"   ✅ Статья сохранена: ID {aid}")
     return meta
 
 # --- MAIN ---
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
@@ -303,30 +303,32 @@ def main():
     parser.add_argument("-n", "--limit", type=int, default=10)
     parser.add_argument("-l", "--lang", default="ru")
     parser.add_argument("--posted-state-file", default="articles/posted.json")
+    parser.add_argument("--stopwords-file", default="stopwords.txt") # ВОТ ОН!
     args = parser.parse_args()
 
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
         
-        # Получаем ID категории
         r_cat = SCRAPER.get(f"{args.base_url}/wp-json/wp/v2/categories?slug={args.slug}")
         cid = r_cat.json()[0]["id"]
         
         posts = fetch_posts(args.base_url, cid, FETCH_DEPTH)
         posted = load_posted_ids(Path(args.posted_state_file))
+        stop = load_stopwords(Path(args.stopwords_file))
         
         new_items = []
         for post in posts:
             if len(new_items) >= args.limit: break
             if str(post["id"]) in posted: continue
-            if meta := parse_and_save(post, args.lang, []):
+            if meta := parse_and_save(post, args.lang, stop):
                 new_items.append(meta)
         
         if new_items:
             print("NEW_ARTICLES_STATUS:true")
+            logger.info(f"🎉 Готово. Добавлено: {len(new_items)}")
     except Exception as e:
-        logger.error(f"💥 Ошибка: {e}")
+        logger.error(f"💥 Критическая ошибка: {e}")
         exit(1)
 
 if __name__ == "__main__":
