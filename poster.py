@@ -261,82 +261,137 @@ def save_posted_ids(ids_to_save: List[str], state_file: Path) -> None:
 
 async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark_scale: float):
     token, chat_id = os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHANNEL")
-    if not token or not chat_id: return
-
     parsed_root, state_file = Path(parsed_dir), Path(state_path)
-    posted_ids_list = load_posted_ids(state_file)
-    posted_ids_set = set(posted_ids_list)
+    
+    # 1. ЗАГРУЗКА ИСТОРИИ (Строгий контроль типов)
+    posted_ids = []
+    if state_file.is_file():
+        try:
+            raw_data = json.loads(state_file.read_text())
+            # Принудительно всё в строки, убираем дубли
+            posted_ids = [str(x) for x in raw_data if x is not None]
+        except Exception as e:
+            logging.error(f"❌ Ошибка чтения истории {state_path}: {e}")
+            
+    posted_set = set(posted_ids)
+    logging.info(f"📜 Загружена история: {len(posted_set)} объектов. (Файл: {state_path})")
+
+    # 2. ПОИСК ПАПОК (Проверка путей)
+    if not parsed_root.exists():
+        logging.error(f"❌ Директория с контентом '{parsed_dir}' НЕ НАЙДЕНА!")
+        return
+
+    # Получаем все подпапки
+    all_folders = [d for d in parsed_root.iterdir() if d.is_dir()]
+    logging.info(f"📂 Всего папок в '{parsed_dir}': {len(all_folders)}")
 
     articles_to_post = []
-    for d in sorted(parsed_root.iterdir()):
+    for d in sorted(all_folders, key=lambda x: x.name):
         meta_file = d / "meta.json"
-        if d.is_dir() and meta_file.is_file():
-            try:
-                art_meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                aid = str(art_meta.get("id"))
-                if aid and aid not in posted_ids_set:
-                    # Валидация
-                    title = art_meta.get("title", "").strip()
-                    text_path = d / art_meta.get("text_file", "")
-                    if not text_path.is_file(): continue
-                    
-                    img_dir = d / "images"
-                    imgs = sorted([p for p in img_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]) if img_dir.is_dir() else []
-                    
-                    articles_to_post.append({
-                        "id": aid, "title": title, "text_path": text_path, 
-                        "image_paths": imgs, "video_url": art_meta.get("video_url")
-                    })
-            except Exception: continue
+        
+        if not meta_file.is_file():
+            logging.info(f"  🔍 Папка {d.name}: пропуск (нет meta.json)")
+            continue
+            
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            aid = str(meta.get("id"))
+            
+            # ГЛАВНАЯ ПРОВЕРКА
+            if aid in posted_set:
+                logging.info(f"  🔍 ID {aid}: пропуск (уже есть в истории)")
+                continue
 
-    articles_to_post.sort(key=lambda x: int(x["id"]))
+            # Проверка наличия текста
+            text_file = meta.get("text_file", "")
+            text_path = d / text_file
+            if not text_path.is_file():
+                logging.warning(f"  🔍 ID {aid}: пропуск (файл текста {text_file} не найден)")
+                continue
+            
+            # Собираем фото
+            img_dir = d / "images"
+            imgs = sorted([p for p in img_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]) if img_dir.is_dir() else []
+            
+            articles_to_post.append({
+                "id": aid, 
+                "title": meta.get("title", "Без названия"), 
+                "text_path": text_path, 
+                "image_paths": imgs, 
+                "video_url": meta.get("video_url")
+            })
+            logging.info(f"  ⭐️ ID {aid}: ДОБАВЛЕН В ОЧЕРЕДЬ ({len(imgs)} фото, видео: {'да' if meta.get('video_url') else 'нет'})")
+
+        except Exception as e:
+            logging.error(f"  ❌ Ошибка чтения метаданных в {d.name}: {e}")
+
+    # 3. ПУБЛИКАЦИЯ
     if not articles_to_post:
-        save_posted_ids(posted_ids_list, state_file)
+        logging.info("🔍 Новых статей для отправки не нашлось.")
         return
+
+    logging.info(f"🚀 Начинаем публикацию {len(articles_to_post)} статей...")
 
     async with httpx.AsyncClient() as client:
         sent_count = 0
-        final_posted_ids = list(posted_ids_list)
-        
         for article in articles_to_post:
-            if limit and sent_count >= limit: break
+            if limit and sent_count >= limit:
+                logging.info(f"🛑 Достигнут лимит {limit} ст.")
+                break
             
-            logging.info(f"Публикуем ID={article['id']}...")
+            logging.info(f"▶️ Публикуем {article['id']}...")
             processed_video = None
             try:
-                # 1. Обработка видео (если есть)
+                # Видео
                 if article["video_url"]:
                     processed_video = await process_video_logic(article["video_url"])
 
-                # 2. Отправка медиа-групп (Фото + Видео в конце)
-                await send_complex_media_group(client, token, chat_id, article["image_paths"], processed_video, watermark_scale)
+                # Медиа (фото + видео в конце)
+                # Вызываем твою функцию send_complex_media_group
+                media_success = await send_complex_media_group(
+                    client, token, chat_id, 
+                    article["image_paths"], 
+                    processed_video, 
+                    watermark_scale
+                )
 
-                # 3. Подготовка и отправка текста
+                # Текст (всегда шлем отдельно или как подпись, если медиа не ушло)
                 raw_text = article["text_path"].read_text(encoding="utf-8")
-                cleaned_text = raw_text.lstrip()
-                if cleaned_text.startswith(article["title"]):
-                    cleaned_text = cleaned_text[len(article["title"]):].lstrip()
+                # Убираем заголовок из начала текста, если он там есть
+                clean_body = raw_text
+                if article['title'] in raw_text[:200]:
+                    clean_body = raw_text.replace(article['title'], '', 1).strip()
 
-                full_html = f"<b>{escape_html(article['title'])}</b>\n\n{escape_html(cleaned_text)}"
-                full_html = re.sub(r'\n{3,}', '\n\n', full_html).strip()
+                full_html = f"<b>{escape_html(article['title'])}</b>\n\n{escape_html(clean_body)}"
                 chunks = chunk_text(full_html)
 
                 for i, chunk in enumerate(chunks):
-                    is_last = (i == len(chunks) - 1)
-                    markup = {"inline_keyboard": [[{"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, {"text": "Отзывы", "url": "https://t.me/feedback1dollar"}]]} if is_last else None
+                    # Кнопки только к последнему куску
+                    markup = None
+                    if i == len(chunks) - 1:
+                        markup = {"inline_keyboard": [[{"text": "Обмен", "url": "https://t.me/mister1dollar"}]]}
+                    
                     await send_message(client, token, chat_id, chunk, reply_markup=markup)
 
-                final_posted_ids.append(article['id'])
+                # Записываем успех
+                posted_ids.append(article['id'])
                 sent_count += 1
-                logging.info(f"✅ Успешно: ID={article['id']}")
+                logging.info(f"✅ ID {article['id']} отправлен.")
 
             except Exception as e:
-                logging.error(f"❌ Ошибка ID={article['id']}: {e}")
+                logging.error(f"❌ Провал на ID {article['id']}: {e}")
             finally:
                 if processed_video and os.path.exists(processed_video):
                     os.remove(processed_video)
             
             await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
+
+    # 4. СОХРАНЕНИЕ СОСТОЯНИЯ
+    if sent_count > 0:
+        # Оставляем только свежие записи
+        new_history = [int(i) for i in posted_ids[-MAX_POSTED_RECORDS:]]
+        state_file.write_text(json.dumps(new_history, indent=2))
+        logging.info(f"💾 История обновлена: {state_path}")
 
     if sent_count > 0:
         if len(final_posted_ids) > MAX_POSTED_RECORDS:
