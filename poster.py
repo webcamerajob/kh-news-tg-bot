@@ -282,4 +282,3 @@ if __name__ == "__main__":
     parser.add_argument("--watermark-scale", type=float, default=WATERMARK_SCALE, help=f"Масштаб водяного знака (по-умолчанию: {WATERMARK_SCALE})")
     args = parser.parse_args()
     asyncio.run(main(args.parsed_dir, args.state_file, args.limit, args.watermark_scale))
-	
