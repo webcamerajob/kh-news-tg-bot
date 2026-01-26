@@ -260,15 +260,27 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
     return None
 
 def save_image(url, folder):
+    if not url or url.startswith('data:'): return None # Игнорим base64 мусор
+    
     folder.mkdir(parents=True, exist_ok=True)
-    fn = url.rsplit('/',1)[-1].split('?',1)[0]
-    if len(fn) > 50: fn = hashlib.md5(fn.encode()).hexdigest() + ".jpg"
+    
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:10]
+    orig_fn = url.rsplit('/', 1)[-1].split('?', 1)[0]
+    ext = orig_fn.split('.')[-1] if '.' in orig_fn else 'jpg'
+    if len(ext) > 4: ext = 'jpg' # На случай кривых ссылок
+    
+    fn = f"{url_hash}.{ext}"
     dest = folder / fn
+    
     try:
-        # Для скачивания картинок тоже используем SCRAPER (Safari)
-        dest.write_bytes(SCRAPER.get(url, timeout=SCRAPER_TIMEOUT).content)
-        return str(dest)
-    except Exception: return None
+        # Качаем через SCRAPER (Safari профиль)
+        resp = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
+        if resp.status_code == 200:
+            dest.write_bytes(resp.content)
+            return str(dest)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения фото {url}: {e}")
+    return None
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
