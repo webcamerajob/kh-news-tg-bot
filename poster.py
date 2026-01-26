@@ -58,77 +58,108 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
 # --- БЛОК ОБРАБОТКИ МЕДИА ---
 
 def apply_watermark(img_path: Path, scale: float) -> bytes:
-    """Наложение водяного знака на фото (используется текущая логика PIL)"""
+    """Наложение водяного знака на фото с подробным логированием"""
     try:
         base_img = Image.open(img_path).convert("RGBA")
         base_width, _ = base_img.size
         watermark_path = Path(__file__).parent / "watermark.png"
+        
         if not watermark_path.exists():
+            logging.warning(f"⚠️ Файл вотермарки не найден. {img_path.name} будет отправлен без неё.")
             img_byte_arr = BytesIO()
             base_img.convert("RGB").save(img_byte_arr, format='JPEG', quality=90)
             return img_byte_arr.getvalue()
-        
+
         watermark_img = Image.open(watermark_path).convert("RGBA")
         wm_width, wm_height = watermark_img.size
+        
+        # Расчет размеров: 35% от ширины оригинала
         new_wm_width = int(base_width * scale)
         new_wm_height = int(wm_height * (new_wm_width / wm_width))
+        
         resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
         watermark_img = watermark_img.resize((new_wm_width, new_wm_height), resample=resample_filter)
         
+        # Позиция: правый верхний угол
         overlay = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
-        padding = 10 # Отступ сверху/справа
+        padding = 10 
         position = (base_width - new_wm_width - padding, padding)
-        overlay.paste(watermark_img, position, watermark_img)
         
+        overlay.paste(watermark_img, position, watermark_img)
         composite_img = Image.alpha_composite(base_img, overlay).convert("RGB")
+        
         img_byte_arr = BytesIO()
         composite_img.save(img_byte_arr, format='JPEG', quality=90)
+        
+        logging.info(f"🎨 Вотермарка наложена на фото: {img_path.name}")
         return img_byte_arr.getvalue()
+        
     except Exception as e:
-        logging.error(f"Ошибка вотермарки фото {img_path}: {e}")
+        logging.error(f"❌ Ошибка вотермарки для {img_path.name}: {e}")
         return img_path.read_bytes() if img_path.exists() else b""
 
 async def process_video_logic(video_url: str, watermark_path: str = "watermark.png") -> Optional[str]:
-    """Скачивание видео 360p и наложение вотермарки через FFmpeg"""
+    """Скачивание видео 360p и наложение вотермарки с выводом всех этапов в лог"""
     if not video_url: return None
     ts = int(time.time())
     raw_path, final_path = f"raw_{ts}.mp4", f"video_{ts}.mp4"
+    
+    logging.info(f"🎬 Начало обработки видео: {video_url}")
     
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             # 1. Запрос к Loader.to
             resp = await client.get("https://loader.to/ajax/download.php", params={"format": "360", "url": video_url})
             task_id = resp.json().get("id")
+            logging.info(f"⏳ Задача Loader.to создана. ID: {task_id}")
             
-            # 2. Ожидание
+            # 2. Ожидание готовности
             download_url = None
-            for _ in range(25):
+            for attempt in range(25):
                 await asyncio.sleep(3)
-                status = (await client.get("https://loader.to/ajax/progress.php", params={"id": task_id})).json()
+                status_resp = await client.get("https://loader.to/ajax/progress.php", params={"id": task_id})
+                status = status_resp.json()
+                
+                prog_text = status.get('text', 'обработка')
+                logging.info(f"   [{attempt+1}/25] Статус видео: {prog_text}")
+                
                 if status.get("success") == 1:
                     download_url = status.get("download_url")
                     break
             
-            if not download_url: return None
+            if not download_url:
+                logging.error("❌ Loader.to не отдал ссылку за отведенное время.")
+                return None
 
             # 3. Скачивание
+            logging.info(f"⬇️ Скачивание временного файла {raw_path}...")
             async with client.stream("GET", download_url) as r:
                 with open(raw_path, 'wb') as f:
                     async for chunk in r.aiter_bytes(): f.write(chunk)
 
-            # 4. FFmpeg вотермарка (35% ширины, правый верхний угол)
+            # 4. FFmpeg вотермарка
+            logging.info("⚙️ Запуск FFmpeg рендеринга (360p + вотермарка 35%)...")
             cmd = [
                 "ffmpeg", "-y", "-i", raw_path, "-i", watermark_path,
                 "-filter_complex", f"[1:v][0:v]scale2ref=iw*{WATERMARK_SCALE}:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-c:a", "copy", final_path
             ]
-            process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            await process.wait()
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                logging.error(f"❌ FFmpeg завершился с ошибкой: {stderr.decode()}")
+                return None
 
             if os.path.exists(raw_path): os.remove(raw_path)
-            return final_path if os.path.exists(final_path) else None
+            logging.info(f"✅ Видео успешно обработано: {final_path}")
+            return final_path
+            
         except Exception as e:
-            logging.error(f"Ошибка обработки видео: {e}")
+            logging.error(f"❌ Критическая ошибка видео: {e}")
             if os.path.exists(raw_path): os.remove(raw_path)
             return None
 
@@ -150,11 +181,12 @@ async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, dat
     return False
 
 async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_id: str, images: List[Path], video_path: Optional[str], watermark_scale: float) -> bool:
-    """Сборка и отправка медиа-групп по 10 объектов. Видео всегда последнее."""
+    """Сборка и отправка медиа-групп. Видео ВСЕГДА идет последним объектом."""
     all_items = []
     files_to_send = {}
     
-    # 1. Сначала подготавливаем фото
+    # Подготовка фото
+    logging.info(f"📦 Подготовка {len(images)} фото для альбома...")
     for idx, img_path in enumerate(images):
         image_bytes = apply_watermark(img_path, scale=watermark_scale)
         if image_bytes:
@@ -162,23 +194,27 @@ async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_i
             files_to_send[key] = (img_path.name, image_bytes, "image/jpeg")
             all_items.append({"type": "photo", "media": f"attach://{key}"})
     
-    # 2. В самый конец общего списка — видео
+    # Видео в самый конец
     if video_path and os.path.exists(video_path):
+        logging.info(f"📦 Добавление видео в конец очереди: {video_path}")
         key = "video_main"
         with open(video_path, 'rb') as f:
             files_to_send[key] = ("video.mp4", f.read(), "video/mp4")
         all_items.append({"type": "video", "media": f"attach://{key}"})
 
     if not all_items:
+        logging.warning("⚠️ Нет медиа-файлов для отправки.")
         return False
 
-    # 3. Разбиваем на группы по 10. ИСПРАВЛЕНО: убран walrus operator из range
-    chunks = [all_items[i:i + 10] for i in range(0, len(all_items), 10)]
+    # Разбивка на чанки (по 10 объектов)
+    total_items = len(all_items)
+    chunks = [all_media_slice := all_items[i:i + 10] for i in range(0, total_items, 10)]
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
 
+    logging.info(f"📤 Всего объектов: {total_items}. Будет отправлено {len(chunks)} медиа-групп.")
+
     success = True
-    for chunk in chunks:
-        # Отбираем только те файлы из словаря, которые нужны для текущей пачки (chunk)
+    for i, chunk in enumerate(chunks):
         current_files = {}
         for item in chunk:
             key = item["media"].replace("attach://", "")
@@ -187,12 +223,12 @@ async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_i
         
         data = {"chat_id": chat_id, "media": json.dumps(chunk)}
         
-        # Отправляем пачку
+        logging.info(f"   🚀 Отправка группы {i+1}/{len(chunks)}...")
         if not await _post_with_retry(client, "POST", url, data, current_files):
+            logging.error(f"   ❌ Ошибка при отправке группы {i+1}")
             success = False
-            
-        # Небольшая пауза между группами, чтобы избежать флуда
-        await asyncio.sleep(1)
+        
+        await asyncio.sleep(1.5) # Защита от флуда
         
     return success
 
