@@ -19,7 +19,13 @@ from bs4 import BeautifulSoup
 # Для парсинга используем curl_cffi с профилем Safari (чтобы сайт не банил)
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# Настройка максимально подробного логирования
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 # --- КОНФИГУРАЦИЯ ---
 OUTPUT_DIR = Path("articles")
@@ -51,6 +57,7 @@ BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
 def direct_google_translate(text: str, to_lang: str = "ru") -> str:
+    """Перевод через Google GTX с логированием прогресса"""
     if not text: return ""
     chunks = []
     current_chunk = ""
@@ -61,10 +68,13 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
             chunks.append(current_chunk)
             current_chunk = paragraph + "\n"
     if current_chunk: chunks.append(current_chunk)
+    
     translated_parts = []
     url = "https://translate.googleapis.com/translate_a/single"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
-    for chunk in chunks:
+    
+    logger.info(f"🌍 Перевод: разбито на {len(chunks)} частей.")
+    for i, chunk in enumerate(chunks):
         if not chunk.strip():
             translated_parts.append("")
             continue
@@ -75,10 +85,12 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
                 data = r.json()
                 text_part = "".join([item[0] for item in data[0] if item and item[0]])
                 translated_parts.append(text_part)
+                logger.info(f"   - Часть {i+1} переведена.")
             else:
                 translated_parts.append(chunk)
             time.sleep(0.3)
-        except Exception:
+        except Exception as e:
+            logger.error(f"   - Ошибка перевода части {i+1}: {e}")
             translated_parts.append(chunk)
     return "\n".join(translated_parts)
 
@@ -93,15 +105,18 @@ def strip_ai_chatter(text: str) -> str:
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     clean_body = body
     if OPENROUTER_API_KEY and len(body) > 500:
+        logger.info("🤖 AI: Начинаем чистку текста...")
         time.sleep(3)
         prompt = (
             f"You are a ruthless news editor.\nINPUT: Raw news text.\nOUTPUT: A cleaned-up version of the story in ENGLISH.\n\n"
-            "STRICT EDITING RULES:\n1. CONSOLIDATE NARRATIVE & SPEECH...\n"
+            "STRICT EDITING RULES:\n1. CONSOLIDATE NARRATIVE & SPEECH: If a fact is repeated, delete the repetition.\n"
+            "2. REMOVE ADS: Delete all fluff and promotional links.\n"
             f"RAW TEXT:\n{body[:15000]}"
         )
         ai_result = ""
         for model in AI_MODELS:
             try:
+                logger.info(f"   - Пробуем модель: {model}")
                 response = requests.post(
                     url="https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
@@ -111,8 +126,11 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
                 if response.status_code == 200:
                     result = response.json()
                     ai_result = result['choices'][0]['message']['content'].strip()
+                    logger.info("   ✅ AI успешно почистил текст.")
                     break
-            except Exception: continue
+            except Exception as e: 
+                logger.warning(f"   ⚠️ Ошибка AI ({model}): {e}")
+                continue
         if ai_result: clean_body = strip_ai_chatter(ai_result)
 
     DELIMITER = " ||| "
@@ -133,10 +151,13 @@ def cleanup_old_articles(posted_ids_path: Path, articles_dir: Path):
         with open(posted_ids_path, 'r', encoding='utf-8') as f:
             all_posted = json.load(f)
             ids_to_keep = set(str(x) for x in all_posted[-MAX_POSTED_RECORDS:])
+        cleaned = 0
         for f in articles_dir.iterdir():
             if f.is_dir() and f.name.split('_', 1)[0] not in ids_to_keep:
                 shutil.rmtree(f)
-    except Exception: pass
+                cleaned += 1
+        if cleaned > 0: logger.info(f"🧹 Очищено старых статей: {cleaned}")
+    except Exception as e: logger.error(f"Ошибка очистки: {e}")
 
 def sanitize_text(text: str) -> str:
     if not text: return ""
@@ -166,6 +187,8 @@ def apply_watermark_to_image(img_path: Path, watermark_path: str = "watermark.pn
     """Накладывает вотермарку (35% ширины) на изображение"""
     if not os.path.exists(watermark_path) or not img_path.exists(): return
     temp_out = img_path.with_name(f"wm_{img_path.name}")
+    
+    # Расчет: 35% ширины, правый верхний угол (отступ 10px)
     cmd = [
         "ffmpeg", "-y", "-i", str(img_path), "-i", watermark_path,
         "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][img];[img][wm]overlay=W-w-10:10",
@@ -174,27 +197,42 @@ def apply_watermark_to_image(img_path: Path, watermark_path: str = "watermark.pn
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         os.replace(temp_out, img_path)
-    except Exception as e: logging.error(f"FFmpeg Image Error: {e}")
+    except Exception as e: logger.error(f"   ❌ FFmpeg Image Error ({img_path.name}): {e}")
 
 def process_video_logic(video_url, watermark_path="watermark.png"):
+    """Скачивание и обработка видео (360p + вотермарка)"""
     if not video_url: return None
+    logger.info(f"🎬 Видео: Найдена ссылка {video_url}. Начинаем обработку...")
     ts = int(time.time())
     raw, final = Path(f"raw_{ts}.mp4"), Path(f"video_{ts}.mp4")
     session = cffi_requests.Session(impersonate="chrome120")
     try:
+        # 1. Запрос к Loader.to
         resp = session.get("https://loader.to/ajax/download.php", params={"format": "360", "url": video_url}, timeout=15)
         task_id = resp.json().get("id")
+        
+        # 2. Ожидание
         download_url = None
-        for _ in range(25):
+        for i in range(25):
             time.sleep(3)
             status = session.get("https://loader.to/ajax/progress.php", params={"id": task_id}).json()
+            logger.info(f"   - Ожидание видео ({i+1}/25): {status.get('text')}")
             if status.get("success") == 1:
                 download_url = status.get("download_url")
                 break
-        if not download_url: return None
+        
+        if not download_url: 
+            logger.error("   ❌ Видео не было получено от Loader.to")
+            return None
+
+        # 3. Скачивание
+        logger.info("   - Скачивание файла...")
         with session.get(download_url, stream=True) as r:
             with open(raw, 'wb') as f:
                 for chunk in r.iter_content(8192): f.write(chunk)
+        
+        # 4. FFmpeg
+        logger.info("   - Рендеринг вотермарки (360p)...")
         cmd = [
             "ffmpeg", "-y", "-i", str(raw), "-i", watermark_path,
             "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
@@ -202,8 +240,10 @@ def process_video_logic(video_url, watermark_path="watermark.png"):
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if raw.exists(): raw.unlink()
+        logger.info(f"   ✅ Видео готово: {final}")
         return str(final)
-    except Exception:
+    except Exception as e:
+        logger.error(f"   ❌ Ошибка видео: {e}")
         if raw.exists(): raw.unlink()
         return None
 
@@ -225,8 +265,11 @@ def save_image(url, folder):
         dest.write_bytes(SCRAPER.get(url, timeout=SCRAPER_TIMEOUT).content)
         # Накладываем вотермарку сразу после сохранения
         apply_watermark_to_image(dest)
+        logger.info(f"   🖼️ Фото сохранено и вотермаркнуто: {fn}")
         return str(dest)
-    except Exception: return None
+    except Exception as e:
+        logger.error(f"   ❌ Ошибка сохранения фото {url}: {e}")
+        return None
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
@@ -236,12 +279,16 @@ def fetch_cat_id(url, slug):
     return r.json()[0]["id"]
 
 def fetch_posts(url, cid, limit):
-    logging.info(f"Запрашиваем {limit} последних статей...") 
+    logger.info(f"📡 Запрашиваем {limit} последних статей из API...") 
     try:
         r = SCRAPER.get(f"{url}/wp-json/wp/v2/posts?categories={cid}&per_page={limit}&_embed", timeout=SCRAPER_TIMEOUT)
         r.raise_for_status()
-        return r.json()
-    except Exception: return []
+        posts = r.json()
+        logger.info(f"✅ Получено {len(posts)} постов.")
+        return posts
+    except Exception as e:
+        logger.error(f"❌ Ошибка API: {e}")
+        return []
         
 def parse_and_save(post, lang, stopwords):
     time.sleep(2)
@@ -249,29 +296,40 @@ def parse_and_save(post, lang, stopwords):
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = sanitize_text(raw_title)
 
-    if stopwords and any(ph in title.lower() for ph in stopwords): return None
+    logger.info(f"📖 Обработка статьи ID {aid}: {title[:50]}...")
+
+    if stopwords and any(ph in title.lower() for ph in stopwords):
+        logger.info(f"   🚫 Пропуск: Стоп-слово в заголовке.")
+        return None
 
     try:
         html_txt = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT).text
-    except Exception: return None
+    except Exception as e:
+        logger.error(f"   ❌ Ошибка загрузки HTML статьи: {e}")
+        return None
 
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
+    
+    # Проверка на изменения
     if meta_path.exists():
         try:
             m = json.loads(meta_path.read_text(encoding="utf-8"))
-            if m.get("hash") == curr_hash: return m
+            if m.get("hash") == curr_hash:
+                logger.info(f"   ⏭️ Пропуск: Статья не изменилась (хэш совпадает).")
+                return m
         except: pass
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
-    # --- [ПРАВКА] ИЩЕМ ВИДЕО ДО ОЧИСТКИ ---
+    # --- ИЩЕМ ВИДЕО ДО ОЧИСТКИ ---
     video_url = None
     if iframe := soup.find("iframe"):
         src = iframe.get("src", "")
         if "youtube" in src or "youtu.be" in src:
             video_url = src
 
+    # Очистка мусора
     for r in soup.find_all("div", class_="post-widget-thumbnail"): r.decompose()
     for j in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
@@ -280,10 +338,13 @@ def parse_and_save(post, lang, stopwords):
 
     paras = []
     if c_div := soup.find("div", class_="entry-content"):
+        # Удаление связанных постов внутри текста
         for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
     raw_body_text = BAD_RE.sub("", "\n\n".join(paras))
+    
+    # Сбор картинок
     srcs = set()
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
         if h := link_tag.get("href"): srcs.add(h)
@@ -293,24 +354,41 @@ def parse_and_save(post, lang, stopwords):
     
     images = []
     if srcs:
+        logger.info(f"   🖼️ Найдено {len(srcs)} картинок. Скачиваем...")
         with ThreadPoolExecutor(5) as ex:
             futs = {ex.submit(save_image, u, OUTPUT_DIR / f"{aid}_{slug}" / "images"): u for u in list(srcs)[:10]}
             for f in as_completed(futs):
                 if p:=f.result(): images.append(p)
 
+    # Обработка видео, если есть
+    processed_video = None
+    if video_url:
+        processed_video = process_video_logic(video_url)
+
+    # AI и Перевод
     final_title, translated_body = title, raw_body_text
-    if lang: final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
+    if lang:
+        final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
 
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     
     meta = {
-        "id": aid, "slug": slug, "title": final_title,
-        "images": sorted([Path(p).name for p in images]), "posted": False,
-        "hash": curr_hash, "video_url": video_url
+        "id": aid, 
+        "slug": slug, 
+        "title": final_title,
+        "images": sorted([Path(p).name for p in images]), 
+        "posted": False,
+        "hash": curr_hash, 
+        "video_url": video_url,
+        "processed_video": processed_video
     }
+    
     (art_dir / f"content.{lang}.txt").write_text(f"{final_title}\n\n{translated_body}", encoding="utf-8")
-    with open(meta_path, "w", encoding="utf-8") as f: json.dump(meta, f, ensure_ascii=False, indent=2)
+    with open(meta_path, "w", encoding="utf-8") as f: 
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    
+    logger.info(f"   ✅ Статья сохранена.")
     return meta
 
 # --- MAIN ---
@@ -327,27 +405,53 @@ def main():
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
+        
         cid = fetch_cat_id(args.base_url, args.slug)
         posts = fetch_posts(args.base_url, cid, FETCH_DEPTH)
+        
         posted = load_posted_ids(Path(args.posted_state_file))
         stop = load_stopwords(Path(args.stopwords_file))
+        
         catalog = []
         if CATALOG_PATH.exists():
-            with open(CATALOG_PATH, 'r') as f: catalog=json.load(f)
-        processed, count = [], 0
+            with open(CATALOG_PATH, 'r') as f: 
+                try: catalog = json.load(f)
+                except: catalog = []
+
+        processed_count = 0
+        new_items = []
+        
         for post in posts:
-            if count >= args.limit: break
-            if str(post["id"]) in posted: continue
-            if meta := parse_and_save(post, args.lang, stop):
-                processed.append(meta)
-                count += 1
-        if processed:
-            for m in processed:
+            if processed_count >= args.limit:
+                logger.info(f"🛑 Достигнут лимит {args.limit} статей.")
+                break
+                
+            if str(post["id"]) in posted:
+                continue
+                
+            meta = parse_and_save(post, args.lang, stop)
+            if meta:
+                new_items.append(meta)
+                processed_count += 1
+        
+        if new_items:
+            # Обновление каталога
+            for m in new_items:
                 catalog = [i for i in catalog if i.get("id") != m["id"]]
                 catalog.append(m)
-            with open(CATALOG_PATH, "w", encoding="utf-8") as f: json.dump(catalog, f, indent=2)
+            
+            with open(CATALOG_PATH, "w", encoding="utf-8") as f: 
+                json.dump(catalog, f, indent=2, ensure_ascii=False)
+            
+            # ВАЖНО: Тот самый принт для GitHub Actions
             print("NEW_ARTICLES_STATUS:true")
-    except Exception: exit(1)
+            logger.info(f"🎉 Завершено! Добавлено новых статей: {len(new_items)}")
+        else:
+            logger.info("ℹ️ Новых статей не найдено.")
+
+    except Exception as e:
+        logger.exception(f"💥 Критическая ошибка:")
+        exit(1)
 
 if __name__ == "__main__":
     main()
