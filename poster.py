@@ -154,7 +154,7 @@ async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_i
     all_items = []
     files_to_send = {}
     
-    # Сначала фото
+    # 1. Сначала подготавливаем фото
     for idx, img_path in enumerate(images):
         image_bytes = apply_watermark(img_path, scale=watermark_scale)
         if image_bytes:
@@ -162,22 +162,23 @@ async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_i
             files_to_send[key] = (img_path.name, image_bytes, "image/jpeg")
             all_items.append({"type": "photo", "media": f"attach://{key}"})
     
-    # В самый конец - видео
+    # 2. В самый конец общего списка — видео
     if video_path and os.path.exists(video_path):
         key = "video_main"
         with open(video_path, 'rb') as f:
             files_to_send[key] = ("video.mp4", f.read(), "video/mp4")
         all_items.append({"type": "video", "media": f"attach://{key}"})
 
-    if not all_items: return False
+    if not all_items:
+        return False
 
-    # Разбивка на группы по 10
-    chunks = [all_items[i:i + 10] for i in range(0, len(all_media := all_items), 10)]
+    # 3. Разбиваем на группы по 10. ИСПРАВЛЕНО: убран walrus operator из range
+    chunks = [all_items[i:i + 10] for i in range(0, len(all_items), 10)]
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
 
     success = True
     for chunk in chunks:
-        # Отбираем только те файлы, которые нужны для текущего чанка
+        # Отбираем только те файлы из словаря, которые нужны для текущей пачки (chunk)
         current_files = {}
         for item in chunk:
             key = item["media"].replace("attach://", "")
@@ -185,9 +186,13 @@ async def send_complex_media_group(client: httpx.AsyncClient, token: str, chat_i
                 current_files[key] = files_to_send[key]
         
         data = {"chat_id": chat_id, "media": json.dumps(chunk)}
+        
+        # Отправляем пачку
         if not await _post_with_retry(client, "POST", url, data, current_files):
             success = False
-        await asyncio.sleep(1) # Пауза между группами
+            
+        # Небольшая пауза между группами, чтобы избежать флуда
+        await asyncio.sleep(1)
         
     return success
 
