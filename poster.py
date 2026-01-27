@@ -104,17 +104,40 @@ async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, dat
     return False
 
 async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, images: List[Path], watermark_scale: float) -> bool:
+    if not images: return False
+    
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    media, files = [], {}
-    for idx, img_path in enumerate(images[:10]):
-        image_bytes = apply_watermark(img_path, scale=watermark_scale)
-        if image_bytes:
-            key = f"photo{idx}"
-            files[key] = (img_path.name, image_bytes, "image/jpeg")
-            media.append({"type": "photo", "media": f"attach://{key}"})
-    if not media: return False
-    data = {"chat_id": chat_id, "media": json.dumps(media)}
-    return await _post_with_retry(client, "POST", url, data, files)
+    overall_success = True
+
+    # Идем по списку images шагами по 10
+    for i in range(0, len(images), 10):
+        chunk = images[i : i + 10]
+        media, files = [], {}
+        
+        for idx, img_path in enumerate(chunk):
+            image_bytes = apply_watermark(img_path, scale=watermark_scale)
+            if image_bytes:
+                # Генерируем ключ. Для каждой пачки idx будет 0..9
+                key = f"photo{idx}"
+                files[key] = (img_path.name, image_bytes, "image/jpeg")
+                media.append({"type": "photo", "media": f"attach://{key}"})
+        
+        if not media:
+            continue
+
+        data = {"chat_id": chat_id, "media": json.dumps(media)}
+        
+        # Отправляем текущую пачку (до 10 штук)
+        res = await _post_with_retry(client, "POST", url, data, files)
+        
+        if not res:
+            overall_success = False
+            
+        # Если есть еще пачки, ждем секунду, чтобы не спамить
+        if len(images) > 10:
+            await asyncio.sleep(1)
+
+    return overall_success
 
 async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text: str, **kwargs) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
