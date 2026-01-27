@@ -224,10 +224,6 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
 # --- БЛОК 3: УМНЫЙ ПОИСК КАРТИНОК ---
 
 def extract_img_url(img_tag: Any) -> Optional[str]:
-    width_attr = img_tag.get("width")
-    if width_attr and width_attr.isdigit():
-        if int(width_attr) < 300: return None
-
     def is_junk(url_str: str) -> bool:
         u = url_str.lower()
         bad = ["gif", "logo", "banner", "icon", "avatar", "button", "share", "pixel", "tracker"]
@@ -235,28 +231,45 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
         if re.search(r'-\d{2,3}x\d{2,3}\.', u): return True
         return False
 
-    srcset = img_tag.get("srcset") or img_tag.get("data-srcset")
+    # 1. СТРАТЕГИЯ №1: Ищем оригинал в родительской ссылке (Lightbox)
+    # В твоем примере это <a href="...">...</a>
+    parent_a = img_tag.find_parent("a")
+    if parent_a:
+        href = parent_a.get("href")
+        if href and any(href.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+            if not is_junk(href):
+                return href.split('?')[0]
+
+    # 2. СТРАТЕГИЯ №2: Если ссылки нет, копаем атрибуты Breeze (data-brsrcset)
+    srcset = img_tag.get("data-brsrcset") or img_tag.get("srcset") or img_tag.get("data-srcset")
     if srcset:
         try:
-            parts = srcset.split(',')
             links = []
-            for p in parts:
+            for p in srcset.split(','):
                 match = re.search(r'(\S+)\s+(\d+)w', p.strip())
-                if match: 
+                if match:
                     w_val = int(match.group(2))
                     u_val = match.group(1)
-                    if w_val >= 400: links.append((w_val, u_val))
+                    if w_val >= 400:
+                        links.append((w_val, u_val))
             if links:
                 best_link = sorted(links, key=lambda x: x[0], reverse=True)[0][1]
-                if not is_junk(best_link): 
+                if not is_junk(best_link):
                     return best_link.split('?')[0]
         except Exception: pass
-    
-    attrs = ["data-orig-file", "data-large-file", "data-src", "data-lazy-src", "src"]
-    for attr in attrs:
-        if val := img_tag.get(attr):
-            clean_val = val.split()[0].split(',')[0].split('?')[0]
-            if not is_junk(clean_val): return clean_val
+
+    # 3. СТРАТЕГИЯ №3: Проверка ширины и прямых атрибутов
+    width_attr = img_tag.get("width")
+    if width_attr and width_attr.isdigit() and int(width_attr) < 300:
+        return None
+
+    for attr in ["data-breeze", "data-src", "src"]:
+        val = img_tag.get(attr)
+        if val:
+            clean_url = val.split()[0].split(',')[0].split('?')[0]
+            if not is_junk(clean_url):
+                return clean_url
+
     return None
 
 def save_image(url, folder):
