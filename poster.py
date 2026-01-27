@@ -150,17 +150,18 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
     aid = art.get("id")
     title = art.get("title", "").strip()
     text_filename = art.get("text_file")
-    if not all([aid, title, text_filename]):
-        logging.error(f"Invalid meta.json in {article_dir}")
-        return None
+    if not all([aid, title, text_filename]): return None
+    
     text_path = article_dir / text_filename
-    if not text_path.is_file():
-        logging.error(f"Text file {text_path} not found. Skipping.")
-        return None
-    images_dir = article_dir / "images"
+    if not text_path.is_file(): return None
+    
+    # Берем список имен из meta.json, чтобы не нарушить порядок
+    meta_images = art.get("images", [])
     valid_imgs: List[Path] = []
-    if images_dir.is_dir():
-        valid_imgs = sorted([p for p in images_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}])
+    for img_name in meta_images:
+        p = article_dir / "images" / img_name
+        if p.is_file(): valid_imgs.append(p)
+        
     html_title = f"<b>{escape_html(title)}</b>"
     return html_title, text_path, valid_imgs, title
 
