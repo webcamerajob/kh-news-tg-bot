@@ -226,7 +226,7 @@ def load_stopwords(file_path: Optional[Path]) -> List[str]:
 def extract_img_url(img_tag: Any) -> Optional[str]:
     width_attr = img_tag.get("width")
     if width_attr and width_attr.isdigit():
-        if int(width_attr) < 400: return None
+        if int(width_attr) < 300: return None
 
     def is_junk(url_str: str) -> bool:
         u = url_str.lower()
