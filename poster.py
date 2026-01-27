@@ -210,12 +210,12 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
         logging.error(f"Директория {parsed_root} не существует.")
         return
 
-    # Загружаем как список, чтобы сохранить порядок
+    # 1. Загружаем историю (posted.json)
     posted_ids_list = load_posted_ids(state_file)
-    # Создаем set для быстрых проверок на существование
     posted_ids_set = set(posted_ids_list)
     logging.info(f"Загружено {len(posted_ids_set)} ранее опубликованных ID.")
 
+    # 2. Собираем список новых статей
     articles_to_post = []
     for d in sorted(parsed_root.iterdir()):
         meta_file = d / "meta.json"
@@ -223,31 +223,36 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
             try:
                 art_meta = json.loads(meta_file.read_text(encoding="utf-8"))
                 article_id = str(art_meta.get("id"))
-                # Проверяем по set'у
+                
                 if article_id and article_id != 'None' and article_id not in posted_ids_set:
                     if validated_data := validate_article(art_meta, d):
                         _, text_path, image_paths, original_title = validated_data
                         articles_to_post.append({
-                            "id": article_id, "html_title": f"<b>{escape_html(original_title)}</b>",
-                            "text_path": text_path, "image_paths": image_paths,
+                            "id": article_id, 
+                            "html_title": f"<b>{escape_html(original_title)}</b>",
+                            "text_path": text_path, 
+                            "image_paths": image_paths, # Тут порядок уже правильный из мета
                             "original_title": original_title
                         })
             except Exception as e:
                 logging.warning(f"Не удалось обработать {d.name}: {e}")
 
+    # Сортируем по ID (от старых к новым)
     articles_to_post.sort(key=lambda x: int(x["id"]))
+
     if not articles_to_post:
         logging.info("🔍 Нет новых статей для публикации.")
-        # --- ВАЖНО: сохраняем файл даже если нет новых статей, чтобы применить обрезку, если она была в load_posted_ids ---
-        save_posted_ids(posted_ids_list, state_file)
+        # Применяем обрезку к старому списку, если он разросся
+        if len(posted_ids_list) > MAX_POSTED_RECORDS:
+            posted_ids_list = posted_ids_list[-MAX_POSTED_RECORDS:]
+            save_posted_ids(posted_ids_list, state_file)
         return
 
     logging.info(f"Найдено {len(articles_to_post)} новых статей для публикации.")
     
+    # 3. ЦИКЛ ПУБЛИКАЦИИ
     async with httpx.AsyncClient() as client:
         sent_count = 0
-        
-        # Работаем с копией списка, чтобы добавлять в него новые ID
         final_posted_ids = list(posted_ids_list)
         
         for article in articles_to_post:
@@ -257,12 +262,16 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
             
             logging.info(f"Публикуем статью ID={article['id']}...")
             try:
-                # ... (здесь ваш код публикации без изменений) ...
+                # --- А) ОТПРАВКА МЕДИА (ВСЕ фото пачками по 10) ---
                 if article["image_paths"]:
+                    # Вызываем нашу улучшенную функцию с батчингом
                     await send_media_group(client, token, chat_id, article["image_paths"], watermark_scale)
 
+                # --- Б) ОБРАБОТКА ТЕКСТА ---
                 raw_text = article["text_path"].read_text(encoding="utf-8")
                 cleaned_text = raw_text.lstrip()
+                
+                # Убираем дубль заголовка из текста
                 if cleaned_text.startswith(article["original_title"]):
                     cleaned_text = cleaned_text[len(article["original_title"]):].lstrip()
 
@@ -270,31 +279,43 @@ async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark
                 full_html = re.sub(r'\n{3,}', '\n\n', full_html).strip()
                 chunks = chunk_text(full_html)
 
+                # --- В) ОТПРАВКА ТЕКСТА ЧАСТЯМИ ---
                 for i, chunk in enumerate(chunks):
                     is_last_chunk = (i == len(chunks) - 1)
-                    reply_markup = { "inline_keyboard": [[ {"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, {"text": "Отзывы", "url": "https://t.me/feedback1dollar"} ]]} if is_last_chunk else None
+                    reply_markup = { 
+                        "inline_keyboard": [[ 
+                            {"text": "Обмен валют", "url": "https://t.me/mister1dollar"}, 
+                            {"text": "Отзывы", "url": "https://t.me/feedback1dollar"} 
+                        ]]
+                    } if is_last_chunk else None
+                    
                     if not await send_message(client, token, chat_id, chunk, reply_markup=reply_markup):
-                        raise Exception("Failed to send a message chunk.")
-                # ... (конец кода публикации) ...
+                        raise Exception(f"Failed to send chunk {i} for ID {article['id']}")
 
+                # --- Г) ФИКСАЦИЯ УСПЕХА ---
                 logging.info(f"✅ Опубликовано ID={article['id']}")
-                # Добавляем новый ID в конец списка
-                final_posted_ids.append(article['id'])
+                
+                if str(article['id']) not in final_posted_ids:
+                    final_posted_ids.append(str(article['id']))
+                
                 sent_count += 1
+
+                # --- Д) ИНКРЕМЕНТАЛЬНОЕ СОХРАНЕНИЕ ---
+                # Обрезаем и сохраняем после каждой статьи для надежности
+                temp_list = final_posted_ids
+                if len(temp_list) > MAX_POSTED_RECORDS:
+                    temp_list = temp_list[-MAX_POSTED_RECORDS:]
+                
+                save_posted_ids(temp_list, state_file)
+                final_posted_ids = temp_list # Обновляем основной список
 
             except Exception as e:
                 logging.error(f"❌ Ошибка при публикации ID={article['id']}: {e}", exc_info=True)
             
-            await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
+            # Задержка между разными статьями
+            delay = float(os.getenv("POST_DELAY", DEFAULT_DELAY))
+            await asyncio.sleep(delay)
 
-    # --- НОВАЯ ЛОГИКА СОХРАНЕНИЯ ---
-    if sent_count > 0:
-        # Обрезаем итоговый список С НАЧАЛА, если он превышает лимит
-        if len(final_posted_ids) > MAX_POSTED_RECORDS:
-            final_posted_ids = final_posted_ids[-MAX_POSTED_RECORDS:]
-        
-        save_posted_ids(final_posted_ids, state_file)
-    
     logging.info(f"📢 Завершено: отправлено {sent_count} статей.")
 
 if __name__ == "__main__":
