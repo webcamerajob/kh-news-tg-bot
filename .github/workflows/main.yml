@@ -46,14 +46,14 @@ jobs:
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
       
-#      - name: "Setup WireGuard"
-#        run: |
-#          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
-#          echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
-#          sudo wg-quick up wg0
-#          
-#          sudo rm -f /etc/resolv.conf
-#          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
+      - name: "Setup WireGuard"
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
+          echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo wg-quick up wg0
+          
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
 
       - name: "Run Parser"
         id: parse_step
@@ -69,9 +69,9 @@ jobs:
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
-#      - name: 🛑 Teardown WireGuard
-#        if: always()
-#        run: sudo wg-quick down wg0 || true
+      - name: 🛑 Teardown WireGuard
+        if: always()
+        run: sudo wg-quick down wg0 || true
 
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
