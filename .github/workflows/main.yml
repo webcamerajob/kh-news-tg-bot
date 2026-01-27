@@ -2,7 +2,8 @@ name: AI Parse & Post Articles
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # ИСПРАВЛЕНО: Не отменяем текущий процесс, чтобы он успел сохранить posted.json
+  cancel-in-progress: false 
   
 permissions:
   contents: write
@@ -21,7 +22,6 @@ env:
   TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL:   ${{ secrets.TELEGRAM_CHANNEL }}
   WG_CONFIG:          ${{ secrets.WG_CONFIG }}
-  # Глобальная переменная для ИИ (Обязательно!)
   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
 jobs:
@@ -32,6 +32,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Важно для правильного ребейза
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -40,7 +43,6 @@ jobs:
 
       - name: Install requirements
         run: |
-          # Устанавливаем зависимости. requests и curl_cffi обязательны.
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
       
@@ -50,21 +52,12 @@ jobs:
           echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo wg-quick up wg0
           
-          # ФИКС DNS для стабильности
           sudo rm -f /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
-          
-          # Проверка
-          echo "Текущий DNS:"
-          cat /etc/resolv.conf
 
-      - name: "Run Parser (Unified AI Main)"
+      - name: "Run Parser"
         id: parse_step
-        env:
-          # Явно передаем ключ, чтобы main.py включил режим ИИ
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          # ВАЖНО: Мы объединили файлы, поэтому запускаем main.py
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
@@ -88,19 +81,22 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      - name: Commit updated posted.json
+      - name: Commit and Push (Conflict Resistant)
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [ -f "articles/posted.json" ]; then
-            git add articles/posted.json
-          fi
+          # Добавляем файл, только если он существует
+          [ -f "articles/posted.json" ] && git add articles/posted.json
           
+          # Если есть что коммитить
           if ! git diff --cached --quiet; then
             git commit -m "chore: update posted.json"
-            git pull --rebase origin main
-            git push
+            
+            # ИСПРАВЛЕНО: Ребейз с приоритетом наших изменений при конфликте строк JSON
+            git pull --rebase -X ours origin main
+            git push origin main
           else
-            echo "✅ posted.json unchanged"
+            echo "✅ No changes to posted.json"
           fi
