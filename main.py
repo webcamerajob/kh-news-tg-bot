@@ -290,17 +290,32 @@ def fetch_cat_id(url, slug):
     if not data: raise RuntimeError("Cat not found")
     return data[0]["id"]
 
-def fetch_posts(url, cid, limit):
-    logging.info(f"Запрашиваем {limit} последних статей из API...") 
-    time.sleep(2)
+def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
+    """ЛЕГКИЙ запрос: только ID и slug. WordPress отдает это мгновенно."""
+    logging.info(f"📡 Быстрая проверка списка из {limit} последних ID...")
     try:
-        r = SCRAPER.get(f"{url}/wp-json/wp/v2/posts?categories={cid}&per_page={limit}&_embed", timeout=SCRAPER_TIMEOUT)
-        if r.status_code==429: time.sleep(20)
+        params = {
+            "categories": cid, 
+            "per_page": limit, 
+            "_fields": "id,slug" # Запрашиваем только два поля
+        }
+        r = SCRAPER.get(f"{url}/wp-json/wp/v2/posts", params=params, timeout=30)
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        logging.error(f"Ошибка получения постов: {e}")
+        logging.error(f"Ошибка легкого запроса: {e}")
         return []
+
+def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
+    """ТЯЖЕЛЫЙ запрос: полные данные конкретной статьи со всеми вложениями."""
+    try:
+        # Здесь используем _embed, так как тянем только ОДНУ статью
+        r = SCRAPER.get(f"{url}/wp-json/wp/v2/posts/{aid}?_embed", timeout=60)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.error(f"Ошибка загрузки контента для ID={aid}: {e}")
+        return None
 
 def parse_and_save(post, lang, stopwords):
     time.sleep(2)
@@ -414,44 +429,68 @@ def main():
 
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        # Очищаем старые папки статей, которых нет в последних 100 опубликованных
         cleanup_old_articles(Path(args.posted_state_file), OUTPUT_DIR)
         
+        # Получаем ID категории
         cid = fetch_cat_id(args.base_url, args.slug)
-        posts = fetch_posts(args.base_url, cid, FETCH_DEPTH)
         
+        # 1. Загружаем данные: легкий список ID, историю и стоп-слова
+        posts_light = fetch_posts_light(args.base_url, cid, FETCH_DEPTH)
         posted = load_posted_ids(Path(args.posted_state_file))
         stop = load_stopwords(Path(args.stopwords_file))
+        
+        # 2. Загружаем текущий каталог из файла
         catalog = []
         if CATALOG_PATH.exists():
-            with open(CATALOG_PATH, 'r') as f: catalog=json.load(f)
+            try:
+                with open(CATALOG_PATH, 'r', encoding='utf-8') as f:
+                    catalog = json.load(f)
+            except Exception:
+                logging.warning("Не удалось прочитать существующий каталог. Создаем новый.")
 
-        processed = []
+        new_metas = []
         count = 0
         
-        logging.info(f"В API {len(posts)} постов. Ищем новые...")
-        
-        for post in posts:
-            if count >= args.limit: 
-                logging.info(f"Лимит {args.limit} достигнут."); break
+        # Основной цикл обработки
+        for p_short in posts_light:
+            if count >= args.limit:
+                break
             
-            if str(post["id"]) in posted: continue
-                
-            if meta := parse_and_save(post, args.lang, stop):
-                processed.append(meta)
-                count += 1
+            aid = str(p_short["id"])
+            if aid in posted:
+                continue # Эту статью уже постили, пропускаем
+            
+            logging.info(f"🆕 Найдена новая статья ID={aid}. Загружаем детали...")
+            full_post = fetch_single_post_full(args.base_url, aid)
+            
+            if full_post:
+                # parse_and_save внутри себя делает AI-чистку и перевод
+                if meta := parse_and_save(full_post, args.lang, stop):
+                    new_metas.append(meta)
+                    count += 1
 
-        if processed:
-            for m in processed:
-                catalog = [i for i in catalog if i.get("id") != m["id"]]
-                catalog.append(m)
+        # 3. Финальное обновление каталога и отчет для GitHub Actions
+        if new_metas:
+            # Предотвращаем дубли в каталоге: удаляем старые записи с теми же ID
+            new_ids = {str(m["id"]) for m in new_metas}
+            catalog = [item for item in catalog if str(item.get("id")) not in new_ids]
+            
+            # Добавляем свежеприготовленные метаданные
+            catalog.extend(new_metas)
+            
             with open(CATALOG_PATH, "w", encoding="utf-8") as f:
                 json.dump(catalog, f, ensure_ascii=False, indent=2)
+            
+            # Это сигнал для GitHub Actions, что нужно запускать постер
             print("NEW_ARTICLES_STATUS:true")
+            logging.info(f"✅ Обработка завершена. Добавлено статей: {len(new_metas)}")
         else:
             print("NEW_ARTICLES_STATUS:false")
+            logging.info("🔍 Новых статей не найдено.")
 
     except Exception:
-        logging.exception("Fatal error:")
+        logging.exception("🚨 Критическая ошибка в main:")
         exit(1)
 
 if __name__ == "__main__":
