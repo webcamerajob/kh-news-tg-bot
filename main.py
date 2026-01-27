@@ -361,14 +361,21 @@ def parse_and_save(post, lang, stopwords):
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
-    # Очистка мусора
-    for r in soup.find_all("div", class_="post-widget-thumbnail"): r.decompose()
-    for j in soup.find_all(["span", "div", "script", "style", "iframe"]):
+    # --- НОВАЯ ПРАВКА: ГЛОБАЛЬНАЯ ОЧИСТКА МУСОРА ---
+    # УдаляемRelated Posts, рекламные блоки и виджеты ДО начала сбора картинок
+    # Это убьет блоки rp4wp, которые лезли в Lightbox и контент
+    for garbage in soup.find_all(["div", "ul", "ol", "section", "aside"], 
+                                class_=re.compile(r"rp4wp|related|ad-|post-widget-thumbnail|sharedaddy")):
+        garbage.decompose()
+
+    # Очистка технических тегов и пустых элементов
+    for j in soup.find_all(["span", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
-        if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: j.decompose()
+        if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: 
+            j.decompose()
 
-    # --- ПРАВКА: Сбор URL с сохранением ПОРЯДКА ---
+    # --- Сбор URL с сохранением ПОРЯДКА ---
     ordered_srcs = []
     seen_srcs = set()
 
@@ -377,30 +384,30 @@ def parse_and_save(post, lang, stopwords):
             ordered_srcs.append(url)
             seen_srcs.add(url)
 
-    # 1. ПРИОРИТЕТ: Featured Media (Главное фото WP)
+    # 1. ПРИОРИТЕТ: Featured Media (Главное фото WP из API)
     if "_embedded" in post and (m := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(m, list) and (u := m[0].get("source_url")):
             if "logo" not in u.lower():
                 add_src(u)
 
-    # 2. ОСТАЛЬНЫЕ: Lightbox ссылки
+    # 2. ОСТАЛЬНЫЕ: Lightbox ссылки (теперь тут не будет картинок из Related Posts)
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
         if h := link_tag.get("href"): 
             if "gif" not in h.lower():
                 add_src(h)
 
-    # 3. ОСТАЛЬНЫЕ: Картинки в контенте
+    # 3. ОСТАЛЬНЫЕ: Картинки непосредственно в тексте
     c_div = soup.find("div", class_="entry-content")
     if c_div:
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
 
-    # --- ПРАВКА: Загрузка с сохранением индексов ---
+    # --- Загрузка с сохранением индексов (чтобы не перемешались) ---
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         with ThreadPoolExecutor(5) as ex:
-            # Передаем индекс, чтобы знать, куда положить результат
+            # Ограничиваемся первыми 10 уникальными фото
             future_to_idx = {
                 ex.submit(save_image, url, OUTPUT_DIR / f"{aid}_{slug}" / "images"): i 
                 for i, url in enumerate(ordered_srcs[:10])
@@ -410,17 +417,19 @@ def parse_and_save(post, lang, stopwords):
                 if res := f.result():
                     images_results[idx] = Path(res).name
 
-    # Фильтруем None (если что-то не скачалось)
+    # Убираем пустые результаты (если загрузка какого-то фото сорвалась)
     final_images = [img for img in images_results if img is not None]
 
     if not final_images:
         logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
         return None
 
-    # Текст статьи
+    # Извлечение текста статьи
     paras = []
     if c_div:
-        for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): r.decompose()
+        # Удаляем внутренний мусор в контенте, если он остался
+        for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): 
+            r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
     raw_body_text = BAD_RE.sub("", "\n\n".join(paras))
@@ -437,7 +446,7 @@ def parse_and_save(post, lang, stopwords):
     
     (art_dir / "content.txt").write_text(raw_body_text, encoding="utf-8")
     
-    # --- ПРАВКА: Убран sorted(), берем список как есть ---
+    # Формируем метаданные (images[0] — теперь гарантированно главное фото)
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": final_title, "text_file": "content.txt",
