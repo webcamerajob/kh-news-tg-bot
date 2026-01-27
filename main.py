@@ -344,7 +344,6 @@ def parse_and_save(post, lang, stopwords):
                 return None
 
     try:
-        # Используем SCRAPER (Safari) для загрузки HTML
         html_txt = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT).text
     except Exception: return None
 
@@ -362,50 +361,73 @@ def parse_and_save(post, lang, stopwords):
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
+    # Очистка мусора
     for r in soup.find_all("div", class_="post-widget-thumbnail"): r.decompose()
     for j in soup.find_all(["span", "div", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
         if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: j.decompose()
 
+    # --- ПРАВКА: Сбор URL с сохранением ПОРЯДКА ---
+    ordered_srcs = []
+    seen_srcs = set()
+
+    def add_src(url):
+        if url and url not in seen_srcs:
+            ordered_srcs.append(url)
+            seen_srcs.add(url)
+
+    # 1. ПРИОРИТЕТ: Featured Media (Главное фото WP)
+    if "_embedded" in post and (m := post["_embedded"].get("wp:featuredmedia")):
+        if isinstance(m, list) and (u := m[0].get("source_url")):
+            if "logo" not in u.lower():
+                add_src(u)
+
+    # 2. ОСТАЛЬНЫЕ: Lightbox ссылки
+    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
+        if h := link_tag.get("href"): 
+            if "gif" not in h.lower():
+                add_src(h)
+
+    # 3. ОСТАЛЬНЫЕ: Картинки в контенте
+    c_div = soup.find("div", class_="entry-content")
+    if c_div:
+        for img in c_div.find_all("img"):
+            if u := extract_img_url(img):
+                add_src(u)
+
+    # --- ПРАВКА: Загрузка с сохранением индексов ---
+    images_results = [None] * len(ordered_srcs)
+    if ordered_srcs:
+        with ThreadPoolExecutor(5) as ex:
+            # Передаем индекс, чтобы знать, куда положить результат
+            future_to_idx = {
+                ex.submit(save_image, url, OUTPUT_DIR / f"{aid}_{slug}" / "images"): i 
+                for i, url in enumerate(ordered_srcs[:10])
+            }
+            for f in as_completed(future_to_idx):
+                idx = future_to_idx[f]
+                if res := f.result():
+                    images_results[idx] = Path(res).name
+
+    # Фильтруем None (если что-то не скачалось)
+    final_images = [img for img in images_results if img is not None]
+
+    if not final_images:
+        logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
+        return None
+
+    # Текст статьи
     paras = []
-    if c_div := soup.find("div", class_="entry-content"):
+    if c_div:
         for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
     raw_body_text = BAD_RE.sub("", "\n\n".join(paras))
-    
-    srcs = set()
-    # 1. Lightbox
-    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
-        if h := link_tag.get("href"): 
-            if "gif" not in h.lower(): srcs.add(h)
-    # 2. Content img
-    if c_div:
-        for img in c_div.find_all("img"):
-            if u := extract_img_url(img): srcs.add(u)
-    
-    images = []
-    if srcs:
-        with ThreadPoolExecutor(5) as ex:
-            futs = {ex.submit(save_image, u, OUTPUT_DIR / f"{aid}_{slug}" / "images"): u for u in list(srcs)[:10]}
-            for f in as_completed(futs):
-                if p:=f.result(): images.append(p)
-    
-    # 3. Fallback
-    if not images and "_embedded" in post and (m:=post["_embedded"].get("wp:featuredmedia")):
-        if isinstance(m, list) and (u:=m[0].get("source_url")):
-             if "300x200" not in u and "150x150" not in u and "logo" not in u.lower():
-                if p:=save_image(u, OUTPUT_DIR / f"{aid}_{slug}" / "images"): images.append(p)
-
-    if not images:
-        logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
-        return None
 
     # ОБРАБОТКА + ПЕРЕВОД
     final_title = title
     translated_body = ""
-
     if lang:
         final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
         final_title = sanitize_text(final_title)
@@ -415,10 +437,11 @@ def parse_and_save(post, lang, stopwords):
     
     (art_dir / "content.txt").write_text(raw_body_text, encoding="utf-8")
     
+    # --- ПРАВКА: Убран sorted(), берем список как есть ---
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": final_title, "text_file": "content.txt",
-        "images": sorted([Path(p).name for p in images]), "posted": False,
+        "images": final_images, "posted": False,
         "hash": curr_hash, "translated_to": ""
     }
 
@@ -426,7 +449,8 @@ def parse_and_save(post, lang, stopwords):
         (art_dir / f"content.{lang}.txt").write_text(f"{final_title}\n\n{translated_body}", encoding="utf-8")
         meta.update({"translated_to": lang, "text_file": f"content.{lang}.txt"})
 
-    with open(meta_path, "w", encoding="utf-8") as f: json.dump(meta, f, ensure_ascii=False, indent=2)
+    with open(meta_path, "w", encoding="utf-8") as f: 
+        json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
 
 # --- MAIN ---
