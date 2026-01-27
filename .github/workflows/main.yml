@@ -54,14 +54,49 @@ jobs:
           # Если ты вынес зависимости для видео в отдельный файл
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: "Setup WireGuard"
+      - name: "Setup WireGuard (Smart Split Tunneling)"
         run: |
-          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf
-          echo "$WG_CONFIG" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          # 1. Устанавливаем утилиты
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf dnsutils
+
+          # 2. Динамически получаем IP-адреса Khmertimes
+          # Сайт за Cloudflare, поэтому IP могут меняться. Мы берем актуальные.
+          echo "🔍 Resolving Khmertimes IPs..."
+          KH_IPS=$(dig +short www.khmertimeskh.com | grep -E '^[0-9.]+$')
+          
+          if [ -z "$KH_IPS" ]; then
+            echo "❌ Failed to resolve Khmertimes IPs!"
+            exit 1
+          fi
+
+          # Форматируем список для WireGuard: 1.2.3.4/32, 5.6.7.8/32
+          ALLOWED_IPS=$(echo "$KH_IPS" | awk '{print $1"/32"}' | paste -sd "," -)
+          echo "✅ Routing ONLY these IPs through VPN: $ALLOWED_IPS"
+
+          # 3. Готовим конфиг
+          echo "$WG_CONFIG" > wg0.conf
+          
+          # 4. МАГИЯ: Заменяем "Весь трафик" (0.0.0.0/0) на "Только Khmertimes"
+          # Это пустит Groq и Telegram напрямую через быстрый интернет GitHub
+          sed -i "s|AllowedIPs = 0.0.0.0/0|AllowedIPs = $ALLOWED_IPS|g" wg0.conf
+          
+          # Если в конфиге вообще не было AllowedIPs, добавим принудительно (на всякий случай)
+          if ! grep -q "AllowedIPs" wg0.conf; then
+             # Ищем строку [Peer] и добавляем после нее
+             sed -i "/\[Peer\]/a AllowedIPs = $ALLOWED_IPS" wg0.conf
+          fi
+
+          # 5. Запускаем
+          sudo cp wg0.conf /etc/wireguard/wg0.conf
           sudo wg-quick up wg0
           
+          # 6. Фикс DNS (на всякий случай оставляем)
           sudo rm -f /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
+          
+          # Проверка маршрутов
+          echo "📊 Current IP routing table:"
+          ip route
 
       - name: "Run Parser"
         id: parse_step
