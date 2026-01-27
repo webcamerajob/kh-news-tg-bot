@@ -28,12 +28,13 @@ BASE_DELAY = 1.0
 MAX_POSTED_RECORDS = 300
 FETCH_DEPTH = 100
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 AI_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
+    "llama-3.3-70b-versatile",  # Топовая модель, отлично понимает контекст
+    "llama-3.1-70b-versatile",  # Предыдущая версия, тоже хороша
+    "mixtral-8x7b-32768",       # Хороший бэкап
+    "llama-3.1-8b-instant",     # Очень быстрая, если лимиты на 70b кончились
 ]
 
 # --- НАСТРОЙКИ СЕТИ (PARSER) ---
@@ -105,11 +106,11 @@ def strip_ai_chatter(text: str) -> str:
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     clean_body = body
 
-    # ИИ ЧИСТКА
-    if OPENROUTER_API_KEY and len(body) > 500:
-        logging.info("⏳ Пауза 3 сек перед ИИ...")
-        time.sleep(3)
-        logging.info(f"🤖 [AI] Чистка текста...")
+    # ИИ ЧИСТКА (TEПЕРЬ ЧЕРЕЗ GROQ)
+    if GROQ_API_KEY and len(body) > 500:
+        logging.info("⏳ Пауза 1 сек перед Groq AI...")
+        time.sleep(1) # Groq очень быстрый, долгая пауза не нужна
+        logging.info(f"🚀 [Groq] Чистка текста...")
         
         prompt = (
             f"You are a ruthless news editor.\n"
@@ -120,41 +121,48 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
             "2. KEEP UNIQUE DETAILS: Only keep quotes if they add numbers, dates, or emotion.\n"
             "3. REMOVE FLUFF: Delete ads and diplomatic praise.\n"
             "4. NO META-TALK: Start with the story immediately.\n\n"
-            f"RAW TEXT:\n{body[:15000]}"
+            f"RAW TEXT:\n{body[:15000]}" # Groq поддерживает большой контекст
         )
 
         ai_result = ""
+        # Логика перебора моделей на случай лимитов (Rate Limit)
         for model in AI_MODELS:
             try:
                 response = requests.post(
-                    url="https://openrouter.ai/api/v1/chat/completions",
+                    url="https://api.groq.com/openai/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://github.com/parser-bot",
-                        "X-Title": "NewsBot",
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json"
                     },
                     data=json.dumps({
                         "model": model,
                         "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.3
+                        "temperature": 0.3,
+                        "max_tokens": 4096 # Groq требует явного указания иногда
                     }),
-                    timeout=60
+                    timeout=30
                 )
+                
                 if response.status_code == 200:
                     result = response.json()
                     if 'choices' in result and result['choices']:
                         ai_result = result['choices'][0]['message']['content'].strip()
-                        logging.info(f"✅ [AI] Успех ({model}).")
+                        logging.info(f"✅ [Groq] Успех ({model}).")
                         break
                 elif response.status_code == 429:
-                    time.sleep(2)
-            except Exception: continue
+                    logging.warning(f"🐢 Groq Rate Limit ({model}). Пробуем следующую...")
+                    time.sleep(2) # Небольшая пауза перед следующей моделью
+                else:
+                    logging.error(f"❌ Groq Error {response.status_code}: {response.text}")
+
+            except Exception as e: 
+                logging.error(f"Ошибка соединения с Groq: {e}")
+                continue
         
         if ai_result:
             clean_body = strip_ai_chatter(ai_result)
 
-    # КОНТЕКСТНЫЙ ПЕРЕВОД
+    # КОНТЕКСТНЫЙ ПЕРЕВОД (Google) - остается без изменений
     DELIMITER = " ||| "
     combined_text = f"{title}{DELIMITER}{clean_body}"
     
