@@ -49,6 +49,9 @@ jobs:
 
       - name: Install requirements
         run: |
+          pip install --upgrade pip
+          # Форсируем установку curl_cffi последней версии
+          pip install --upgrade curl_cffi
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           # Если ты вынес зависимости для видео в отдельный файл
