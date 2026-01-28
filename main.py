@@ -48,20 +48,18 @@ AI_MODELS = [
     "llama-3.1-8b-instant",     # Очень быстрая, если лимиты на 70b кончились
 ]
 
-# План А: Имитируем iPhone через curl_cffi
-# Используем профиль safari_ios_16_0 — он один из самых стабильных
+# --- НАСТРОЙКИ СЕТИ ---
+from curl_cffi import requests as cffi_requests, CurlHttpVersion
+
 SCRAPER = cffi_requests.Session(
-    impersonate="safari15_5", 
-    http_version=CurlHttpVersion.V1_1  # Оставляем, чтобы WireGuard не "захлебнулся"
+    impersonate="chrome110",
+    http_version=CurlHttpVersion.V1_1  # Это лечило TLS Error (35)
 )
 
-# Заголовки для Плана Б (requests) — чистый iPhone
-IPHONE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
+# Заголовки для Plan B (обычный requests)
+FALLBACK_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
 }
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
@@ -327,32 +325,28 @@ def save_image(url, folder):
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
     try:
-        logging.info(f"📱 Запрос (iPhone Profile) -> {slug}")
+        # План А: curl_cffi
         r = SCRAPER.get(endpoint, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
     except Exception as e:
-        logging.warning(f"⚠️ Safari Profile failed. Trying Plan B (iPhone headers)...")
-        time.sleep(2)
-        # requests с заголовками iPhone
-        r = requests.get(endpoint, headers=IPHONE_HEADERS, timeout=30)
+        logging.warning(f"⚠️ Plan A failed. Trying Plan B (requests)...")
+        # План Б: Стандартный requests (через VPN он часто проходит)
+        r = requests.get(endpoint, headers=FALLBACK_HEADERS, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
     endpoint = f"{url}/wp-json/wp/v2/posts"
-    
     try:
         r = SCRAPER.get(endpoint, params=params, timeout=30)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
-        if "TLS" in str(e) or "35" in str(e):
-            logging.warning("⚠️ Переход на requests для списка постов...")
-            r = requests.get(endpoint, params=params, headers=SCRAPER.headers, timeout=30)
-            return r.json()
-        raise e
+    except Exception:
+        logging.warning("⚠️ Переход на Plan B для получения списка статей...")
+        r = requests.get(endpoint, params=params, headers=FALLBACK_HEADERS, timeout=30)
+        return r.json()
 
 def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
     """ТЯЖЕЛЫЙ запрос: полные данные конкретной статьи со всеми вложениями."""
