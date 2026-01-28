@@ -29,8 +29,6 @@ BASE_DELAY = 1.0
 MAX_POSTED_RECORDS = 300
 FETCH_DEPTH = 100
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 # Читаем одну строку с ключами через запятую
 raw_keys = os.getenv("GROQ_KEYS", "")
 # Разбиваем, убираем пробелы и пустые элементы
