@@ -327,26 +327,41 @@ def save_image(url, folder):
 # --- БЛОК 4: API И ПАРСИНГ ---
 
 def fetch_cat_id(url, slug):
-    r = SCRAPER.get(f"{url}/wp-json/wp/v2/categories?slug={slug}", timeout=SCRAPER_TIMEOUT)
-    r.raise_for_status(); data=r.json()
+    endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
+    
+    try:
+        # ПЛАН А: Пытаемся через навороченный SCRAPER (curl_cffi)
+        r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        # Если видим ошибку TLS или SSL — врубаем ПЛАН Б
+        if "TLS" in str(e) or "SSL" in str(e) or "35" in str(e):
+            logging.warning(f"⚠️ SSL/TLS Crash на curl_cffi. Включаю запасной requests...")
+            # Используем обычный requests, он через VPN проходит легче
+            r = requests.get(endpoint, headers=SCRAPER.headers, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+        else:
+            raise e
+
     if not data: raise RuntimeError("Cat not found")
     return data[0]["id"]
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
-    """ЛЕГКИЙ запрос: только ID и slug. WordPress отдает это мгновенно."""
-    logging.info(f"📡 Быстрая проверка списка из {limit} последних ID...")
+    params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
+    endpoint = f"{url}/wp-json/wp/v2/posts"
+    
     try:
-        params = {
-            "categories": cid, 
-            "per_page": limit, 
-            "_fields": "id,slug" # Запрашиваем только два поля
-        }
-        r = SCRAPER.get(f"{url}/wp-json/wp/v2/posts", params=params, timeout=30)
+        r = SCRAPER.get(endpoint, params=params, timeout=30)
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        logging.error(f"Ошибка легкого запроса: {e}")
-        return []
+        if "TLS" in str(e) or "35" in str(e):
+            logging.warning("⚠️ Переход на requests для списка постов...")
+            r = requests.get(endpoint, params=params, headers=SCRAPER.headers, timeout=30)
+            return r.json()
+        raise e
 
 def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
     """ТЯЖЕЛЫЙ запрос: полные данные конкретной статьи со всеми вложениями."""
