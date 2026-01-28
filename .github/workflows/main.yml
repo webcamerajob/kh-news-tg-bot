@@ -108,8 +108,8 @@ jobs:
       - name: "Run Parser"
         id: parse_step
         env:
-          # Явно передаем ключ для Groq
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Просто передаем одну строку
+          GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
         run: |
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
