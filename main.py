@@ -51,7 +51,7 @@ AI_MODELS = [
 # План А: Имитируем iPhone через curl_cffi
 # Используем профиль safari_ios_16_0 — он один из самых стабильных
 SCRAPER = cffi_requests.Session(
-    impersonate="safari_ios_16_0", 
+    impersonate="safari15_5", 
     http_version=CurlHttpVersion.V1_1  # Оставляем, чтобы WireGuard не "захлебнулся"
 )
 
