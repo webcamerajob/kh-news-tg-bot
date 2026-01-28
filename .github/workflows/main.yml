@@ -57,13 +57,12 @@ jobs:
           # Если ты вынес зависимости для видео в отдельный файл
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: "Setup WireGuard (Smart Split Tunneling)"
+      - name: "Setup WireGuard (Split Tunneling + MTU Fix)"
         run: |
-          # 1. Устанавливаем утилиты
+          # 1. Устанавливаем необходимые утилиты
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf dnsutils
 
           # 2. Динамически получаем IP-адреса Khmertimes
-          # Сайт за Cloudflare, поэтому IP могут меняться. Мы берем актуальные.
           echo "🔍 Resolving Khmertimes IPs..."
           KH_IPS=$(dig +short www.khmertimeskh.com | grep -E '^[0-9.]+$')
           
@@ -72,34 +71,38 @@ jobs:
             exit 1
           fi
 
-          # Форматируем список для WireGuard: 1.2.3.4/32, 5.6.7.8/32
+          # Форматируем список для WireGuard
           ALLOWED_IPS=$(echo "$KH_IPS" | awk '{print $1"/32"}' | paste -sd "," -)
           echo "✅ Routing ONLY these IPs through VPN: $ALLOWED_IPS"
 
-          # 3. Готовим конфиг
+          # 3. Готовим конфиг из секрета
           echo "$WG_CONFIG" > wg0.conf
           
-          # 4. МАГИЯ: Заменяем "Весь трафик" (0.0.0.0/0) на "Только Khmertimes"
-          # Это пустит Groq и Telegram напрямую через быстрый интернет GitHub
+          # 4. ФИКС №1: Устанавливаем MTU = 1280 в секцию [Interface]
+          # Это предотвращает фрагментацию пакетов и ошибку TLS (35)
+          if grep -q "MTU" wg0.conf; then
+            sed -i "s|MTU =.*|MTU = 1280|g" wg0.conf
+          else
+            sed -i "/\[Interface\]/a MTU = 1280" wg0.conf
+          fi
+
+          # 5. ФИКС №2: Раздельный туннель (AllowedIPs)
+          # Чтобы Groq и Google Translate шли напрямую без блокировок
           sed -i "s|AllowedIPs = 0.0.0.0/0|AllowedIPs = $ALLOWED_IPS|g" wg0.conf
           
-          # Если в конфиге вообще не было AllowedIPs, добавим принудительно (на всякий случай)
           if ! grep -q "AllowedIPs" wg0.conf; then
-             # Ищем строку [Peer] и добавляем после нее
              sed -i "/\[Peer\]/a AllowedIPs = $ALLOWED_IPS" wg0.conf
           fi
 
-          # 5. Запускаем
+          # 6. Запуск интерфейса
           sudo cp wg0.conf /etc/wireguard/wg0.conf
           sudo wg-quick up wg0
           
-          # 6. Фикс DNS (на всякий случай оставляем)
+          # 7. Фикс DNS для стабильности имен
           sudo rm -f /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
           
-          # Проверка маршрутов
-          echo "📊 Current IP routing table:"
-          ip route
+          echo "📊 Маршрутизация настроена. MTU зафиксирован на 1280."
 
       - name: "Run Parser"
         id: parse_step
