@@ -56,7 +56,7 @@ jobs:
           # Если ты вынес зависимости для видео в отдельный файл
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: "Setup WireGuard (IPv4 Only Fix)"
+      - name: "Setup WireGuard (Stable Version)"
         run: |
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf dnsutils
 
@@ -65,31 +65,24 @@ jobs:
           if [ -z "$KH_IPS" ]; then exit 1; fi
           ALLOWED_IPS=$(echo "$KH_IPS" | awk '{print $1"/32"}' | paste -sd "," -)
 
-          # 1. Чистим конфиг от IPv6, чтобы не было ошибки "No such device"
           echo "$WG_CONFIG" > wg0.conf
-          sed -i '/Address.*:.*:/d' wg0.conf
-          sed -i '/AllowedIPs.*:.*:/d' wg0.conf
-          sed -i '/DNS.*:.*:/d' wg0.conf
-
-          # 2. Устанавливаем MTU и Split Tunneling
+          
+          # Фикс MTU для прохождения TLS-рукопожатия
           if grep -q "MTU" wg0.conf; then
-            sed -i "s|MTU =.*|MTU = 1200|g" wg0.conf
+            sed -i "s|MTU =.*|MTU = 1280|g" wg0.conf
           else
-            sed -i "/\[Interface\]/a MTU = 1200" wg0.conf
+            sed -i "/\[Interface\]/a MTU = 1280" wg0.conf
           fi
 
+          # Настройка AllowedIPs (только для Khmertimes)
           sed -i "s|AllowedIPs = 0.0.0.0/0|AllowedIPs = $ALLOWED_IPS|g" wg0.conf
           
-          # 3. Запуск
           sudo cp wg0.conf /etc/wireguard/wg0.conf
           sudo wg-quick up wg0
           
-          # 4. Фикс DNS (через временный файл, чтобы не убить линки)
-          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf.new
-          cat /etc/resolv.conf | sudo tee -a /etc/resolv.conf.new
-          sudo mv /etc/resolv.conf.new /etc/resolv.conf
-
-          echo "⏳ Waiting 5s..."
+          # Чистый DNS
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
           sleep 5
           
       - name: "Run Parser"
