@@ -48,20 +48,11 @@ AI_MODELS = [
     "llama-3.1-8b-instant",     # Очень быстрая, если лимиты на 70b кончились
 ]
 
-# --- НАСТРОЙКИ СЕТИ (PARSER) ---
-# ИСПРАВЛЕНО: Вернул Safari и убрал принудительный HTTP/1.1
-# Это решит проблему с Timeout при парсинге.
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110",
-    http_version=CurlHttpVersion.V1_1
+    http_version=CurlHttpVersion.V1_1 
 )
-
-SCRAPER.headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.google.com/"
-}
+# НЕ СТАВЬ SCRAPER.headers вручную здесь, curl_cffi сделает это лучше!
 # Увеличил таймаут до 60 сек для медленных прокси/VPN
 SCRAPER_TIMEOUT = 60 
 BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
@@ -328,25 +319,22 @@ def save_image(url, folder):
 
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
-    
-    try:
-        # ПЛАН А: Пытаемся через навороченный SCRAPER (curl_cffi)
-        r = SCRAPER.get(endpoint, timeout=SCRAPER_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        # Если видим ошибку TLS или SSL — врубаем ПЛАН Б
-        if "TLS" in str(e) or "SSL" in str(e) or "35" in str(e):
-            logging.warning(f"⚠️ SSL/TLS Crash на curl_cffi. Включаю запасной requests...")
-            # Используем обычный requests, он через VPN проходит легче
-            r = requests.get(endpoint, headers=SCRAPER.headers, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-        else:
-            raise e
+    # Создаем чистые заголовки для requests, если план А упадет
+    fallback_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
 
-    if not data: raise RuntimeError("Cat not found")
-    return data[0]["id"]
+    try:
+        r = SCRAPER.get(endpoint, timeout=30)
+        r.raise_for_status()
+        return r.json()[0]["id"]
+    except Exception as e:
+        logging.warning(f"⚠️ Plan A failed: {str(e)[:100]}. Trying Plan B...")
+        time.sleep(2) # Даем серверу остыть
+        r = requests.get(endpoint, headers=fallback_headers, timeout=30)
+        r.raise_for_status()
+        return r.json()[0]["id"]
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
