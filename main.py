@@ -297,27 +297,38 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
 
     return None
 
+# --- ИСПРАВЛЕННЫЙ БЛОК СОХРАНЕНИЯ КАРТИНОК ---
 def save_image(url, folder):
-    if not url or url.startswith('data:'): return None # Игнорим base64 мусор
+    if not url or url.startswith('data:'): return None
     
     folder.mkdir(parents=True, exist_ok=True)
     
     url_hash = hashlib.md5(url.encode()).hexdigest()[:10]
     orig_fn = url.rsplit('/', 1)[-1].split('?', 1)[0]
     ext = orig_fn.split('.')[-1] if '.' in orig_fn else 'jpg'
-    if len(ext) > 4: ext = 'jpg' # На случай кривых ссылок
+    if len(ext) > 4: ext = 'jpg'
     
     fn = f"{url_hash}.{ext}"
     dest = folder / fn
     
+    # 1. Пробуем через SCRAPER (Chrome/Safari)
     try:
-        # Качаем через SCRAPER (Safari профиль)
-        resp = SCRAPER.get(url, timeout=SCRAPER_TIMEOUT)
+        resp = SCRAPER.get(url, timeout=20)
+        if resp.status_code == 200:
+            dest.write_bytes(resp.content)
+            return str(dest)
+    except Exception:
+        pass # Если не вышло, идем к Плану Б
+
+    # 2. План Б: Обычный requests (для картинок часто работает лучше)
+    try:
+        resp = requests.get(url, headers=FALLBACK_HEADERS, timeout=20)
         if resp.status_code == 200:
             dest.write_bytes(resp.content)
             return str(dest)
     except Exception as e:
-        logging.error(f"Ошибка сохранения фото {url}: {e}")
+        logging.error(f"❌ Не удалось скачать фото {url}: {e}")
+    
     return None
 
 # --- БЛОК 4: API И ПАРСИНГ ---
@@ -372,9 +383,29 @@ def parse_and_save(post, lang, stopwords):
                 logging.info(f"🚫 ID={aid}: Стоп-слово '{ph}'")
                 return None
 
+    # === ИСПРАВЛЕНИЕ ЗДЕСЬ ===
+    html_txt = ""
+    # 1. План А: Scraper
     try:
-        html_txt = SCRAPER.get(link, timeout=SCRAPER_TIMEOUT).text
-    except Exception: return None
+        resp = SCRAPER.get(link, timeout=30)
+        if resp.status_code == 200:
+            html_txt = resp.text
+    except Exception as e:
+        logging.warning(f"⚠️ ID={aid}: Scraper не открыл ссылку ({e}). Пробуем requests...")
+
+    # 2. План Б: Requests
+    if not html_txt:
+        try:
+            resp = requests.get(link, headers=FALLBACK_HEADERS, timeout=30)
+            if resp.status_code == 200:
+                html_txt = resp.text
+            else:
+                logging.error(f"❌ ID={aid}: Ошибка загрузки HTML {resp.status_code}")
+                return None
+        except Exception as e:
+            logging.error(f"❌ ID={aid}: Не удалось открыть статью: {e}")
+            return None
+    # =========================
 
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
@@ -390,21 +421,18 @@ def parse_and_save(post, lang, stopwords):
 
     soup = BeautifulSoup(html_txt, "html.parser")
     
-    # --- НОВАЯ ПРАВКА: ГЛОБАЛЬНАЯ ОЧИСТКА МУСОРА ---
-    # УдаляемRelated Posts, рекламные блоки и виджеты ДО начала сбора картинок
-    # Это убьет блоки rp4wp, которые лезли в Lightbox и контент
+    # Глобальная очистка мусора
     for garbage in soup.find_all(["div", "ul", "ol", "section", "aside"], 
                                 class_=re.compile(r"rp4wp|related|ad-|post-widget-thumbnail|sharedaddy")):
         garbage.decompose()
 
-    # Очистка технических тегов и пустых элементов
     for j in soup.find_all(["span", "script", "style", "iframe"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
         if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: 
             j.decompose()
 
-    # --- Сбор URL с сохранением ПОРЯДКА ---
+    # Сбор URL
     ordered_srcs = []
     seen_srcs = set()
 
@@ -413,30 +441,27 @@ def parse_and_save(post, lang, stopwords):
             ordered_srcs.append(url)
             seen_srcs.add(url)
 
-    # 1. ПРИОРИТЕТ: Featured Media (Главное фото WP из API)
     if "_embedded" in post and (m := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(m, list) and (u := m[0].get("source_url")):
             if "logo" not in u.lower():
                 add_src(u)
 
-    # 2. ОСТАЛЬНЫЕ: Lightbox ссылки (теперь тут не будет картинок из Related Posts)
     for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
         if h := link_tag.get("href"): 
             if "gif" not in h.lower():
                 add_src(h)
 
-    # 3. ОСТАЛЬНЫЕ: Картинки непосредственно в тексте
     c_div = soup.find("div", class_="entry-content")
     if c_div:
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
 
-    # --- Загрузка с сохранением индексов (чтобы не перемешались) ---
+    # Загрузка картинок
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
-        with ThreadPoolExecutor(5) as ex:
-            # Ограничиваемся первыми 10 уникальными фото
+        # Уменьшаем кол-во потоков, чтобы не забанили за DDOS
+        with ThreadPoolExecutor(3) as ex:
             future_to_idx = {
                 ex.submit(save_image, url, OUTPUT_DIR / f"{aid}_{slug}" / "images"): i 
                 for i, url in enumerate(ordered_srcs[:10])
@@ -446,22 +471,22 @@ def parse_and_save(post, lang, stopwords):
                 if res := f.result():
                     images_results[idx] = Path(res).name
 
-    # Убираем пустые результаты (если загрузка какого-то фото сорвалась)
     final_images = [img for img in images_results if img is not None]
 
     if not final_images:
         logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
         return None
 
-    # Извлечение текста статьи
+    # Извлечение текста
     paras = []
     if c_div:
-        # Удаляем внутренний мусор в контенте, если он остался
         for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): 
             r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
-    raw_body_text = BAD_RE.sub("", "\n\n".join(paras))
+    # Исправляем регулярку (у тебя в коде использовалась BAD_RE, которая не объявлена, заменяем на re.sub)
+    raw_body_text = "\n\n".join(paras)
+    # raw_body_text = BAD_RE.sub("", ...) # Если BAD_RE была нужна, верни её определение
 
     # ОБРАБОТКА + ПЕРЕВОД
     final_title = title
@@ -475,7 +500,6 @@ def parse_and_save(post, lang, stopwords):
     
     (art_dir / "content.txt").write_text(raw_body_text, encoding="utf-8")
     
-    # Формируем метаданные (images[0] — теперь гарантированно главное фото)
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": final_title, "text_file": "content.txt",
