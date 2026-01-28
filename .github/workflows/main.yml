@@ -49,9 +49,8 @@ jobs:
 
       - name: Install requirements
         run: |
-          python -m pip install --upgrade pip
-          # Переустанавливаем curl_cffi с игнорированием кэша
-          pip install --no-cache-dir --upgrade curl_cffi
+          pip install --upgrade pip
+          pip install --no-cache-dir curl_cffi
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           # Если ты вынес зависимости для видео в отдельный файл
