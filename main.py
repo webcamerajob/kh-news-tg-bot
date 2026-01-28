@@ -51,6 +51,7 @@ AI_MODELS = [
 # --- НАСТРОЙКИ СЕТИ ---
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
+SCRAPER_TIMEOUT = 30
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110",
     http_version=CurlHttpVersion.V1_1  # Это лечило TLS Error (35)
