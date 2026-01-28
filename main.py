@@ -41,7 +41,7 @@ AI_MODELS = [
 # ИСПРАВЛЕНО: Вернул Safari и убрал принудительный HTTP/1.1
 # Это решит проблему с Timeout при парсинге.
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110"
+    impersonate="chrome110",
     http_version=CurlHttpVersion.V1_1
 )
 
