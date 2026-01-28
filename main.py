@@ -48,14 +48,21 @@ AI_MODELS = [
     "llama-3.1-8b-instant",     # Очень быстрая, если лимиты на 70b кончились
 ]
 
+# План А: Имитируем iPhone через curl_cffi
+# Используем профиль safari_ios_16_0 — он один из самых стабильных
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110",
-    http_version=CurlHttpVersion.V1_1 
+    impersonate="safari_ios_16_0", 
+    http_version=CurlHttpVersion.V1_1  # Оставляем, чтобы WireGuard не "захлебнулся"
 )
-# НЕ СТАВЬ SCRAPER.headers вручную здесь, curl_cffi сделает это лучше!
-# Увеличил таймаут до 60 сек для медленных прокси/VPN
-SCRAPER_TIMEOUT = 60 
-BAD_RE = re.compile(r"[\u200b-\u200f\uFEFF\u200E\u00A0]")
+
+# Заголовки для Плана Б (requests) — чистый iPhone
+IPHONE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
@@ -319,20 +326,16 @@ def save_image(url, folder):
 
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
-    # Создаем чистые заголовки для requests, если план А упадет
-    fallback_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    }
-
     try:
+        logging.info(f"📱 Запрос (iPhone Profile) -> {slug}")
         r = SCRAPER.get(endpoint, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
     except Exception as e:
-        logging.warning(f"⚠️ Plan A failed: {str(e)[:100]}. Trying Plan B...")
-        time.sleep(2) # Даем серверу остыть
-        r = requests.get(endpoint, headers=fallback_headers, timeout=30)
+        logging.warning(f"⚠️ Safari Profile failed. Trying Plan B (iPhone headers)...")
+        time.sleep(2)
+        # requests с заголовками iPhone
+        r = requests.get(endpoint, headers=IPHONE_HEADERS, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
 
