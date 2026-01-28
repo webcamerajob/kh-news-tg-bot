@@ -42,6 +42,7 @@ AI_MODELS = [
 # Это решит проблему с Timeout при парсинге.
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110"
+    http_version=CurlHttpVersion.V1_1
 )
 
 SCRAPER.headers = {
