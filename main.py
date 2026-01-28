@@ -1,3 +1,4 @@
+import random
 import argparse
 import logging
 import json
@@ -30,6 +31,16 @@ FETCH_DEPTH = 100
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Читаем одну строку с ключами через запятую
+raw_keys = os.getenv("GROQ_KEYS", "")
+# Разбиваем, убираем пробелы и пустые элементы
+GROQ_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+
+if GROQ_KEYS:
+    logging.info(f"🔑 Пул ключей Groq готов. Загружено ключей: {len(GROQ_KEYS)}")
+else:
+    logging.warning("⚠️ Ключи Groq не найдены в переменной GROQ_KEYS!")
+    
 AI_MODELS = [
     "llama-3.3-70b-versatile",  # Топовая модель, отлично понимает контекст
     "llama-3.1-70b-versatile",  # Предыдущая версия, тоже хороша
@@ -107,11 +118,8 @@ def strip_ai_chatter(text: str) -> str:
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     clean_body = body
 
-    # ИИ ЧИСТКА (TEПЕРЬ ЧЕРЕЗ GROQ)
-    if GROQ_API_KEY and len(body) > 500:
-        logging.info("⏳ Пауза 1 сек перед Groq AI...")
-        time.sleep(1) # Groq очень быстрый, долгая пауза не нужна
-        logging.info(f"🚀 [Groq] Чистка текста...")
+    if GROQ_KEYS and len(body) > 500:
+        logging.info("⏳ Подготовка к ИИ-чистке...")
         
         prompt = (
             f"You are a ruthless news editor.\n"
@@ -124,41 +132,53 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
             "4. NO META-TALK: Start with the story immediately.\n\n"
             f"RAW TEXT:\n{body[:15000]}" # Groq поддерживает большой контекст
         )
-
+        
         ai_result = ""
-        # Логика перебора моделей на случай лимитов (Rate Limit)
-        for model in AI_MODELS:
-            try:
-                response = requests.post(
-                    url="https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {GROQ_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    data=json.dumps({
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.3,
-                        "max_tokens": 4096 # Groq требует явного указания иногда
-                    }),
-                    timeout=30
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    if 'choices' in result and result['choices']:
-                        ai_result = result['choices'][0]['message']['content'].strip()
-                        logging.info(f"✅ [Groq] Успех ({model}).")
-                        break
-                elif response.status_code == 429:
-                    logging.warning(f"🐢 Groq Rate Limit ({model}). Пробуем следующую...")
-                    time.sleep(2) # Небольшая пауза перед следующей моделью
-                else:
-                    logging.error(f"❌ Groq Error {response.status_code}: {response.text}")
+        # Перемешиваем ключи для равномерного распределения нагрузки
+        current_pool = list(GROQ_KEYS)
+        random.shuffle(current_pool)
 
-            except Exception as e: 
-                logging.error(f"Ошибка соединения с Groq: {e}")
-                continue
+        # Перебор ключей
+        for api_key in current_pool:
+            if ai_result: break 
+
+            logging.info(f"🚀 Пробуем ключ {api_key[:6]}...")
+            
+            # Перебор моделей для текущего ключа
+            for model in AI_MODELS:
+                try:
+                    response = requests.post(
+                        url="https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        data=json.dumps({
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": 0.3,
+                            "max_tokens": 4096
+                        }),
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        ai_result = result['choices'][0]['message']['content'].strip()
+                        logging.info(f"✅ Успех! Модель: {model} (Ключ: {api_key[:6]}...)")
+                        break # Выход из цикла моделей
+                    
+                    elif response.status_code == 429:
+                        logging.warning(f"🐢 Rate Limit на ключе {api_key[:6]}... Пробуем СЛЕДУЮЩИЙ КЛЮЧ.")
+                        break # Прерываем цикл моделей, чтобы сменить ключ
+                    
+                    else:
+                        logging.error(f"❌ Ошибка {response.status_code} на ключе {api_key[:6]}...")
+                        break # Пробуем следующий ключ
+
+                except Exception as e:
+                    logging.error(f"⚠️ Ошибка соединения (Ключ: {api_key[:6]}...): {e}")
+                    break # Пробуем следующий ключ
         
         if ai_result:
             clean_body = strip_ai_chatter(ai_result)
