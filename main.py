@@ -29,28 +29,18 @@ BASE_DELAY = 1.0
 MAX_POSTED_RECORDS = 300
 FETCH_DEPTH = 100
 
-# Читаем ключи: теперь понимаем и запятые, и просто новые строки
-raw_keys = os.getenv("GROQ_KEYS", "")
-# Регулярка [,\s]+ разобьет строку по любому сочетанию запятых, пробелов и переносов строк
-GROQ_KEYS = [k.strip() for k in re.split(r'[,\s]+', raw_keys) if k.strip()]
+# --- НАСТРОЙКИ AI (OPENROUTER) ---
+# Ключ теперь один, так как OpenRouter агрегатор
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
-if GROQ_KEYS:
-    logging.info(f"🔑 Пул ключей Groq готов. Загружено ключей: {len(GROQ_KEYS)}")
-else:
-    # Оставляем поддержку одиночного ключа, если GROQ_KEYS не задан
-    single_key = os.getenv("GROQ_API_KEY")
-    GROQ_KEYS = [single_key] if single_key else []
-    
+# Стратегия: Сначала умный и дешевый DeepSeek, если он лежит — стабильный GPT-4o-mini
 AI_MODELS = [
-    "llama-3.3-70b-versatile",  # Топовая модель, отлично понимает контекст
-    "llama-3.1-70b-versatile",  # Предыдущая версия, тоже хороша
-    "mixtral-8x7b-32768",       # Хороший бэкап
-    "llama-3.1-8b-instant",     # Очень быстрая, если лимиты на 70b кончились
+    "deepseek/deepseek-chat",           # Top-1: DeepSeek V3 (Умный, дешевый)
+    "openai/gpt-4o-mini",               # Top-2: GPT-4o-mini (Супер-стабильный бэкап)
+    "google/gemini-2.0-flash-exp:free", # Top-3: Бесплатный резерв
 ]
 
 # --- НАСТРОЙКИ СЕТИ ---
-from curl_cffi import requests as cffi_requests, CurlHttpVersion
-
 SCRAPER_TIMEOUT = 30
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110",
@@ -81,7 +71,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
     
     translated_parts = []
     url = "https://translate.googleapis.com/translate_a/single"
-    # Обычный User-Agent для requests (Google его нормально принимает)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
     
     for chunk in chunks:
@@ -90,7 +79,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
             continue
         try:
             params = {"client": "gtx", "sl": "en", "tl": to_lang, "dt": "t", "q": chunk.strip()}
-            # Таймаут 10 сек на кусок перевода
             r = requests.get(url, params=params, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json()
@@ -115,8 +103,11 @@ def strip_ai_chatter(text: str) -> str:
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     clean_body = body
 
-    if GROQ_KEYS and len(body) > 500:
-        logging.info("⏳ Подготовка к ИИ-чистке...")
+    if OPENROUTER_KEY and len(body) > 500:
+        logging.info("⏳ Подготовка к ИИ-чистке (OpenRouter)...")
+        
+        # 1. Защита от 400 Bad Request: убираем нулевые байты
+        safe_body = body[:15000].replace('\x00', '')
         
         prompt = (
             f"You are a ruthless news editor.\n"
@@ -127,58 +118,56 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
             "2. KEEP UNIQUE DETAILS: Only keep quotes if they add numbers, dates, or emotion.\n"
             "3. REMOVE FLUFF: Delete ads and diplomatic praise.\n"
             "4. NO META-TALK: Start with the story immediately.\n\n"
-            f"RAW TEXT:\n{body[:15000]}" # Groq поддерживает большой контекст
+            f"RAW TEXT:\n{safe_body}"
         )
         
         ai_result = ""
-        # Перемешиваем ключи для равномерного распределения нагрузки
-        current_pool = list(GROQ_KEYS)
-        random.shuffle(current_pool)
-
-        # Перебор ключей
-        for api_key in current_pool:
-            if ai_result: break 
-
-            logging.info(f"🚀 Пробуем ключ {api_key[:6]}...")
-            
-            # Перебор моделей для текущего ключа
-            for model in AI_MODELS:
-                try:
-                    response = requests.post(
-                        url="https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        data=json.dumps({
-                            "model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.3,
-                            "max_tokens": 4096
-                        }),
-                        timeout=30
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
+        
+        # 2. Ротация моделей (DeepSeek -> GPT-4o -> Gemini)
+        for model in AI_MODELS:
+            try:
+                logging.info(f"🚀 Запрос к OpenRouter: {model}...")
+                
+                # 3. FIX 400 ERROR: используем параметр json= вместо data=json.dumps
+                response = requests.post(
+                    url="https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_KEY}",
+                        "HTTP-Referer": "https://github.com/kh-news-bot",
+                        "X-Title": "NewsBot",
+                        # Content-Type проставится сам корректно
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,
+                        # У DeepSeek контекст огромный, но ограничим разумно
+                        "max_tokens": 4096 
+                    },
+                    timeout=50 # DeepSeek иногда думает дольше обычного
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'choices' in result and result['choices']:
                         ai_result = result['choices'][0]['message']['content'].strip()
-                        logging.info(f"✅ Успех! Модель: {model} (Ключ: {api_key[:6]}...)")
-                        break # Выход из цикла моделей
-                    
-                    elif response.status_code == 429:
-                        logging.warning(f"🐢 Rate Limit на ключе {api_key[:6]}... Пробуем СЛЕДУЮЩИЙ КЛЮЧ.")
-                        break # Прерываем цикл моделей, чтобы сменить ключ
-                    
-                    else:
-                        logging.error(f"❌ Ошибка {response.status_code} на ключе {api_key[:6]}...")
-                        break # Пробуем следующий ключ
+                        logging.info(f"✅ Успех! Модель: {model}")
+                        break # Выходим, всё получилось
+                
+                else:
+                    # Если ошибка - логируем и пробуем следующую модель
+                    # 402 - кончились деньги, 503 - перегруз
+                    logging.warning(f"⚠️ Сбой {model} (Код {response.status_code}): {response.text[:100]}")
+                    continue
 
-                except Exception as e:
-                    logging.error(f"⚠️ Ошибка соединения (Ключ: {api_key[:6]}...): {e}")
-                    break # Пробуем следующий ключ
+            except Exception as e:
+                logging.error(f"⚠️ Ошибка сети с {model}: {e}")
+                continue
         
         if ai_result:
             clean_body = strip_ai_chatter(ai_result)
+        else:
+            logging.warning("❌ Все модели ИИ недоступны или вернули ошибку. Используем сырой текст.")
 
     # КОНТЕКСТНЫЙ ПЕРЕВОД (Google) - остается без изменений
     DELIMITER = " ||| "
@@ -258,7 +247,6 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
         return False
 
     # 1. СТРАТЕГИЯ №1: Ищем оригинал в родительской ссылке (Lightbox)
-    # В твоем примере это <a href="...">...</a>
     parent_a = img_tag.find_parent("a")
     if parent_a:
         href = parent_a.get("href")
@@ -384,7 +372,7 @@ def parse_and_save(post, lang, stopwords):
                 logging.info(f"🚫 ID={aid}: Стоп-слово '{ph}'")
                 return None
 
-    # === ИСПРАВЛЕНИЕ ЗДЕСЬ ===
+    # === ИСПРАВЛЕНИЕ ЗДЕСЬ (PLAN B для тела статьи) ===
     html_txt = ""
     # 1. План А: Scraper
     try:
@@ -485,9 +473,7 @@ def parse_and_save(post, lang, stopwords):
             r.decompose()
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
     
-    # Исправляем регулярку (у тебя в коде использовалась BAD_RE, которая не объявлена, заменяем на re.sub)
     raw_body_text = "\n\n".join(paras)
-    # raw_body_text = BAD_RE.sub("", ...) # Если BAD_RE была нужна, верни её определение
 
     # ОБРАБОТКА + ПЕРЕВОД
     final_title = title
@@ -579,7 +565,7 @@ def main():
             # Добавляем свежеприготовленные метаданные
             catalog.extend(new_metas)
             
-            with open(CATALOG_PATH, "w", encoding="utf-8") as f:
+            with open(CATALOG_PATH, "w", encoding="utf-8") as f: 
                 json.dump(catalog, f, ensure_ascii=False, indent=2)
             
             # Это сигнал для GitHub Actions, что нужно запускать постер
