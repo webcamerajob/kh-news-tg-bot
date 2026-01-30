@@ -40,17 +40,24 @@ AI_MODELS = [
     "google/gemini-2.0-flash-exp:free", # Top-3: Бесплатный резерв
 ]
 
-# --- НАСТРОЙКИ СЕТИ ---
-SCRAPER_TIMEOUT = 30
+# main.py
+
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110",
-    http_version=CurlHttpVersion.V1_1  # Это лечило TLS Error (35)
+    impersonate="chrome120", # Самый надежный профиль в 2026
+    http_version=CurlHttpVersion.V1_1 
 )
 
-# Заголовки для Plan B (обычный requests)
-FALLBACK_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+# Эти заголовки имитируют переход из поисковика
+IPHONE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
 }
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
@@ -325,14 +332,17 @@ def save_image(url, folder):
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
     try:
-        # План А: curl_cffi
+        # План А: Пытаемся curl_cffi с имитацией Chrome
+        logging.info(f"📡 Запрос к API (Chrome Impersonate)...")
+        time.sleep(random.uniform(2, 5)) # Случайная пауза
         r = SCRAPER.get(endpoint, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
     except Exception as e:
-        logging.warning(f"⚠️ Plan A failed. Trying Plan B (requests)...")
-        # План Б: Стандартный requests (через VPN он часто проходит)
-        r = requests.get(endpoint, headers=FALLBACK_HEADERS, timeout=30)
+        logging.warning(f"⚠️ Plan A failed (403). Trying Plan B with custom headers...")
+        time.sleep(random.uniform(5, 10)) # Более долгая пауза перед Plan B
+        # План Б: requests с тяжелыми заголовками
+        r = requests.get(endpoint, headers=IPHONE_HEADERS, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
 
