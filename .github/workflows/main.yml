@@ -56,7 +56,41 @@ jobs:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      ####
+      - name: "Setup WireGuard (Extreme Stability Fix)"
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf dnsutils
+
+          echo "🔍 Resolving Khmertimes IPs..."
+          KH_IPS=$(dig +short www.khmertimeskh.com | grep -E '^[0-9.]+$')
+          if [ -z "$KH_IPS" ]; then exit 1; fi
+          ALLOWED_IPS=$(echo "$KH_IPS" | awk '{print $1"/32"}' | paste -sd "," -)
+
+          echo "$WG_CONFIG" > wg0.conf
+          
+          # 1. Жестко вырезаем IPv6 из конфига
+          sed -i '/Address.*:.*:/d' wg0.conf
+          sed -i '/AllowedIPs.*:.*:/d' wg0.conf
+          sed -i '/DNS.*:.*:/d' wg0.conf
+
+          # 2. Устанавливаем MTU = 1200 (максимальная совместимость)
+          if grep -q "MTU" wg0.conf; then
+            sed -i "s|MTU =.*|MTU = 1200|g" wg0.conf
+          else
+            sed -i "/\[Interface\]/a MTU = 1200" wg0.conf
+          fi
+
+          # 3. Настройка Split Tunneling
+          sed -i "s|AllowedIPs = 0.0.0.0/0|AllowedIPs = $ALLOWED_IPS|g" wg0.conf
+          
+          sudo cp wg0.conf /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+          
+          # 4. Фикс DNS (Google)
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
+          
+          echo "📊 Маршруты установлены. MTU 1200. Ждем стабилизации..."
+          sleep 10
           
       - name: "🌍 Check Public IP"
         run: |
