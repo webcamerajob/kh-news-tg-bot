@@ -339,12 +339,15 @@ def fetch_cat_id(url, slug):
         r.raise_for_status()
         return r.json()[0]["id"]
     except Exception as e:
-        logging.warning(f"⚠️ Plan A failed (403). Trying Plan B with custom headers...")
-        time.sleep(random.uniform(5, 10)) # Более долгая пауза перед Plan B
-        # План Б: requests с тяжелыми заголовками
+        logging.warning(f"⚠️ Plan A failed. Trying Plan B...")
+        time.sleep(random.uniform(5, 10))
         r = requests.get(endpoint, headers=IPHONE_HEADERS, timeout=30)
+        
+        if r.status_code == 403:
+            # Выводим кусок ответа, чтобы увидеть причину бана
+            logging.error(f"💀 Cloudflare Blocked! Ответ сервера: {r.text[:300]}")
+            
         r.raise_for_status()
-        return r.json()[0]["id"]
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
