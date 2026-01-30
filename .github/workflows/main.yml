@@ -4,7 +4,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # ИСПРАВЛЕНО: Не отменяем текущий процесс, чтобы он успел сохранить posted.json
   cancel-in-progress: false 
-  
+
 permissions:
   contents: write
 
@@ -22,7 +22,8 @@ env:
   TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL:   ${{ secrets.TELEGRAM_CHANNEL }}
   WG_CONFIG:          ${{ secrets.WG_CONFIG }}
-  GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+  # GROQ больше не нужен, мы перешли на OpenRouter
+  # GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }} 
 
 jobs:
   build-and-publish:
@@ -33,7 +34,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Важно для правильного ребейза
+          # Важно для правильного ребейза и сохранения истории json
           fetch-depth: 0 
 
       - name: Set up Python
@@ -41,7 +42,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # --- НОВЫЙ ШАГ: Установка FFmpeg для обработки видео ---
+      # --- Установка FFmpeg (нужен для video_processor.py, если используешь) ---
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -50,46 +51,52 @@ jobs:
       - name: Install requirements
         run: |
           pip install --upgrade pip
-          pip install --no-cache-dir curl_cffi
+          pip install --no-cache-dir curl_cffi requests beautifulsoup4
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
-          # Если ты вынес зависимости для видео в отдельный файл
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
+      # --- Стабильная настройка VPN (с MTU 1280 и Split Tunneling) ---
       - name: "Setup WireGuard (Stable Version)"
         run: |
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf dnsutils
 
           echo "🔍 Resolving Khmertimes IPs..."
+          # Получаем реальные IP сайта
           KH_IPS=$(dig +short www.khmertimeskh.com | grep -E '^[0-9.]+$')
           if [ -z "$KH_IPS" ]; then exit 1; fi
+          
+          # Формируем список для маршрутизации
           ALLOWED_IPS=$(echo "$KH_IPS" | awk '{print $1"/32"}' | paste -sd "," -)
 
           echo "$WG_CONFIG" > wg0.conf
           
-          # Фикс MTU для прохождения TLS-рукопожатия
+          # 1. Фикс MTU (убирает ошибку TLS Error 35)
           if grep -q "MTU" wg0.conf; then
             sed -i "s|MTU =.*|MTU = 1280|g" wg0.conf
           else
             sed -i "/\[Interface\]/a MTU = 1280" wg0.conf
           fi
 
-          # Настройка AllowedIPs (только для Khmertimes)
+          # 2. Настройка Split Tunneling (только Khmertimes через VPN, остальное напрямую)
+          # Это критично, чтобы OpenRouter/DeepSeek не блокировали нас
           sed -i "s|AllowedIPs = 0.0.0.0/0|AllowedIPs = $ALLOWED_IPS|g" wg0.conf
           
           sudo cp wg0.conf /etc/wireguard/wg0.conf
           sudo wg-quick up wg0
           
-          # Чистый DNS
+          # 3. Чистый DNS (Google + Cloudflare)
           sudo rm -f /etc/resolv.conf
           echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" | sudo sh -c 'cat > /etc/resolv.conf'
+          
+          echo "⏳ Waiting for tunnel..."
           sleep 5
           
       - name: "Run Parser"
         id: parse_step
         env:
-          # Просто передаем одну строку
-          GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
+          # ВАЖНО: Передаем ключ OpenRouter вместо массива Groq
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
@@ -99,9 +106,11 @@ jobs:
             --posted-state-file articles/posted.json \
             --stopwords-file stopwords.txt | tee parser_output.txt
           
+          # Вытаскиваем статус из логов
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
+      # VPN выключаем всегда, чтобы не висел процесс
       - name: 🛑 Teardown WireGuard
         if: always()
         run: sudo wg-quick down wg0 || true
@@ -127,7 +136,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "chore: update posted.json"
             
-            # ИСПРАВЛЕНО: Ребейз с приоритетом наших изменений при конфликте строк JSON
+            # Ребейз с приоритетом наших изменений (ours) при конфликте строк JSON
             git pull --rebase -X ours origin main
             git push origin main
           else
