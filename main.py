@@ -320,22 +320,28 @@ def download_via_loader_to(video_url, output_path):
     return False
 
 def add_watermark(input_video, watermark_img, output_video):
-    if not Path(watermark_img).exists(): return False
+    if not Path(watermark_img).exists():
+        logging.error(f"❌ Вотермарка не найдена: {watermark_img}")
+        return False
+
     duration = get_video_duration(input_video)
     
     # ПАРАМЕТРЫ ОБРЕЗКИ: с 8 по 10 сек и последние 12 сек
-    c_start, c_end, t_tail = 8.0, 10.0, 12.0
+    c_start, c_end, t_tail = 8.0, 10.0, 11.5
+
+    # КОЭФФИЦИЕНТ ВОТЕРМАРКИ: 0.15 — это аккуратный значок в углу
+    wm_scale = 0.15
 
     if duration > 25.0:
         f_point = duration - t_tail
-        logging.info(f"✂️ Обрезка: вырезаем 8-10с и хвост после {f_point:.2f}с")
+        logging.info(f"✂️ Обрезка: вырезаем 8-10с и хвост до {f_point:.2f}с. Вотермарка {wm_scale}")
         
-        # Фильтр для видео (вырезаем кусок + накладываем вотермарку)
+        # Исправленный фильтр: [1:v] — вотермарка, [0:v] — видео
+        # scale2ref=iw*0.15:-1 делает вотермарку пропорциональной ширине видео
         v_filter = (
             f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
-            f"[main][1:v]scale2ref=iw*0.35:-1[vid][wm];[vid][wm]overlay=W-w-10:10"
+            f"[1:v][main]scale2ref=iw*{wm_scale}:-1[wm][vid];[vid][wm]overlay=W-w-10:10"
         )
-        # Фильтр для звука
         a_filter = f"aselect='lt(t,{c_start})+between(t,{c_end},{f_point})',asetpts=N/SR/TB"
         
         cmd = [
@@ -346,17 +352,21 @@ def add_watermark(input_video, watermark_img, output_video):
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
-        # Просто вотермарка без обрезки
+        logging.info(f"⚠️ Видео слишком короткое, только вотермарка {wm_scale}")
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
-            "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
+            "-filter_complex", f"[1:v][0:v]scale2ref=iw*{wm_scale}:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
             "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
             "-c:a", "copy", str(output_video)
         ]
+    
     try:
+        # Перенаправляем stderr в PIPE, чтобы видеть ошибку если что, но не спамить в лог
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return True
-    except: return False
+    except subprocess.CalledProcessError as e:
+        logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
+        return False
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
