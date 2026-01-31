@@ -56,22 +56,13 @@ jobs:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: Install & Connect Cloudflare WARP
+      - name: Connect Cloudflare WARP
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
-          sudo apt-get update && sudo apt-get install -y cloudflare-warp
-
-          # Даем системному сервису, который запустился при установке, пару секунд
-          sleep 3
-
-          # Настройка
           /usr/bin/warp-cli --accept-tos registration new || true
           /usr/bin/warp-cli --accept-tos mode proxy
           /usr/bin/warp-cli --accept-tos connect
-          
-          echo "⏳ Waiting for WARP connection..."
-          sleep 15
+          echo "⏳ Waiting for WARP stabilization (30s)..."
+          sleep 30
           
       - name: "🌍 Verify Proxy IP"
         run: |
