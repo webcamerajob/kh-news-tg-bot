@@ -69,12 +69,14 @@ jobs:
       
 
           
-      - name: "🌍 Check Public IP"
+      - name: "🌍 Check IP via WARP Proxy"
         run: |
-          echo "Current Public IP:"
+          # Ждем, пока прокси поднимется
+          sleep 10
+          echo "IP without proxy:"
           curl -s https://ifconfig.me
-          echo -e "\nChecking connectivity to Khmertimes..."
-          curl -I https://www.khmertimeskh.com
+          echo -e "\nIP WITH WARP PROXY:"
+          curl -s --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
       
       - name: "Run Parser"
         id: parse_step
