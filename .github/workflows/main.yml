@@ -58,23 +58,19 @@ jobs:
       
       - name: Install & Connect Cloudflare WARP
         run: |
-          # 1. Добавляем репозиторий и ставим пакет (уже было, но для надежности)
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
           sudo apt-get update && sudo apt-get install -y cloudflare-warp
 
-          # 2. ЖЕСТКИЙ ЗАПУСК СЕРВИСА (без него cli не работает)
-          # В GitHub Actions нет полноценного systemd, поэтому запускаем сервис вручную в фоне
-          sudo /usr/bin/warp-svc & 
-          sleep 5
+          # Даем системному сервису, который запустился при установке, пару секунд
+          sleep 3
 
-          # 3. Настройка через полный путь к warp-cli
-          # registration new может упасть, если уже зарегистрирован, поэтому || true
+          # Настройка
           /usr/bin/warp-cli --accept-tos registration new || true
           /usr/bin/warp-cli --accept-tos mode proxy
           /usr/bin/warp-cli --accept-tos connect
           
-          echo "⏳ Waiting for WARP to initialize..."
+          echo "⏳ Waiting for WARP connection..."
           sleep 15
           
       - name: "🌍 Verify Proxy IP"
