@@ -153,13 +153,13 @@ def load_posted_ids(state_file: Path) -> List[str]:
         logging.warning(f"Не удалось загрузить историю: {e}")
         return []
 
-async def main(parsed_dir: str, state_path: str, limit: Optional[int], watermark_scale: float):
+async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark_scale: float):
     token, chat_id = os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHANNEL")
     if not token or not chat_id:
         logging.error("🚨 Переменные окружения не установлены!")
         return
 
-    parsed_root, state_file = Path(parsed_dir), Path(state_path)
+    parsed_root, state_file = Path(state_file), Path(state_path)
     posted_ids_list = load_posted_ids(state_file)
     posted_ids_set = set(posted_ids_list)
     
