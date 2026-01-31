@@ -104,44 +104,50 @@ async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, dat
             await asyncio.sleep(RETRY_DELAY * attempt)
     return False
 
-async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, images: List[Path], watermark_scale: float) -> bool:
-    if not images: return False
+async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, media_files: List[Path], watermark_scale: float) -> bool:
+    if not media_files: return False
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    success = True
     
-    for i in range(0, len(images), 10):
-        chunk = images[i : i + 10]
-        logging.info(f"🖼️ Отправка пачки медиа {i//10 + 1} (кол-во: {len(chunk)})")
-        media, files = [], {}
+    overall_success = True
+    
+    # Делим общий список файлов на пачки по 10 штук
+    for i in range(0, len(media_files), 10):
+        chunk = media_files[i : i + 10]
+        media_array = []
+        files_to_send = {}
         
-        for idx, img_path in enumerate(chunk):
-            key = f"file{idx}"
+        logging.info(f"📦 Отправка пачки медиа {i//10 + 1} (файлов: {len(chunk)})")
+        
+        for idx, f_path in enumerate(chunk):
+            f_key = f"media_{idx}"
+            ext = f_path.suffix.lower()
             
-            # === ПРОВЕРКА НА ВИДЕО ===
-            if img_path.suffix.lower() in ['.mp4', '.mov', '.m4v']:
-                # Это видео: читаем байты, не используем PIL, тип video
-                try:
-                    video_bytes = img_path.read_bytes()
-                    files[key] = (img_path.name, video_bytes, "video/mp4")
-                    media.append({"type": "video", "media": f"attach://{key}"})
-                except Exception as e:
-                    logging.error(f"❌ Ошибка чтения видео {img_path}: {e}")
+            if ext in ['.mp4', '.mov', '.m4v']:
+                m_type, m_mime = "video", "video/mp4"
+                m_bytes = f_path.read_bytes()
             else:
-                # Это фото: используем apply_watermark, тип photo
-                image_bytes = apply_watermark(img_path, scale=watermark_scale)
-                if image_bytes:
-                    files[key] = (img_path.name, image_bytes, "image/jpeg")
-                    media.append({"type": "photo", "media": f"attach://{key}"})
+                m_type, m_mime = "photo", "image/jpeg"
+                m_bytes = apply_watermark(f_path, watermark_scale)
+
+            if not m_bytes: continue
+            
+            files_to_send[f_key] = (f_path.name, m_bytes, m_mime)
+            media_array.append({"type": m_type, "media": f"attach://{f_key}"})
         
-        if not media: continue
+        if not media_array: continue
         
-        data = {"chat_id": chat_id, "media": json.dumps(media)}
-        if not await _post_with_retry(client, "POST", url, data, files):
-            success = False
-            logging.error(f"❌ Не удалось отправить пачку медиа {i//10 + 1}")
+        data = {"chat_id": chat_id, "media": json.dumps(media_array)}
         
-        if len(images) > 10: await asyncio.sleep(2)
-    return success
+        # Если хотя бы одна пачка упала, помечаем общий успех как False
+        if not await _post_with_retry(client, "POST", url, data, files_to_send):
+            overall_success = False
+            logging.error(f"❌ Ошибка при отправке пачки {i//10 + 1}")
+        
+        # Если есть еще пачки для этого же поста, ждем немного
+        if i + 10 < len(media_files):
+            await asyncio.sleep(2)
+            
+    return overall_success
 
 async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text: str, **kwargs) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
