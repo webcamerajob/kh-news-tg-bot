@@ -56,13 +56,26 @@ jobs:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: Connect Cloudflare WARP
+      - name: Install & Connect Cloudflare WARP
         run: |
-          warp-cli --accept-tos registration new || true
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos connect
+          # 1. Добавляем репозиторий и ставим пакет (уже было, но для надежности)
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
+          sudo apt-get update && sudo apt-get install -y cloudflare-warp
+
+          # 2. ЖЕСТКИЙ ЗАПУСК СЕРВИСА (без него cli не работает)
+          # В GitHub Actions нет полноценного systemd, поэтому запускаем сервис вручную в фоне
+          sudo /usr/bin/warp-svc & 
+          sleep 5
+
+          # 3. Настройка через полный путь к warp-cli
+          # registration new может упасть, если уже зарегистрирован, поэтому || true
+          /usr/bin/warp-cli --accept-tos registration new || true
+          /usr/bin/warp-cli --accept-tos mode proxy
+          /usr/bin/warp-cli --accept-tos connect
+          
           echo "⏳ Waiting for WARP to initialize..."
-          sleep 15 # Даем время на установку соединения
+          sleep 15
           
       - name: "🌍 Verify Proxy IP"
         run: |
@@ -86,11 +99,6 @@ jobs:
           # Вытаскиваем статус из логов
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
-
-      # VPN выключаем всегда, чтобы не висел процесс
-      - name: 🛑 Teardown WireGuard
-        if: always()
-        run: sudo wg-quick down wg0 || true
 
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
