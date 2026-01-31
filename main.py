@@ -145,7 +145,6 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
             "2. KEEP UNIQUE DETAILS: Only keep quotes if they add numbers, dates, or emotion.\n"
             "3. REMOVE FLUFF: Delete ads and diplomatic praise.\n"
             "4. NO META-TALK: Start with the story immediately.\n\n"
-            "5. Don't insert the text block **your title**.\n\n"
             f"RAW TEXT:\n{safe_body}"
         )
         
