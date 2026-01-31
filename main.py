@@ -342,23 +342,39 @@ def save_image(url, folder):
 
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
+    
+    # Пытаемся 3 раза с паузой между попытками
+    for attempt in range(1, 4):
+        try:
+            logging.info(f"📡 Попытка {attempt}: Запрос к API...")
+            
+            # Используем curl_cffi (Plan A)
+            r = SCRAPER.get(endpoint, timeout=30)
+            
+            # Если получили HTML вместо JSON, значит это заглушка Cloudflare
+            if "text/html" in r.headers.get("Content-Type", ""):
+                logging.warning(f"⚠️ Получен HTML вместо JSON (Cloudflare Challenge).")
+            else:
+                r.raise_for_status()
+                return r.json()[0]["id"]
+                
+        except Exception as e:
+            logging.warning(f"⚠️ Попытка {attempt} не удалась: {e}")
+        
+        # Если не получилось — ждем подольше перед следующей попыткой
+        wait_time = attempt * 10 
+        logging.info(f"⏳ Ожидание {wait_time} сек перед повтором...")
+        time.sleep(wait_time)
+
+    # Если все попытки провалены — пробуем Plan B напоследок
+    logging.error("🚨 Все попытки через WARP/Chrome провалены. Пробуем Plan B...")
     try:
-        # План А: Пытаемся curl_cffi с имитацией Chrome
-        logging.info(f"📡 Запрос к API (Chrome Impersonate)...")
-        time.sleep(random.uniform(2, 5)) # Случайная пауза
-        r = SCRAPER.get(endpoint, timeout=30)
+        r = requests.get(endpoint, headers=IPHONE_HEADERS, proxies={"https": WARP_PROXY}, timeout=30)
         r.raise_for_status()
         return r.json()[0]["id"]
     except Exception as e:
-        logging.warning(f"⚠️ Plan A failed. Trying Plan B...")
-        time.sleep(random.uniform(5, 10))
-        r = requests.get(endpoint, headers=IPHONE_HEADERS, timeout=30)
-        
-        if r.status_code == 403:
-            # Выводим кусок ответа, чтобы увидеть причину бана
-            logging.error(f"💀 Cloudflare Blocked! Ответ сервера: {r.text[:300]}")
-            
-        r.raise_for_status()
+        logging.error(f"💀 Финальный крах: {e}")
+        raise
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
