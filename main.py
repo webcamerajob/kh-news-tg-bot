@@ -111,11 +111,20 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
     return "\n".join(translated_parts)
 
 def strip_ai_chatter(text: str) -> str:
-    bad_prefixes = ["Here is", "The article", "Summary:", "Cleaned text:"]
-    for prefix in bad_prefixes:
-        if text.lower().startswith(prefix.lower()):
-            parts = text.split('\n', 1)
-            if len(parts) > 1: return parts[1].strip()
+    text = text.strip()
+
+    # ЖЕСТКАЯ ЗАЧИСТКА: Если текст начинается с **, удаляем всё до следующих **
+    # r'^\s*\*\*(.*?)\*\*' - ищет в начале строки текст внутри двойных звезд
+    match = re.match(r'^\s*\*\*(.*?)\*\*', text, re.DOTALL)
+    
+    if match:
+        removed_header = match.group(1).strip()
+        logging.info(f"✂️ Вырезан заголовок ИИ: '**{removed_header}**'")
+        
+        # Возвращаем текст, который идет ПОСЛЕ закрывающих звезд
+        # .strip() уберет переносы строк, которые шли после заголовка
+        return text[match.end():].strip()
+
     return text
 
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
