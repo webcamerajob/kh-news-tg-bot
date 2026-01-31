@@ -159,11 +159,17 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         logging.error("🚨 Переменные окружения не установлены!")
         return
 
-    parsed_root, state_file_path = Path(state_file), Path(state_path)
-    posted_ids_list = load_posted_ids(state_file)
+    parsed_root = Path(parsed_dir)
+    state_file_path = Path(state_file)
+    
+    posted_ids_list = load_posted_ids(state_file_path)
     posted_ids_set = set(posted_ids_list)
     
     to_post = []
+    if not parsed_root.exists():
+        logging.error(f"📂 Директория {parsed_dir} не найдена!")
+        return
+
     for d in sorted(parsed_root.iterdir()):
         meta_f = d / "meta.json"
         if d.is_dir() and meta_f.is_file():
@@ -186,7 +192,7 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         sent = 0
         for art in to_post:
             if limit and sent >= limit: break
-            logging.info(f"📤 Публикация ID={art['id']}...")
+            logging.info(f"📤 ID={art['id']}")
             try:
                 if art["image_paths"]:
                     await send_media_group(client, token, chat_id, art["image_paths"], watermark_scale)
@@ -209,7 +215,6 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                     posted_ids_list.append(art['id'])
                 sent += 1
                 
-                # Обрезка и сохранение стейта
                 posted_ids_list = posted_ids_list[-MAX_POSTED_RECORDS:]
                 state_file_path.write_text(json.dumps([int(i) for i in posted_ids_list], indent=2))
                 logging.info(f"✅ Успешно опубликовано: ID={art['id']}")
