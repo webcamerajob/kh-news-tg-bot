@@ -159,7 +159,7 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         logging.error("🚨 Переменные окружения не установлены!")
         return
 
-    parsed_root, state_file = Path(state_file), Path(state_path)
+    parsed_root, state_file_path = Path(state_file), Path(state_path)
     posted_ids_list = load_posted_ids(state_file)
     posted_ids_set = set(posted_ids_list)
     
@@ -211,7 +211,7 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 
                 # Обрезка и сохранение стейта
                 posted_ids_list = posted_ids_list[-MAX_POSTED_RECORDS:]
-                state_file.write_text(json.dumps([int(i) for i in posted_ids_list], indent=2))
+                state_file_path.write_text(json.dumps([int(i) for i in posted_ids_list], indent=2))
                 logging.info(f"✅ Успешно опубликовано: ID={art['id']}")
 
             except Exception as e:
