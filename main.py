@@ -343,38 +343,44 @@ def save_image(url, folder):
 def fetch_cat_id(url, slug):
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
     
-    # Пытаемся 3 раза с паузой между попытками
+    # Делаем 3 честных попытки через SCRAPER (curl_cffi)
     for attempt in range(1, 4):
         try:
-            logging.info(f"📡 Попытка {attempt}: Запрос к API...")
+            logging.info(f"📡 Попытка {attempt}/3: Запрос к API {slug}...")
             
-            # Используем curl_cffi (Plan A)
+            # На первой попытке после старта WARP может быть задержка, 
+            # поэтому таймаут держим уверенный
             r = SCRAPER.get(endpoint, timeout=30)
             
-            # Если получили HTML вместо JSON, значит это заглушка Cloudflare
-            if "text/html" in r.headers.get("Content-Type", ""):
-                logging.warning(f"⚠️ Получен HTML вместо JSON (Cloudflare Challenge).")
+            # Проверяем, не подсунул ли нам Cloudflare страницу проверки вместо JSON
+            content_type = r.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                logging.warning(f"⚠️ Cloudflare Challenge detected (получен HTML).")
+                # Специально вызываем ошибку, чтобы уйти в блок except и на повтор
+                raise ValueError("Cloudflare JS Challenge active")
+            
+            r.raise_for_status()
+            data = r.json()
+            
+            if data and isinstance(data, list):
+                cat_id = data[0]["id"]
+                logging.info(f"✅ ID категории найден: {cat_id}")
+                return cat_id
             else:
-                r.raise_for_status()
-                return r.json()[0]["id"]
+                logging.error(f"❌ Категория '{slug}' не найдена в API.")
+                return None
                 
         except Exception as e:
-            logging.warning(f"⚠️ Попытка {attempt} не удалась: {e}")
-        
-        # Если не получилось — ждем подольше перед следующей попыткой
-        wait_time = attempt * 10 
-        logging.info(f"⏳ Ожидание {wait_time} сек перед повтором...")
-        time.sleep(wait_time)
-
-    # Если все попытки провалены — пробуем Plan B напоследок
-    logging.error("🚨 Все попытки через WARP/Chrome провалены. Пробуем Plan B...")
-    try:
-        r = requests.get(endpoint, headers=IPHONE_HEADERS, proxies={"https": WARP_PROXY}, timeout=30)
-        r.raise_for_status()
-        return r.json()[0]["id"]
-    except Exception as e:
-        logging.error(f"💀 Финальный крах: {e}")
-        raise
+            logging.warning(f"⚠️ Попытка {attempt} провалена: {e}")
+            
+            if attempt < 3:
+                # Ждем: 10с, 20с... 
+                wait_time = attempt * 10
+                logging.info(f"⏳ Ожидание {wait_time} сек перед повторной попыткой...")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"💀 Все попытки исчерпаны. Не удалось получить ID категории.")
+                raise  # Пробрасываем ошибку в main, чтобы остановить процесс
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
