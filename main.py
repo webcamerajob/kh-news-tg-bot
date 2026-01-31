@@ -55,9 +55,6 @@ SCRAPER = cffi_requests.Session(
     http_version=CurlHttpVersion.V1_1
 )
 
-# Не забудь обновить Plan B (обычные requests)
-# r = requests.get(endpoint, headers=FALLBACK_HEADERS, proxies={"https": WARP_PROXY}, timeout=30)
-
 # Эти заголовки имитируют переход из поисковика
 IPHONE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -70,6 +67,9 @@ IPHONE_HEADERS = {
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1"
 }
+
+# === ИСПРАВЛЕНИЕ: Добавляем переменную, которой не хватало в твоем коде ===
+FALLBACK_HEADERS = IPHONE_HEADERS
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
@@ -313,7 +313,7 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
 
     return None
 
-# --- ИСПРАВЛЕННЫЙ БЛОК СОХРАНЕНИЯ КАРТИНОК ---
+# --- БЛОК СОХРАНЕНИЯ (С ДОБАВЛЕНИЕМ ВИДЕО) ---
 def save_image(url, folder):
     if not url or url.startswith('data:'): return None
     
@@ -321,29 +321,40 @@ def save_image(url, folder):
     
     url_hash = hashlib.md5(url.encode()).hexdigest()[:10]
     orig_fn = url.rsplit('/', 1)[-1].split('?', 1)[0]
-    ext = orig_fn.split('.')[-1] if '.' in orig_fn else 'jpg'
-    if len(ext) > 4: ext = 'jpg'
+    
+    # Определяем расширение и приводим к нижнему регистру
+    if '.' in orig_fn:
+        ext = orig_fn.split('.')[-1].lower()
+    else:
+        ext = 'jpg'
+    
+    # Если это мусор, ставим jpg. Но если это mp4/mov — оставляем!
+    if len(ext) > 4 and ext not in ['mp4', 'mov', 'm4v']: 
+        ext = 'jpg'
     
     fn = f"{url_hash}.{ext}"
     dest = folder / fn
     
+    # Увеличиваем таймаут для видео
+    timeout = 60 if ext in ['mp4', 'mov', 'm4v'] else 20
+
     # 1. Пробуем через SCRAPER (Chrome/Safari)
     try:
-        resp = SCRAPER.get(url, timeout=20)
+        resp = SCRAPER.get(url, timeout=timeout)
         if resp.status_code == 200:
             dest.write_bytes(resp.content)
             return str(dest)
     except Exception:
         pass # Если не вышло, идем к Плану Б
 
-    # 2. План Б: Обычный requests (для картинок часто работает лучше)
+    # 2. План Б: Обычный requests
     try:
-        resp = requests.get(url, headers=FALLBACK_HEADERS, timeout=20)
+        resp = requests.get(url, headers=FALLBACK_HEADERS, timeout=timeout)
         if resp.status_code == 200:
             dest.write_bytes(resp.content)
             return str(dest)
     except Exception as e:
-        logging.error(f"❌ Не удалось скачать фото {url}: {e}")
+        logging.error(f"❌ Не удалось скачать файл {url}: {e}")
     
     return None
 
@@ -500,8 +511,36 @@ def parse_and_save(post, lang, stopwords):
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
+        
+        # === ВСТАВКА: ИЩЕМ ВИДЕО (добавляем в отдельный список) ===
+        video_srcs = []
+        
+        # 1. Теги video
+        for vid in c_div.find_all("video"):
+            if src := vid.get("src"):
+                if src not in seen_srcs:
+                    video_srcs.append(src)
+                    seen_srcs.add(src)
+            for source in vid.find_all("source"):
+                if src := source.get("src"):
+                    if src not in seen_srcs:
+                        video_srcs.append(src)
+                        seen_srcs.add(src)
+        
+        # 2. Ссылки на файлы (mp4, mov)
+        for a_tag in c_div.find_all("a"):
+            if href := a_tag.get("href"):
+                if href.lower().endswith(('.mp4', '.mov', '.m4v')):
+                    if href not in seen_srcs:
+                        video_srcs.append(href)
+                        seen_srcs.add(href)
+                        
+        # Добавляем видео в конец списка загрузки
+        for v in video_srcs:
+            ordered_srcs.append(v)
+    # =========================================================
 
-    # Загрузка картинок
+    # Загрузка картинок (и теперь видео)
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         # Уменьшаем кол-во потоков, чтобы не забанили за DDOS
