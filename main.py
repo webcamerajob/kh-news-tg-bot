@@ -295,130 +295,68 @@ def save_image(url, folder):
 # === ВНЕДРЕННЫЕ ФУНКЦИИ (LOADER.TO + FFMPEG SUBPROCESS) ===
 # ==============================================================================
 
+def get_video_duration(video_path: Path) -> float:
+    """Получает длительность видео через ffprobe."""
+    try:
+        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return float(result.stdout.strip())
+    except: return 0.0
+
 def download_via_loader_to(video_url, output_path):
-    """
-    Скачиваем видео в качестве 360p для скорости.
-    """
     session = cffi_requests.Session(impersonate="chrome120")
-    
-    # 1. Отправляем задачу: просим формат 360 (MP4)
-    api_url = "https://loader.to/ajax/download.php"
-    params = {
-        "format": "360",  # <--- ОГРАНИЧЕНИЕ КАЧЕСТВА
-        "url": video_url
-    }
-    
-    logging.info(f"🔄 Запрашиваем 360p версию у Loader.to...")
     try:
-        resp = session.get(api_url, params=params, timeout=15)
-        data = resp.json()
-        
-        if not data.get("success"):
-            logging.error(f"❌ Ошибка Loader.to: {data}")
-            return False
-            
-        task_id = data.get("id")
-        logging.info(f"⏳ Задача создана (ID: {task_id}), ждем обработку...")
-        
-    except Exception as e:
-        logging.error(f"❌ Ошибка соединения с Loader.to: {e}")
-        return False
-
-    # 2. Ждем готовности
-    download_url = None
-    for i in range(25):
-        time.sleep(3)
-        try:
-            check_url = "https://loader.to/ajax/progress.php"
-            check_resp = session.get(check_url, params={"id": task_id}, timeout=10)
-            status_data = check_resp.json()
-            
-            if status_data.get("success") == 1:
-                download_url = status_data.get("download_url")
-                logging.info("✅ Готово к скачиванию!")
-                break
-            
-            logging.info(f"⏳ Прогресс: {status_data.get('text', 'working...')}")
-            
-        except Exception as e:
-            logging.warning(f"⚠️ Ошибка проверки статуса: {e}")
-
-    if not download_url:
-        logging.error("❌ Не удалось получить ссылку (timeout).")
-        return False
-
-    # 3. Скачиваем
-    logging.info("⬇️ Скачиваем файл...")
-    try:
-        file_resp = session.get(download_url, stream=True, timeout=120)
-        file_resp.raise_for_status()
-        
-        with open(output_path, 'wb') as f:
-            for chunk in file_resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-                
-        if Path(output_path).stat().st_size < 1000:
-             logging.error("❌ Файл слишком маленький.")
-             return False
-             
-        return True
-    except Exception as e:
-        logging.error(f"❌ Ошибка скачивания: {e}")
-        return False
+        resp = session.get("https://loader.to/ajax/download.php", params={"format": "360", "url": video_url}, timeout=15)
+        task_id = resp.json().get("id")
+        for _ in range(25):
+            time.sleep(3)
+            status = session.get("https://loader.to/ajax/progress.php", params={"id": task_id}, timeout=10).json()
+            if status.get("success") == 1:
+                file_resp = session.get(status.get("download_url"), stream=True, timeout=120)
+                with open(output_path, 'wb') as f:
+                    for chunk in file_resp.iter_content(8192): f.write(chunk)
+                return True
+    except: pass
+    return False
 
 def add_watermark(input_video, watermark_img, output_video):
-    if not Path(watermark_img).exists():
-        logging.error(f"❌ Вотермарка не найдена: {watermark_img}")
-        return False
-
+    if not Path(watermark_img).exists(): return False
     duration = get_video_duration(input_video)
     
-    # Точки обрезки
-    cut_start = 8.0
-    cut_end = 10.0
-    trim_tail = 12.0
-    
-    # Проверяем, достаточно ли длины для такой сложной резки
-    # Минимум 25 секунд, чтобы после всех вырезов осталось что-то вменяемое
+    # ПАРАМЕТРЫ ОБРЕЗКИ: с 8 по 10 сек и последние 12 сек
+    c_start, c_end, t_tail = 8.0, 10.0, 12.0
+
     if duration > 25.0:
-        final_point = duration - trim_tail
-        logging.info(f"✂️ Сложная обрезка: вырезаем 8-10с и хвост после {final_point:.2f}с")
+        f_point = duration - t_tail
+        logging.info(f"✂️ Обрезка: вырезаем 8-10с и хвост после {f_point:.2f}с")
         
-        # Сложный фильтр: 
-        # 1. select - выбирает кадры ДО 8 сек И (ОТ 10 сек ДО финала)
-        # 2. setpts - убирает пустые места (дыры) во времени после удаления кадров
+        # Фильтр для видео (вырезаем кусок + накладываем вотермарку)
         v_filter = (
-            f"select='lt(t,{cut_start})+between(t,{cut_end},{final_point})',setpts=N/FRAME_RATE/TB;"
-            f"[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10"
+            f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
+            f"[main][1:v]scale2ref=iw*0.35:-1[vid][wm];[vid][wm]overlay=W-w-10:10"
         )
-        # Аналогично для звука, чтобы не было рассинхрона
-        a_filter = f"aselect='lt(t,{cut_start})+between(t,{cut_end},{final_point})',asetpts=N/SR/TB"
+        # Фильтр для звука
+        a_filter = f"aselect='lt(t,{c_start})+between(t,{c_end},{f_point})',asetpts=N/SR/TB"
         
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", v_filter,
-            "-filter_complex", a_filter,
+            "-af", a_filter,
             "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "128k", # Звук перекодируем, так как мы его резали
-            str(output_video)
+            "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
-        logging.info(f"⚠️ Видео слишком короткое ({duration}s), только вотермарка.")
+        # Просто вотермарка без обрезки
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
             "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
-            "-c:a", "copy", 
-            str(output_video)
+            "-c:a", "copy", str(output_video)
         ]
-    
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        logging.info("✅ Рендер завершен!")
         return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
-        return False
+    except: return False
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
