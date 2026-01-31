@@ -43,7 +43,7 @@ AI_MODELS = [
 # Константа для порта WARP
 WARP_PROXY = "socks5h://127.0.0.1:40000"
 
-# Глобальная сессия для парсинга сайтов (не для loader.to, у него своя логика)
+# Глобальная сессия для парсинга сайтов
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110",
     proxies={
@@ -570,7 +570,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     
     images_dir = OUTPUT_DIR / f"{aid}_{slug}" / "images"
     
-    # 1. Скачивание обычных файлов (картинки)
+    # 1. Скачивание обычных файлов
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         with ThreadPoolExecutor(3) as ex:
@@ -676,12 +676,17 @@ def main():
     parser.add_argument("-l", "--lang", default="ru")
     parser.add_argument("--posted-state-file", default="articles/posted.json")
     parser.add_argument("--stopwords-file", default="stopwords.txt")
-    parser.add_argument("--watermark-image", help="Path to watermark PNG for videos")
+    # ТУТ ИЗМЕНЕНИЕ: default="watermark.png"
+    parser.add_argument("--watermark-image", default="watermark.png", help="Path to watermark PNG for videos")
     args = parser.parse_args()
 
     watermark_path = Path(args.watermark_image) if args.watermark_image else None
-    if watermark_path and not watermark_path.exists():
-        logging.warning(f"⚠️ Файл вотермарки не найден: {watermark_path}. Видео будут без нее.")
+    
+    # Логируем, нашел он вотермарку или нет
+    if watermark_path and watermark_path.exists():
+        logging.info(f"🔧 Режим вотермарки: ВКЛ (файл: {watermark_path})")
+    else:
+        logging.warning(f"⚠️ Режим вотермарки: ВЫКЛ (файл {watermark_path} не найден)")
         watermark_path = None
 
     try:
