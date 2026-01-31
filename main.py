@@ -371,23 +371,46 @@ def add_watermark(input_video, watermark_img, output_video):
         logging.error(f"❌ Вотермарка не найдена: {watermark_img}")
         return False
 
-    logging.info("🎨 Рендеринг (360p, Top-Right)...")
+    duration = get_video_duration(input_video)
     
-    # ЛОГИКА:
-    # 1. Скалируем вотермарку до 35% от ширины видео (которое теперь 360p).
-    # 2. Накладываем в правый верхний угол (x=W-w-10, y=10).
+    # Точки обрезки
+    cut_start = 8.0
+    cut_end = 10.0
+    trim_tail = 12.0
     
-    cmd = [
-        "ffmpeg", "-y", 
-        "-i", str(input_video), 
-        "-i", str(watermark_img),
-        "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
-        "-c:v", "libx264", 
-        "-preset", "superfast", # superfast оптимален для 360p
-        "-crf", "28",
-        "-c:a", "copy", 
-        str(output_video)
-    ]
+    # Проверяем, достаточно ли длины для такой сложной резки
+    # Минимум 25 секунд, чтобы после всех вырезов осталось что-то вменяемое
+    if duration > 25.0:
+        final_point = duration - trim_tail
+        logging.info(f"✂️ Сложная обрезка: вырезаем 8-10с и хвост после {final_point:.2f}с")
+        
+        # Сложный фильтр: 
+        # 1. select - выбирает кадры ДО 8 сек И (ОТ 10 сек ДО финала)
+        # 2. setpts - убирает пустые места (дыры) во времени после удаления кадров
+        v_filter = (
+            f"select='lt(t,{cut_start})+between(t,{cut_end},{final_point})',setpts=N/FRAME_RATE/TB;"
+            f"[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10"
+        )
+        # Аналогично для звука, чтобы не было рассинхрона
+        a_filter = f"aselect='lt(t,{cut_start})+between(t,{cut_end},{final_point})',asetpts=N/SR/TB"
+        
+        cmd = [
+            "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
+            "-filter_complex", v_filter,
+            "-filter_complex", a_filter,
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "128k", # Звук перекодируем, так как мы его резали
+            str(output_video)
+        ]
+    else:
+        logging.info(f"⚠️ Видео слишком короткое ({duration}s), только вотермарка.")
+        cmd = [
+            "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
+            "-filter_complex", "[1:v][0:v]scale2ref=iw*0.35:-1[wm][vid];[vid][wm]overlay=W-w-10:10",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+            "-c:a", "copy", 
+            str(output_video)
+        ]
     
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -396,8 +419,6 @@ def add_watermark(input_video, watermark_img, output_video):
     except subprocess.CalledProcessError as e:
         logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
         return False
-
-# ==============================================================================
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
