@@ -56,26 +56,17 @@ jobs:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: Install & Connect Cloudflare WARP
+      - name: Connect Cloudflare WARP
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
-          sudo apt-get update && sudo apt-get install cloudflare-warp
-          warp-cli --accept-tos registration new
+          warp-cli --accept-tos registration new || true
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos connect
-          # Даем время на коннект
-          sleep 5
-      
-
+          echo "⏳ Waiting for WARP to initialize..."
+          sleep 15 # Даем время на установку соединения
           
-      - name: "🌍 Check IP via WARP Proxy"
+      - name: "🌍 Verify Proxy IP"
         run: |
-          # Ждем, пока прокси поднимется
-          sleep 10
-          echo "IP without proxy:"
-          curl -s https://ifconfig.me
-          echo -e "\nIP WITH WARP PROXY:"
+          echo "External IP (via WARP):"
           curl -s --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
       
       - name: "Run Parser"
