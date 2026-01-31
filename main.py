@@ -327,10 +327,10 @@ def add_watermark(input_video, watermark_img, output_video):
     duration = get_video_duration(input_video)
     
     # ПАРАМЕТРЫ ОБРЕЗКИ: с 8 по 10 сек и последние 12 сек
-    c_start, c_end, t_tail = 8.0, 10.0, 11.5
+    c_start, c_end, t_tail = 8.0, 10.0, 11.0
 
     # КОЭФФИЦИЕНТ ВОТЕРМАРКИ: 0.15 — это аккуратный значок в углу
-    wm_scale = 0.15
+    wm_scale = 0.17
 
     if duration > 25.0:
         f_point = duration - t_tail
