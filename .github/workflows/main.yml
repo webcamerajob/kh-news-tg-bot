@@ -86,7 +86,7 @@ jobs:
           $WARP_PATH --accept-tos connect
           
           echo "⏳ Waiting for WARP stabilization (30s)..."
-          sleep 30
+          sleep 10
           
       - name: "🌍 Verify Proxy IP"
         run: |
