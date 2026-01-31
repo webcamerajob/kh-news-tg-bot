@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 MAX_POSTED_RECORDS = 300
 WATERMARK_SCALE = 0.35
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES   = 3
-RETRY_DELAY   = 5.0
+MAX_RETRIES    = 3
+RETRY_DELAY    = 5.0
 DEFAULT_DELAY = 10.0
 
 def escape_html(text: str) -> str:
@@ -111,20 +111,34 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
     
     for i in range(0, len(images), 10):
         chunk = images[i : i + 10]
-        logging.info(f"🖼️ Отправка пачки фото {i//10 + 1} (кол-во: {len(chunk)})")
+        logging.info(f"🖼️ Отправка пачки медиа {i//10 + 1} (кол-во: {len(chunk)})")
         media, files = [], {}
+        
         for idx, img_path in enumerate(chunk):
-            image_bytes = apply_watermark(img_path, scale=watermark_scale)
-            if image_bytes:
-                key = f"photo{idx}"
-                files[key] = (img_path.name, image_bytes, "image/jpeg")
-                media.append({"type": "photo", "media": f"attach://{key}"})
+            key = f"file{idx}"
+            
+            # === ПРОВЕРКА НА ВИДЕО ===
+            if img_path.suffix.lower() in ['.mp4', '.mov', '.m4v']:
+                # Это видео: читаем байты, не используем PIL, тип video
+                try:
+                    video_bytes = img_path.read_bytes()
+                    files[key] = (img_path.name, video_bytes, "video/mp4")
+                    media.append({"type": "video", "media": f"attach://{key}"})
+                except Exception as e:
+                    logging.error(f"❌ Ошибка чтения видео {img_path}: {e}")
+            else:
+                # Это фото: используем apply_watermark, тип photo
+                image_bytes = apply_watermark(img_path, scale=watermark_scale)
+                if image_bytes:
+                    files[key] = (img_path.name, image_bytes, "image/jpeg")
+                    media.append({"type": "photo", "media": f"attach://{key}"})
         
         if not media: continue
+        
         data = {"chat_id": chat_id, "media": json.dumps(media)}
         if not await _post_with_retry(client, "POST", url, data, files):
             success = False
-            logging.error(f"❌ Не удалось отправить пачку фото {i//10 + 1}")
+            logging.error(f"❌ Не удалось отправить пачку медиа {i//10 + 1}")
         
         if len(images) > 10: await asyncio.sleep(2)
     return success
@@ -141,6 +155,7 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
     if not all([aid, title, text_fn]): return None
     tp = article_dir / text_fn
     if not tp.is_file(): return None
+    # Здесь мы собираем и картинки, и видео, так как они все лежат в images
     v_imgs = [article_dir / "images" / img for img in art.get("images", []) if (article_dir / "images" / img).is_file()]
     return f"<b>{escape_html(title)}</b>", tp, v_imgs, title
 
