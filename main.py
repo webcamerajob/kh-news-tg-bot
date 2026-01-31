@@ -330,7 +330,7 @@ def add_watermark(input_video, watermark_img, output_video):
     c_start, c_end, t_tail = 8.0, 10.0, 11.0
 
     # КОЭФФИЦИЕНТ ВОТЕРМАРКИ: 0.15 — это аккуратный значок в углу
-    wm_scale = 0.17
+    wm_scale = 0.35
 
     if duration > 25.0:
         f_point = duration - t_tail
