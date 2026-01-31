@@ -499,7 +499,7 @@ def parse_and_save(post, lang, stopwords):
         with ThreadPoolExecutor(3) as ex:
             future_to_idx = {
                 ex.submit(save_image, url, OUTPUT_DIR / f"{aid}_{slug}" / "images"): i 
-                for i, url in enumerate(ordered_srcs[:10])
+                for i, url in enumerate(ordered_srcs)
             }
             for f in as_completed(future_to_idx):
                 idx = future_to_idx[f]
