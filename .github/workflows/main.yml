@@ -56,11 +56,35 @@ jobs:
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
       
-      - name: Connect Cloudflare WARP
+      - name: Install & Connect Cloudflare WARP
         run: |
-          /usr/bin/warp-cli --accept-tos registration new || true
-          /usr/bin/warp-cli --accept-tos mode proxy
-          /usr/bin/warp-cli --accept-tos connect
+          # 1. Добавляем репозиторий (через классический метод для 24.04)
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
+          
+          # 2. Установка с принудительным исправлением зависимостей
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+          
+          # Проверяем, где лежит файл
+          WARP_PATH=$(which warp-cli)
+          echo "📍 WARP-CLI found at: $WARP_PATH"
+          
+          if [ -z "$WARP_PATH" ]; then
+            echo "❌ ERROR: cloudflare-warp was not installed correctly"
+            exit 1
+          fi
+
+          # 3. Запуск сервиса
+          sudo warp-svc --accept-tos & 
+          sleep 5
+
+          # 4. Регистрация и коннект (используем найденный путь)
+          $WARP_PATH --accept-tos registration new || true
+          $WARP_PATH --accept-tos mode proxy
+          $WARP_PATH --accept-tos proxy port 40000
+          $WARP_PATH --accept-tos connect
+          
           echo "⏳ Waiting for WARP stabilization (30s)..."
           sleep 30
           
