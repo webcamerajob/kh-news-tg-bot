@@ -19,6 +19,14 @@ from bs4 import BeautifulSoup
 # Для парсинга используем curl_cffi с профилем Safari (чтобы сайт не банил)
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
+# === НОВАЯ ЗАВИСИМОСТЬ ===
+try:
+    from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    MOVIEPY_AVAILABLE = False
+    logging.warning("⚠️ Библиотека moviepy не найдена. Обработка видео недоступна.")
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # --- КОНФИГУРАЦИЯ ---
@@ -68,7 +76,7 @@ IPHONE_HEADERS = {
     "Upgrade-Insecure-Requests": "1"
 }
 
-# === ИСПРАВЛЕНИЕ: Добавляем переменную, которой не хватало в твоем коде ===
+# === FIX: Ты использовал эту переменную в коде, но не объявил её ===
 FALLBACK_HEADERS = IPHONE_HEADERS
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
@@ -313,7 +321,7 @@ def extract_img_url(img_tag: Any) -> Optional[str]:
 
     return None
 
-# --- БЛОК СОХРАНЕНИЯ (С ДОБАВЛЕНИЕМ ВИДЕО) ---
+# --- ИСПРАВЛЕННЫЙ БЛОК СОХРАНЕНИЯ КАРТИНОК И ВИДЕО ---
 def save_image(url, folder):
     if not url or url.startswith('data:'): return None
     
@@ -322,22 +330,22 @@ def save_image(url, folder):
     url_hash = hashlib.md5(url.encode()).hexdigest()[:10]
     orig_fn = url.rsplit('/', 1)[-1].split('?', 1)[0]
     
-    # Определяем расширение и приводим к нижнему регистру
+    # === ИЗМЕНЕНИЕ: Поддержка видео-расширений ===
     if '.' in orig_fn:
         ext = orig_fn.split('.')[-1].lower()
     else:
         ext = 'jpg'
     
-    # Если это мусор, ставим jpg. Но если это mp4/mov — оставляем!
+    # Если это не видео и не фото, или мусор > 4 символов - ставим jpg
     if len(ext) > 4 and ext not in ['mp4', 'mov', 'm4v']: 
         ext = 'jpg'
     
     fn = f"{url_hash}.{ext}"
     dest = folder / fn
     
-    # Увеличиваем таймаут для видео
+    # === ИЗМЕНЕНИЕ: Увеличенный таймаут для видео ===
     timeout = 60 if ext in ['mp4', 'mov', 'm4v'] else 20
-
+    
     # 1. Пробуем через SCRAPER (Chrome/Safari)
     try:
         resp = SCRAPER.get(url, timeout=timeout)
@@ -347,7 +355,7 @@ def save_image(url, folder):
     except Exception:
         pass # Если не вышло, идем к Плану Б
 
-    # 2. План Б: Обычный requests
+    # 2. План Б: Обычный requests (для картинок часто работает лучше)
     try:
         resp = requests.get(url, headers=FALLBACK_HEADERS, timeout=timeout)
         if resp.status_code == 200:
@@ -357,6 +365,119 @@ def save_image(url, folder):
         logging.error(f"❌ Не удалось скачать файл {url}: {e}")
     
     return None
+
+# === НОВАЯ ФУНКЦИЯ: СКАЧИВАНИЕ С YOUTUBE (LOADER.TO 360p) ===
+def download_youtube_loader_to(yt_url: str, folder: Path) -> Optional[str]:
+    folder.mkdir(parents=True, exist_ok=True)
+    video_hash = hashlib.md5(yt_url.encode()).hexdigest()[:10]
+    dest_path = folder / f"{video_hash}.mp4"
+    
+    if dest_path.exists():
+        return str(dest_path)
+
+    logging.info(f"▶️ YouTube: Запрос загрузки {yt_url} (360p)...")
+    
+    # format="360" - это самое близкое к 320p
+    api_url = "https://loader.to/ajax/download.php"
+    params = {"format": "360", "url": yt_url}
+    
+    try:
+        r = SCRAPER.get(api_url, params=params, timeout=20)
+        if r.status_code != 200:
+            logging.error(f"Loader.to API Error: {r.status_code}")
+            return None
+        
+        data = r.json()
+        task_id = data.get("id")
+        if not task_id:
+            logging.error("Loader.to не вернул ID задачи.")
+            return None
+            
+        progress_url = "https://loader.to/ajax/progress.php"
+        attempts = 0
+        download_url = None
+        
+        while attempts < 20: 
+            time.sleep(5)
+            rp = SCRAPER.get(progress_url, params={"id": task_id}, timeout=10)
+            if rp.status_code == 200:
+                p_data = rp.json()
+                if p_data.get("success") == 1:
+                    download_url = p_data.get("download_url")
+                    break
+                elif "text" in p_data and "Error" in p_data["text"]:
+                    logging.error(f"Loader.to вернул ошибку: {p_data['text']}")
+                    return None
+            attempts += 1
+            
+        if not download_url:
+            logging.warning(f"⏳ YouTube тайм-аут: видео не готово за 100 сек.")
+            return None
+            
+        logging.info(f"⬇️ Скачивание видео...")
+        with requests.get(download_url, stream=True, headers=FALLBACK_HEADERS, timeout=120) as vid_r:
+            vid_r.raise_for_status()
+            with open(dest_path, 'wb') as f:
+                for chunk in vid_r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    
+        return str(dest_path)
+
+    except Exception as e:
+        logging.error(f"❌ Ошибка при скачивании с YouTube: {e}")
+        return None
+
+# === ОБРАБОТКА ВИДЕО (ТОЛЬКО ВОТЕРМАРКА, БЕЗ РЕСАЙЗА) ===
+def process_video_320p(video_path: Path, watermark_path: Path) -> Optional[Path]:
+    if not MOVIEPY_AVAILABLE or not watermark_path or not watermark_path.exists():
+        return video_path
+
+    logging.info(f"🎬 Наложение вотермарки (оригинальный размер): {video_path.name}...")
+    temp_output = video_path.parent / f"processed_{video_path.name}"
+
+    try:
+        video = VideoFileClip(str(video_path))
+        
+        # УБРАН РЕСАЙЗ: Используем видео как есть
+        # video_resized = video.resize(height=320) <--- УДАЛЕНО
+
+        watermark = ImageClip(str(watermark_path))
+        
+        # Вотермарка 15% от ширины ОРИГИНАЛЬНОГО видео
+        wm_width = video.w * 0.15
+        watermark_resized = watermark.resize(width=wm_width)
+
+        padding = 10
+        pos_x = video.w - watermark_resized.w - padding
+        pos_y = padding
+        
+        watermark_positioned = watermark_resized.set_pos((pos_x, pos_y)).set_duration(video.duration)
+        
+        # Композитинг с оригинальным видео
+        final_video = CompositeVideoClip([video, watermark_positioned])
+
+        final_video.write_videofile(
+            str(temp_output),
+            codec='libx264',
+            audio_codec='aac',
+            bitrate="500k", # Битрейт оставляем невысоким для экономии места
+            verbose=False,
+            logger=None
+        )
+        
+        video.close()
+        final_video.close()
+
+        video_path.unlink()
+        temp_output.rename(video_path)
+        logging.info(f"✅ Видео обработано: {video_path.name}")
+        return video_path
+
+    except Exception as e:
+        logging.error(f"❌ Ошибка обработки видео {video_path.name}: {e}")
+        if temp_output.exists(): temp_output.unlink()
+        if video_path.exists(): return video_path
+        return None
 
 # --- БЛОК 4: API И ПАРСИНГ ---
 
@@ -425,7 +546,7 @@ def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
         logging.error(f"Ошибка загрузки контента для ID={aid}: {e}")
         return None
 
-def parse_and_save(post, lang, stopwords):
+def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = None):
     time.sleep(2)
     aid, slug, link = str(post["id"]), post["slug"], post.get("link")
     
@@ -482,6 +603,11 @@ def parse_and_save(post, lang, stopwords):
         garbage.decompose()
 
     for j in soup.find_all(["span", "script", "style", "iframe"]):
+        src = j.get("src", "")
+        # Не удаляем iframe youtube, они нужны для скачивания
+        if "youtube" in src or "youtu.be" in src:
+            continue
+            
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
         if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: 
@@ -507,46 +633,55 @@ def parse_and_save(post, lang, stopwords):
                 add_src(h)
 
     c_div = soup.find("div", class_="entry-content")
+    video_srcs = []
+    youtube_tasks = []
+
     if c_div:
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
-        
-        # === ВСТАВКА: ИЩЕМ ВИДЕО (добавляем в отдельный список) ===
-        video_srcs = []
-        
-        # 1. Теги video
+                
+        # 1. Прямые видео (mp4/mov)
         for vid in c_div.find_all("video"):
             if src := vid.get("src"):
-                if src not in seen_srcs:
-                    video_srcs.append(src)
-                    seen_srcs.add(src)
+                if src not in seen_srcs: video_srcs.append(src); seen_srcs.add(src)
             for source in vid.find_all("source"):
                 if src := source.get("src"):
-                    if src not in seen_srcs:
-                        video_srcs.append(src)
-                        seen_srcs.add(src)
+                    if src not in seen_srcs: video_srcs.append(src); seen_srcs.add(src)
         
-        # 2. Ссылки на файлы (mp4, mov)
         for a_tag in c_div.find_all("a"):
             if href := a_tag.get("href"):
                 if href.lower().endswith(('.mp4', '.mov', '.m4v')):
-                    if href not in seen_srcs:
-                        video_srcs.append(href)
-                        seen_srcs.add(href)
-                        
-        # Добавляем видео в конец списка загрузки
-        for v in video_srcs:
-            ordered_srcs.append(v)
-    # =========================================================
-
-    # Загрузка картинок (и теперь видео)
+                    if href not in seen_srcs: video_srcs.append(href); seen_srcs.add(href)
+        
+        # 2. ПОИСК YOUTUBE
+        # Iframe
+        for iframe in c_div.find_all("iframe"):
+            src = iframe.get("src", "")
+            if "youtube.com/embed" in src or "youtu.be" in src:
+                # Пытаемся вытащить чистую ссылку
+                if src.startswith("//"): src = "https:" + src
+                youtube_tasks.append(src)
+        
+        # Обычные ссылки, если они ведут на youtube
+        for yt_a in c_div.find_all("a"):
+            href = yt_a.get("href", "")
+            if "youtube.com/watch" in href or "youtu.be/" in href:
+                if href not in youtube_tasks:
+                    youtube_tasks.append(href)
+    
+    # Добавляем прямые видео в общий список загрузки
+    for v in video_srcs:
+        ordered_srcs.append(v)
+    
+    images_dir = OUTPUT_DIR / f"{aid}_{slug}" / "images"
+    # Загрузка картинок и обычных видео
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         # Уменьшаем кол-во потоков, чтобы не забанили за DDOS
         with ThreadPoolExecutor(3) as ex:
             future_to_idx = {
-                ex.submit(save_image, url, OUTPUT_DIR / f"{aid}_{slug}" / "images"): i 
+                ex.submit(save_image, url, images_dir): i 
                 for i, url in enumerate(ordered_srcs)
             }
             for f in as_completed(future_to_idx):
@@ -554,11 +689,45 @@ def parse_and_save(post, lang, stopwords):
                 if res := f.result():
                     images_results[idx] = Path(res).name
 
-    final_images = [img for img in images_results if img is not None]
+    # Скачивание YouTube
+    youtube_files = []
+    if youtube_tasks:
+        logging.info(f"▶️ Найдено {len(youtube_tasks)} видео с YouTube.")
+        for yt_url in youtube_tasks:
+            # Скачиваем
+            local_yt = download_youtube_loader_to(yt_url, images_dir)
+            if local_yt:
+                youtube_files.append(Path(local_yt).name)
 
-    if not final_images:
+    final_images = [img for img in images_results if img is not None]
+    final_images.extend(youtube_files)
+
+    # === ПОСТОБРАБОТКА (ВОТЕРМАРКА НА ВСЕ ВИДЕО) ===
+    processed_final_images = []
+    for img_name in final_images:
+        file_path = images_dir / img_name
+        # Проверяем, видео ли это (mp4 скачанный с ютуба тоже тут)
+        if file_path.suffix.lower() in ['.mp4', '.mov', '.m4v']:
+            if watermark_img_path and MOVIEPY_AVAILABLE:
+                # Обработка видео (вотермарка без ресайза)
+                processed_path = process_video_320p(file_path, watermark_img_path)
+                if processed_path and processed_path.exists():
+                     processed_final_images.append(processed_path.name)
+                else:
+                     processed_final_images.append(img_name)
+            else:
+                processed_final_images.append(img_name)
+        else:
+            processed_final_images.append(img_name)
+
+    if not processed_final_images:
         logging.warning(f"⚠️ ID={aid}: Нет норм картинок. Skip.")
         return None
+
+    # Теперь можно удалить iframe из текста, мы их скачали
+    if c_div:
+        for iframe in c_div.find_all("iframe"):
+            iframe.decompose() # Удаляем плеер из текста
 
     # Извлечение текста
     paras = []
@@ -584,7 +753,8 @@ def parse_and_save(post, lang, stopwords):
     meta = {
         "id": aid, "slug": slug, "date": post.get("date"), "link": link,
         "title": final_title, "text_file": "content.txt",
-        "images": final_images, "posted": False,
+        "images": processed_final_images,
+        "posted": False,
         "hash": curr_hash, "translated_to": ""
     }
 
@@ -605,7 +775,13 @@ def main():
     parser.add_argument("-l", "--lang", default="ru")
     parser.add_argument("--posted-state-file", default="articles/posted.json")
     parser.add_argument("--stopwords-file", default="stopwords.txt")
+    parser.add_argument("--watermark-image", help="Path to watermark PNG for videos")
     args = parser.parse_args()
+    
+    watermark_path = Path(args.watermark_image) if args.watermark_image else None
+    if watermark_path and not watermark_path.exists():
+        logging.warning(f"⚠️ Файл вотермарки не найден: {watermark_path}. Видео будут без нее.")
+        watermark_path = None
 
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -646,7 +822,7 @@ def main():
             
             if full_post:
                 # parse_and_save внутри себя делает AI-чистку и перевод
-                if meta := parse_and_save(full_post, args.lang, stop):
+                if meta := parse_and_save(full_post, args.lang, stop, watermark_path):
                     new_metas.append(meta)
                     count += 1
 
