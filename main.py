@@ -41,18 +41,22 @@ AI_MODELS = [
 ]
 
 # main.py
+
+# Константа для порта WARP (по умолчанию 40000)
+WARP_PROXY = "socks5h://127.0.0.1:40000"
+
 SCRAPER = cffi_requests.Session(
     impersonate="chrome110",
-    # Указываем SOCKS5 прокси, который поднял warp-cli
+    # Теперь весь трафик скрапера идет через WARP
     proxies={
-        "http": "socks5h://127.0.0.1:40000",
-        "https": "socks5h://127.0.0.1:40000"
+        "http": WARP_PROXY,
+        "https": WARP_PROXY
     },
     http_version=CurlHttpVersion.V1_1
 )
 
-# Для обычных requests (Plan B) тоже добавь:
-# requests.get(url, proxies={"http": "socks5://127.0.0.1:40000", "https": "socks5://127.0.0.1:40000"}, ...)
+# Не забудь обновить Plan B (обычные requests)
+# r = requests.get(endpoint, headers=FALLBACK_HEADERS, proxies={"https": WARP_PROXY}, timeout=30)
 
 # Эти заголовки имитируют переход из поисковика
 IPHONE_HEADERS = {
