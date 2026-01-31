@@ -41,11 +41,18 @@ AI_MODELS = [
 ]
 
 # main.py
-
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome120", # Самый надежный профиль в 2026
-    http_version=CurlHttpVersion.V1_1 
+    impersonate="chrome110",
+    # Указываем SOCKS5 прокси, который поднял warp-cli
+    proxies={
+        "http": "socks5h://127.0.0.1:40000",
+        "https": "socks5h://127.0.0.1:40000"
+    },
+    http_version=CurlHttpVersion.V1_1
 )
+
+# Для обычных requests (Plan B) тоже добавь:
+# requests.get(url, proxies={"http": "socks5://127.0.0.1:40000", "https": "socks5://127.0.0.1:40000"}, ...)
 
 # Эти заголовки имитируют переход из поисковика
 IPHONE_HEADERS = {
