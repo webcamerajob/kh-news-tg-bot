@@ -22,8 +22,8 @@ env:
   TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHANNEL:   ${{ secrets.TELEGRAM_CHANNEL }}
   WG_CONFIG:          ${{ secrets.WG_CONFIG }}
-  # GROQ больше не нужен, мы перешли на OpenRouter
-  # GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }} 
+  FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+  FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
 
 jobs:
   build-and-publish:
