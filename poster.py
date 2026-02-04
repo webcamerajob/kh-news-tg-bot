@@ -104,7 +104,7 @@ async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, dat
             await asyncio.sleep(RETRY_DELAY * attempt)
     return False
 
-async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, media_files: List[Path], watermark_scale: float) -> bool:
+async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, media_files: List[Path], watermark_scale: float, silent: bool = True) -> bool:
     if not media_files: return False
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
     
@@ -135,8 +135,12 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             media_array.append({"type": m_type, "media": f"attach://{f_key}"})
         
         if not media_array: continue
-        
-        data = {"chat_id": chat_id, "media": json.dumps(media_array)}
+
+        data = {
+            "chat_id": chat_id, 
+            "media": json.dumps(media_array),
+            "disable_notification": silent
+        }
         
         # Если хотя бы одна пачка упала, помечаем общий успех как False
         if not await _post_with_retry(client, "POST", url, data, files_to_send):
@@ -149,9 +153,15 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             
     return overall_success
 
-async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text: str, **kwargs) -> bool:
+async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text: str, silent: bool = False, **kwargs) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    data = {
+        "chat_id": chat_id, 
+        "text": text, 
+        "parse_mode": "HTML", 
+        "disable_web_page_preview": True,
+        "disable_notification": silent
+    }
     if kwargs.get("reply_markup"):
         data["reply_markup"] = json.dumps(kwargs["reply_markup"])
     return await _post_with_retry(client, "POST", url, data)
@@ -207,16 +217,24 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         logging.info("🔍 Нет новых статей для публикации.")
         return
 
-    logging.info(f"🆕 Найдено статей для публикации: {len(to_post)}")
+        # Обрезаем список заранее, чтобы знать точное количество
+    if limit:
+        to_post = to_post[:limit]
+
+    total_articles = len(to_post)
+    logging.info(f"🆕 Найдено статей для публикации: {total_articles}")
 
     async with httpx.AsyncClient() as client:
         sent = 0
-        for art in to_post:
-            if limit and sent >= limit: break
-            logging.info(f"📤 ID={art['id']}")
+        for idx, art in enumerate(to_post):
+            logging.info(f"📤 ID={art['id']} ({idx + 1}/{total_articles})")
+            
+            # Проверяем, является ли эта статья последней в текущем пакете
+            is_last_article = (idx == total_articles - 1)
             try:
                 if art["image_paths"]:
-                    await send_media_group(client, token, chat_id, art["image_paths"], watermark_scale)
+                    # Медиа всегда отправляем тихо, звук только на тексте
+                    await send_media_group(client, token, chat_id, art["image_paths"], watermark_scale, silent=True)
                 
                 txt = art["text_path"].read_text(encoding="utf-8").lstrip()
                 if txt.startswith(art["original_title"]):
@@ -226,12 +244,17 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 chunks = chunk_text(re.sub(r'\n{3,}', '\n\n', full_html).strip())
                 
                 for i, c in enumerate(chunks):
+                    is_last_chunk = (i == len(chunks) - 1)
+
+                    # ЗВУК ВКЛЮЧАЕТСЯ ТОЛЬКО ЕСЛИ: Последняя статья И Последний кусок текста
+                    should_be_silent = not (is_last_article and is_last_chunk)
+
                     markup = {"inline_keyboard": [[
                         {"text": "Обмен валют", "url": "https://t.me/mister1dollar"},
                         {"text": "Отзывы", "url": "https://t.me/feedback1dollar"}
-                    ]]} if i == len(chunks)-1 else None
-                    await send_message(client, token, chat_id, c, reply_markup=markup)
-
+                    ]]} if is_last_chunk else None
+                    
+                    await send_message(client, token, chat_id, c, reply_markup=markup, silent=should_be_silent)
                 if art['id'] not in posted_ids_list:
                     posted_ids_list.append(art['id'])
                 sent += 1
@@ -243,7 +266,9 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
             except Exception as e:
                 logging.error(f"❌ Критическая ошибка при отправке ID={art['id']}: {e}")
             
-            await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
+            # Не ждем после самой последней статьи
+            if not is_last_article:
+                await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
