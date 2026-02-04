@@ -328,31 +328,30 @@ def add_watermark(input_video, watermark_img, output_video):
     
     # ПАРАМЕТРЫ ВИДЕО
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
-    wm_scale = 0.5
+    wm_scale = 0.35
 
-    # --- НАСТРОЙКИ ОТСТУПОВ (МОЖНО МЕНЯТЬ ТУТ) ---
-    # Для горизонтальных (YouTube, TV)
+    # ОТСТУПЫ
     pad_x_horiz = 20
-    pad_y_horiz = 20 
-    
-    # Для вертикальных (Reels, TikTok) - отступы больше из-за интерфейса
+    pad_y_horiz = 10 
     pad_x_vert = 20
     pad_y_vert = 100 
 
     # --- ФОРМУЛЫ FFMPEG ---
-    # 1. Масштабирование (Force Aspect Ratio)
+    # 1. Масштабирование
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. Умное позиционирование (Logic: if h > w then Vertical else Horizontal)
-    # X: ШиринаВидео - ШиринаЛого - (Если верт ? 20 : 20)
-    # Y: (Если верт ? 00 : 20)
-    overlay_x = f"W-w-if(h>w,{pad_x_vert},{pad_x_horiz})"
-    overlay_y = f"if(h>w,{pad_y_vert},{pad_y_horiz})"
+    # 3. ПОЗИЦИОНИРОВАНИЕ (FIXED: Без запятых, через математику)
+    # X: Если верт (gt=1) то 40, иначе (lte=1) то 20
+    x_offset = f"(gt(h,w)*{pad_x_vert}+lte(h,w)*{pad_x_horiz})"
+    x_expr = f"W-w-{x_offset}"
     
-    overlay_expr = f"[vid][wm_fixed]overlay=x='{overlay_x}':y='{overlay_y}'"
+    # Y: Если верт (gt=1) то 200, иначе (lte=1) то 50
+    y_expr = f"(gt(h,w)*{pad_y_vert}+lte(h,w)*{pad_y_horiz})"
+    
+    overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
 
     if duration > 25.0:
         f_point = duration - t_tail
@@ -393,8 +392,10 @@ def add_watermark(input_video, watermark_img, output_video):
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return True
     except subprocess.CalledProcessError as e:
+        # Логируем stderr полностью, чтобы видеть детали ошибки
         logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
         return False
+
 # --- БЛОК 4: API И ПАРСИНГ ---
 
 def fetch_cat_id(url, slug):
