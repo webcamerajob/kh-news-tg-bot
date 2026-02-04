@@ -326,28 +326,38 @@ def add_watermark(input_video, watermark_img, output_video):
 
     duration = get_video_duration(input_video)
     
-    # ПАРАМЕТРЫ
+    # ПАРАМЕТРЫ ВИДЕО
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
     wm_scale = 0.5
 
-    # --- ФОРМУЛА ГЕОМЕТРИИ ---
-    # 1. w = iw * wm_scale (Ширина = 35% от ширины видео)
-    # 2. h = ow / (main_w / main_h) (Высота = Новая Ширина / Исходные Пропорции Картинки)
-    # Это полностью игнорирует высоту видео и его SAR. Вотермарка останется такой, какая она есть в файле.
+    # --- НАСТРОЙКИ ОТСТУПОВ (МОЖНО МЕНЯТЬ ТУТ) ---
+    # Для горизонтальных (YouTube, TV)
+    pad_x_horiz = 20
+    pad_y_horiz = 20 
+    
+    # Для вертикальных (Reels, TikTok) - отступы больше из-за интерфейса
+    pad_x_vert = 20
+    pad_y_vert = 100 
+
+    # --- ФОРМУЛЫ FFMPEG ---
+    # 1. Масштабирование (Force Aspect Ratio)
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
-    # Добавляем setsar=1, чтобы пиксели самой вотермарки стали квадратными
+    # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # Накладываем
-    overlay_expr = "[vid][wm_fixed]overlay=W-w-20:100"
+    # 3. Умное позиционирование (Logic: if h > w then Vertical else Horizontal)
+    # X: ШиринаВидео - ШиринаЛого - (Если верт ? 20 : 20)
+    # Y: (Если верт ? 00 : 20)
+    overlay_x = f"W-w-if(h>w,{pad_x_vert},{pad_x_horiz})"
+    overlay_y = f"if(h>w,{pad_y_vert},{pad_y_horiz})"
+    
+    overlay_expr = f"[vid][wm_fixed]overlay=x='{overlay_x}':y='{overlay_y}'"
 
     if duration > 25.0:
         f_point = duration - t_tail
-        logging.info(f"✂️ Обрезка + Force Aspect Ratio (Scale: {wm_scale})")
+        logging.info(f"✂️ Обрезка + Smart Position (Scale: {wm_scale})")
         
-        # Обратите внимание: мы убрали setsar=1 у видео, так как новая формула 
-        # делает вотермарку независимой от свойств видео.
         v_filter = (
             f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
             f"[1:v][main]{scale_expr};"
@@ -364,7 +374,7 @@ def add_watermark(input_video, watermark_img, output_video):
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
-        logging.info(f"⚠️ Видео короткое, Force Aspect Ratio (Scale: {wm_scale})")
+        logging.info(f"⚠️ Видео короткое, Smart Position (Scale: {wm_scale})")
         
         full_filter = (
             f"[1:v][0:v]{scale_expr};"
@@ -385,7 +395,6 @@ def add_watermark(input_video, watermark_img, output_video):
     except subprocess.CalledProcessError as e:
         logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
         return False
-
 # --- БЛОК 4: API И ПАРСИНГ ---
 
 def fetch_cat_id(url, slug):
