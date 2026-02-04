@@ -327,8 +327,8 @@ def add_watermark(input_video, watermark_img, output_video):
     duration = get_video_duration(input_video)
     
     # ПАРАМЕТРЫ
-    c_start, c_end, t_tail = 8.0, 10.0, 11.0
-    wm_scale = 0.35
+    c_start, c_end, t_tail = 0.0, 0.0, 11.0
+    wm_scale = 0.6
 
     # --- ФОРМУЛА ГЕОМЕТРИИ ---
     # 1. w = iw * wm_scale (Ширина = 35% от ширины видео)
