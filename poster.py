@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import re
+import requests  # Добавлено для Facebook
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
@@ -13,12 +14,17 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+# --- КОНСТАНТЫ ---
 MAX_POSTED_RECORDS = 300
 WATERMARK_SCALE = 0.35
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES    = 3
-RETRY_DELAY    = 5.0
+MAX_RETRIES     = 3
+RETRY_DELAY     = 5.0
 DEFAULT_DELAY = 10.0
+
+# --- НАСТРОЙКИ FACEBOOK ---
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 
 def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
@@ -81,6 +87,61 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
         try:
             with open(img_path, 'rb') as f: return f.read()
         except: return b""
+
+def post_to_facebook(text, link, media_files=None):
+    """
+    Публикует пост в Facebook.
+    Приоритет: Видео -> Фото -> Ссылка.
+    """
+    if not FB_PAGE_ACCESS_TOKEN or not FB_PAGE_ID:
+        logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
+        return
+
+    # Базовый URL
+    url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
+    payload = {
+        "access_token": FB_PAGE_ACCESS_TOKEN, 
+        "message": f"{text}\n\n{link}"
+    }
+    files = {}
+
+    try:
+        # Ищем видео или фото в скачанных файлах
+        video_file = next((f for f in (media_files or []) if str(f).endswith('.mp4')), None)
+        image_file = next((f for f in (media_files or []) if str(f).endswith(('.jpg', '.png', '.jpeg'))), None)
+
+        if video_file:
+            logging.info(f"📤 FB: Грузим видео {video_file.name}...")
+            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+            # У видео поле называется 'description', а не 'message'
+            payload = {
+                "access_token": FB_PAGE_ACCESS_TOKEN, 
+                "description": f"{text}\n\nИсточник: {link}"
+            }
+            files = {'source': open(video_file, 'rb')}
+        
+        elif image_file:
+            logging.info(f"📤 FB: Грузим фото {image_file.name}...")
+            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+            files = {'source': open(image_file, 'rb')}
+        
+        else:
+            logging.info("📤 FB: Грузим только ссылку...")
+            payload["link"] = link
+
+        # Отправка запроса с таймаутом 60 сек (видео может грузиться долго)
+        r = requests.post(url, data=payload, files=files, timeout=60)
+        
+        if files:
+            files['source'].close()
+
+        if r.status_code == 200:
+            logging.info(f"✅ Facebook Success: ID={r.json().get('id')}")
+        else:
+            logging.error(f"❌ Facebook Error: {r.status_code} - {r.text}")
+
+    except Exception as e:
+        logging.error(f"❌ Facebook Exception: {e}")
 
 async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, data: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
@@ -209,7 +270,15 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 aid = str(m.get("id"))
                 if aid and aid != 'None' and aid not in posted_ids_set:
                     if v := validate_article(m, d):
-                        to_post.append({"id": aid, "html_title": v[0], "text_path": v[1], "image_paths": v[2], "original_title": v[3]})
+                        # ДОБАВЛЕНО: передаем ссылку ("link") из метаданных в структуру
+                        to_post.append({
+                            "id": aid, 
+                            "html_title": v[0], 
+                            "text_path": v[1], 
+                            "image_paths": v[2], 
+                            "original_title": v[3],
+                            "link": m.get("link") # <-- Ссылка для Facebook
+                        })
             except: continue
 
     to_post.sort(key=lambda x: int(x["id"]))
@@ -232,10 +301,11 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
             # Проверяем, является ли эта статья последней в текущем пакете
             is_last_article = (idx == total_articles - 1)
             try:
+                # --- TELEGRAM: MEDIA ---
                 if art["image_paths"]:
-                    # Медиа всегда отправляем тихо, звук только на тексте
                     await send_media_group(client, token, chat_id, art["image_paths"], watermark_scale, silent=True)
                 
+                # --- TELEGRAM: TEXT ---
                 txt = art["text_path"].read_text(encoding="utf-8").lstrip()
                 if txt.startswith(art["original_title"]):
                     txt = txt[len(art["original_title"]):].lstrip()
@@ -246,7 +316,6 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 for i, c in enumerate(chunks):
                     is_last_chunk = (i == len(chunks) - 1)
 
-                    # ЗВУК ВКЛЮЧАЕТСЯ ТОЛЬКО ЕСЛИ: Последняя статья И Последний кусок текста
                     should_be_silent = not (is_last_article and is_last_chunk)
 
                     markup = {"inline_keyboard": [[
@@ -255,6 +324,17 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                     ]]} if is_last_chunk else None
                     
                     await send_message(client, token, chat_id, c, reply_markup=markup, silent=should_be_silent)
+                
+                # --- FACEBOOK: POSTING ---
+                # Отправляем в FB после успешной отправки в Telegram
+                try:
+                    fb_text = art['original_title'] # Используем чистый заголовок
+                    fb_link = art.get('link', '')   # Ссылка из метаданных
+                    post_to_facebook(fb_text, fb_link, art["image_paths"])
+                except Exception as fb_e:
+                    logging.error(f"❌ FB Error for ID={art['id']}: {fb_e}")
+                # -------------------------
+
                 if art['id'] not in posted_ids_list:
                     posted_ids_list.append(art['id'])
                 sent += 1
