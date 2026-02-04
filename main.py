@@ -328,7 +328,7 @@ def add_watermark(input_video, watermark_img, output_video):
     
     # ПАРАМЕТРЫ
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
-    wm_scale = 0.6
+    wm_scale = 0.5
 
     # --- ФОРМУЛА ГЕОМЕТРИИ ---
     # 1. w = iw * wm_scale (Ширина = 35% от ширины видео)
@@ -340,7 +340,7 @@ def add_watermark(input_video, watermark_img, output_video):
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
     # Накладываем
-    overlay_expr = "[vid][wm_fixed]overlay=W-w-20:20"
+    overlay_expr = "[vid][wm_fixed]overlay=W-w-20:100"
 
     if duration > 25.0:
         f_point = duration - t_tail
