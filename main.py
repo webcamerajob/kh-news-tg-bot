@@ -328,27 +328,35 @@ def add_watermark(input_video, watermark_img, output_video):
     
     # ПАРАМЕТРЫ ВИДЕО
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
-    wm_scale = 0.35
+    wm_scale = 0.4
 
-    # ОТСТУПЫ
+    # --- НАСТРОЙКИ ОТСТУПОВ ---
+    
+    # ГОРИЗОНТАЛЬНОЕ ВИДЕО (YouTube, 16:9)
+    # Если вы хотите 100px сверху для горизонтального - пишите 100 сюда:
     pad_x_horiz = 20
-    pad_y_horiz = 10 
-    pad_x_vert = 20
-    pad_y_vert = 100 
+    pad_y_horiz = 20
 
-    # --- ФОРМУЛЫ FFMPEG ---
+    # ВЕРТИКАЛЬНОЕ ВИДЕО (TikTok, Reels, 9:16)
+    pad_x_vert = 20
+    pad_y_vert = 100
+
+    # --- ФОРМУЛЫ (НЕ МЕНЯТЬ) ---
     # 1. Масштабирование
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. ПОЗИЦИОНИРОВАНИЕ (FIXED: Без запятых, через математику)
-    # X: Если верт (gt=1) то 40, иначе (lte=1) то 20
-    x_offset = f"(gt(h,w)*{pad_x_vert}+lte(h,w)*{pad_x_horiz})"
-    x_expr = f"W-w-{x_offset}"
+    # 3. ПОЗИЦИОНИРОВАНИЕ (Математическая логика без if/запятых)
+    # gt(h,w) = 1 (Вертикальное), 0 (Горизонтальное)
+    # lte(h,w) = 1 (Горизонтальное), 0 (Вертикальное)
+
+    # Вычисляем X
+    x_offset_calc = f"(gt(h,w)*{pad_x_vert}+lte(h,w)*{pad_x_horiz})"
+    x_expr = f"W-w-{x_offset_calc}"
     
-    # Y: Если верт (gt=1) то 200, иначе (lte=1) то 50
+    # Вычисляем Y
     y_expr = f"(gt(h,w)*{pad_y_vert}+lte(h,w)*{pad_y_horiz})"
     
     overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
@@ -387,6 +395,13 @@ def add_watermark(input_video, watermark_img, output_video):
             "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
             "-c:a", "copy", str(output_video)
         ]
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
+        return False
     
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
