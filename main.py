@@ -331,33 +331,30 @@ def add_watermark(input_video, watermark_img, output_video):
     wm_scale = 0.4
 
     # --- НАСТРОЙКИ ОТСТУПОВ ---
-    
-    # ГОРИЗОНТАЛЬНОЕ ВИДЕО (YouTube, 16:9)
-    # Если вы хотите 100px сверху для горизонтального - пишите 100 сюда:
+    # Для горизонтальных (16:9)
     pad_x_horiz = 20
-    pad_y_horiz = 20
+    pad_y_horiz = 20 
 
-    # ВЕРТИКАЛЬНОЕ ВИДЕО (TikTok, Reels, 9:16)
+    # Для вертикальных (9:16)
     pad_x_vert = 20
-    pad_y_vert = 100
+    pad_y_vert = 100  # 100 пикселей сверху
 
-    # --- ФОРМУЛЫ (НЕ МЕНЯТЬ) ---
+    # --- ФОРМУЛЫ ---
     # 1. Масштабирование
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. ПОЗИЦИОНИРОВАНИЕ (Математическая логика без if/запятых)
-    # gt(h,w) = 1 (Вертикальное), 0 (Горизонтальное)
-    # lte(h,w) = 1 (Горизонтальное), 0 (Вертикальное)
-
-    # Вычисляем X
-    x_offset_calc = f"(gt(h,w)*{pad_x_vert}+lte(h,w)*{pad_x_horiz})"
+    # 3. ПОЗИЦИОНИРОВАНИЕ (ИСПРАВЛЕНО: H и W большие)
+    # gt(H,W) -> Проверяем высоту и ширину ГЛАВНОГО ВИДЕО
+    
+    # X:
+    x_offset_calc = f"(gt(H,W)*{pad_x_vert}+lte(H,W)*{pad_x_horiz})"
     x_expr = f"W-w-{x_offset_calc}"
     
-    # Вычисляем Y
-    y_expr = f"(gt(h,w)*{pad_y_vert}+lte(h,w)*{pad_y_horiz})"
+    # Y:
+    y_expr = f"(gt(H,W)*{pad_y_vert}+lte(H,W)*{pad_y_horiz})"
     
     overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
 
@@ -400,14 +397,6 @@ def add_watermark(input_video, watermark_img, output_video):
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
-        return False
-    
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        return True
-    except subprocess.CalledProcessError as e:
-        # Логируем stderr полностью, чтобы видеть детали ошибки
         logging.error(f"❌ FFmpeg Error: {e.stderr.decode()}")
         return False
 
