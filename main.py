@@ -383,33 +383,57 @@ def add_watermark(input_video, watermark_img, output_video):
 # --- БЛОК 4: API И ПАРСИНГ ---
 
 def fetch_cat_id(url, slug):
+    # --- HARDCODE BLOCK ---
+    # Чтобы лишний раз не дёргать Cloudflare на старте,
+    # возвращаем известные ID сразу.
+    if slug == "national":
+        logging.info(f"ℹ️ [Skip Net] Используем Hardcoded ID для '{slug}': 19")
+        return 19
+    # ----------------------
+
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
+    # Используем Fallback заголовки
+    fallback_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     for attempt in range(1, 4):
         try:
             logging.info(f"📡 Попытка {attempt}/3: Запрос к API {slug}...")
-            r = SCRAPER.get(endpoint, timeout=30)
+            
+            # Попытка 1: Через curl_cffi (WARP)
+            try:
+                r = SCRAPER.get(endpoint, timeout=30)
+            except Exception as e:
+                logging.warning(f"⚠️ SCRAPER fail: {e}, пробуем requests...")
+                r = requests.get(endpoint, headers=fallback_headers, timeout=30)
+
             content_type = r.headers.get("Content-Type", "")
-            if "text/html" in content_type:
-                logging.warning(f"⚠️ Cloudflare Challenge detected (получен HTML).")
+            
+            # Проверка на Cloudflare
+            if "text/html" in content_type or "<!DOCTYPE html>" in r.text[:100]:
+                logging.warning(f"⚠️ Cloudflare Challenge detected.")
                 raise ValueError("Cloudflare JS Challenge active")
+            
             r.raise_for_status()
             data = r.json()
+            
             if data and isinstance(data, list):
                 cat_id = data[0]["id"]
                 logging.info(f"✅ ID категории найден: {cat_id}")
                 return cat_id
             else:
-                logging.error(f"❌ Категория '{slug}' не найдена в API.")
+                logging.error(f"❌ Категория '{slug}' не найдена.")
                 return None
+
         except Exception as e:
             logging.warning(f"⚠️ Попытка {attempt} провалена: {e}")
             if attempt < 3:
-                wait_time = attempt * 10
-                logging.info(f"⏳ Ожидание {wait_time} сек перед повторной попыткой...")
-                time.sleep(wait_time)
+                time.sleep(5 * attempt)
             else:
-                logging.error(f"💀 Все попытки исчерпаны. Не удалось получить ID категории.")
-                raise
+                # ВМЕСТО ПАДЕНИЯ ВОЗВРАЩАЕМ 19 КАК ПОСЛЕДНЮЮ НАДЕЖДУ
+                logging.error(f"💀 Все попытки исчерпаны. Возвращаем дефолтный ID 19.")
+                return 19
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug"}
