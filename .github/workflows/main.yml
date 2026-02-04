@@ -58,35 +58,34 @@ jobs:
       
       - name: Install & Connect Cloudflare WARP
         run: |
-          # 1. Добавляем репозиторий (через классический метод для 24.04)
+          # 1. Добавляем репозиторий
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
           
-          # 2. Установка с принудительным исправлением зависимостей
+          # 2. Установка
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
           
-          # Проверяем, где лежит файл
-          WARP_PATH=$(which warp-cli)
-          echo "📍 WARP-CLI found at: $WARP_PATH"
+          # 3. !!! ИСПРАВЛЕНИЕ ОШИБКИ SOCKET BOUND !!!
+          # Принудительно останавливаем все копии, которые могли запуститься при установке
+          sudo pkill warp-svc || true
+          # Удаляем зависший файл сокета, из-за которого была ошибка
+          sudo rm -rf /run/cloudflare-warp/warp_service
+          sudo rm -rf /var/lib/cloudflare-warp/settings.json
           
-          if [ -z "$WARP_PATH" ]; then
-            echo "❌ ERROR: cloudflare-warp was not installed correctly"
-            exit 1
-          fi
-
-          # 3. Запуск сервиса
+          # 4. Чистый запуск сервиса
           sudo warp-svc --accept-tos & 
+          # Ждем, пока сервис создаст новый сокет
           sleep 5
-
-          # 4. Регистрация и коннект (используем найденный путь)
-          $WARP_PATH --accept-tos registration new || true
-          $WARP_PATH --accept-tos mode proxy
-          $WARP_PATH --accept-tos proxy port 40000
-          $WARP_PATH --accept-tos connect
           
-          echo "⏳ Waiting for WARP stabilization (30s)..."
-          sleep 10
+          # 5. Регистрация
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          
+          echo "⏳ Waiting for WARP stabilization (15s)..."
+          sleep 15
           
       - name: "🌍 Verify Proxy IP"
         run: |
