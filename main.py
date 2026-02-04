@@ -326,28 +326,33 @@ def add_watermark(input_video, watermark_img, output_video):
 
     duration = get_video_duration(input_video)
     
+    # ПАРАМЕТРЫ
     c_start, c_end, t_tail = 8.0, 10.0, 11.0
     wm_scale = 0.35
 
-    # --- УМНЫЙ ФИЛЬТР ---
-    # 1. scale='trunc(iw*sar/2)*2':'ih' -> Если пиксели были кривые, мы меняем ширину видео, 
-    #    чтобы картинка визуально осталась такой же.
-    # 2. setsar=1 -> Теперь говорим, что пиксели квадратные.
-    fix_video_props = "scale='trunc(iw*sar/2)*2':'ih',setsar=1"
+    # --- ФОРМУЛА ГЕОМЕТРИИ ---
+    # 1. w = iw * wm_scale (Ширина = 35% от ширины видео)
+    # 2. h = ow / (main_w / main_h) (Высота = Новая Ширина / Исходные Пропорции Картинки)
+    # Это полностью игнорирует высоту видео и его SAR. Вотермарка останется такой, какая она есть в файле.
+    scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
-    scale_wm = f"scale2ref=iw*{wm_scale}:-1[wm][vid]"
-    wm_sar = "[wm]setsar=1[wm_fixed]"
-    overlay = "[vid][wm_fixed]overlay=W-w-20:20"
+    # Добавляем setsar=1, чтобы пиксели самой вотермарки стали квадратными
+    wm_sar_fix = "[wm]setsar=1[wm_fixed]"
+    
+    # Накладываем
+    overlay_expr = "[vid][wm_fixed]overlay=W-w-20:20"
 
     if duration > 25.0:
         f_point = duration - t_tail
-        logging.info(f"✂️ Обрезка + Safe Aspect Ratio (Scale: {wm_scale})")
+        logging.info(f"✂️ Обрезка + Force Aspect Ratio (Scale: {wm_scale})")
         
+        # Обратите внимание: мы убрали setsar=1 у видео, так как новая формула 
+        # делает вотермарку независимой от свойств видео.
         v_filter = (
-            f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB,{fix_video_props}[main];"
-            f"[1:v][main]{scale_wm};"
-            f"{wm_sar};"
-            f"{overlay}"
+            f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
+            f"[1:v][main]{scale_expr};"
+            f"{wm_sar_fix};"
+            f"{overlay_expr}"
         )
         a_filter = f"aselect='lt(t,{c_start})+between(t,{c_end},{f_point})',asetpts=N/SR/TB"
         
@@ -359,13 +364,12 @@ def add_watermark(input_video, watermark_img, output_video):
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
-        logging.info(f"⚠️ Видео короткое, Safe Aspect Ratio (Scale: {wm_scale})")
+        logging.info(f"⚠️ Видео короткое, Force Aspect Ratio (Scale: {wm_scale})")
         
         full_filter = (
-            f"[0:v]{fix_video_props}[v0];"
-            f"[1:v][v0]{scale_wm};"
-            f"{wm_sar};"
-            f"{overlay}"
+            f"[1:v][0:v]{scale_expr};"
+            f"{wm_sar_fix};"
+            f"{overlay_expr}"
         )
         
         cmd = [
