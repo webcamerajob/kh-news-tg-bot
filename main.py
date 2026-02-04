@@ -45,7 +45,7 @@ WARP_PROXY = "socks5h://127.0.0.1:40000"
 
 # Глобальная сессия для парсинга сайтов
 SCRAPER = cffi_requests.Session(
-    impersonate="chrome110",
+    impersonate="chrome119",
     proxies={
         "http": WARP_PROXY,
         "https": WARP_PROXY
