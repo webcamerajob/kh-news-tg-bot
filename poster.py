@@ -88,58 +88,48 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
             with open(img_path, 'rb') as f: return f.read()
         except: return b""
 
-def post_to_facebook(text, link, media_paths=None):
-    """
-    Публикует пост в Facebook. 
-    media_paths должен содержать пути к УЖЕ ОБРАБОТАННЫМ файлам (с вотермарками).
-    """
+def post_to_facebook(text, link, media_files=None, watermark_scale=WATERMARK_SCALE):
     if not FB_PAGE_ACCESS_TOKEN or not FB_PAGE_ID:
+        logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
         return
 
+    # Текст статьи полностью
     full_message = f"{text}\n\nИсточник: {link}"
     
-    # Ищем видео среди переданных путей
-    video_file = next((f for f in (media_paths or []) if str(f).endswith('.mp4')), None)
-    # Ищем фото среди переданных путей
-    image_file = next((f for f in (media_paths or []) if str(f).endswith(('.jpg', '.png', '.jpeg'))), None)
+    # Ищем видео и фото
+    video_file = next((f for f in (media_files or []) if str(f).endswith(('.mp4', '.mov', '.m4v'))), None)
+    image_file = next((f for f in (media_files or []) if str(f).endswith(('.jpg', '.png', '.jpeg', '.webp'))), None)
 
     try:
         if video_file:
-            logging.info(f"📤 FB: Отправка видео с вотермарком: {video_file}")
+            logging.info(f"📤 FB: Видео (вотермарк уже наложен парсером) -> {video_file.name}")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-            payload = {
-                "access_token": FB_PAGE_ACCESS_TOKEN,
-                "description": full_message
-            }
+            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "description": full_message}
             with open(video_file, 'rb') as f:
                 r = requests.post(url, data=payload, files={'source': f}, timeout=120)
         
         elif image_file:
-            logging.info(f"📤 FB: Отправка фото с вотермарком: {image_file}")
+            logging.info(f"📤 FB: Накладываем вотермарк на фото -> {image_file.name}")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
-            payload = {
-                "access_token": FB_PAGE_ACCESS_TOKEN,
-                "message": full_message
-            }
-            # Для фото используем apply_watermark, если вдруг передали оригинал, 
-            # но лучше передавать уже готовый байтовый поток или путь
-            img_bytes = apply_watermark(image_file, WATERMARK_SCALE)
-            r = requests.post(url, data=payload, files={'source': ('image.jpg', img_bytes)}, timeout=60)
+            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message}
+            
+            # Тот самый метод, который ты используешь для Телеграма
+            img_bytes = apply_watermark(image_file, watermark_scale)
+            
+            if img_bytes:
+                r = requests.post(url, data=payload, files={'source': ('image.jpg', img_bytes, 'image/jpeg')}, timeout=60)
+            else:
+                return
         
         else:
-            # Если медиа нет, только текст
+            logging.info("📤 FB: Только текст и ссылка...")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
-            r = requests.post(url, data={
-                "access_token": FB_PAGE_ACCESS_TOKEN,
-                "message": full_message,
-                "link": link
-            })
+            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message, "link": link})
 
         if r.status_code == 200:
-            logging.info(f"✅ FB Success: {r.json().get('id')}")
+            logging.info(f"✅ FB Success: ID={r.json().get('id')}")
         else:
             logging.error(f"❌ FB Error: {r.text}")
-
     except Exception as e:
         logging.error(f"❌ FB Exception: {e}")
 
@@ -326,14 +316,19 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                     await send_message(client, token, chat_id, c, reply_markup=markup, silent=should_be_silent)
                 
                 # --- FACEBOOK: POSTING ---
-                # Отправляем в FB после успешной отправки в Telegram
                 try:
-                    fb_text = art['original_title'] # Используем чистый заголовок
-                    fb_link = art.get('link', '')   # Ссылка из метаданных
-                    post_to_facebook(fb_text, fb_link, art["image_paths"])
+                    # Берем весь текст из файла статьи (content.ru.txt или какой там выбран)
+                    fb_text_full = art["text_path"].read_text(encoding="utf-8").strip()
+                    
+                    # Отправляем в FB
+                    post_to_facebook(
+                        text=fb_text_full, 
+                        link=art.get('link', ''), 
+                        media_files=art["image_paths"],
+                        watermark_scale=watermark_scale
+                    )
                 except Exception as fb_e:
-                    logging.error(f"❌ FB Error for ID={art['id']}: {fb_e}")
-                # -------------------------
+                    logging.error(f"❌ FB Error: {fb_e}")
 
                 if art['id'] not in posted_ids_list:
                     posted_ids_list.append(art['id'])
