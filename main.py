@@ -384,21 +384,6 @@ def add_watermark(input_video, watermark_img, output_video):
             "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
             "-c:a", "copy", str(output_video)
         ]
-    else:
-        logging.info(f"⚠️ Видео короткое, Smart Position (Scale: {wm_scale})")
-        
-        full_filter = (
-            f"[1:v][0:v]{scale_expr};"
-            f"{wm_sar_fix};"
-            f"{overlay_expr}"
-        )
-        
-        cmd = [
-            "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
-            "-filter_complex", full_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
-            "-c:a", "copy", str(output_video)
-        ]
     
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
