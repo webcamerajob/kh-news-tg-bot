@@ -330,45 +330,35 @@ def add_watermark(input_video, watermark_img, output_video):
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
     wm_scale = 0.4
 
-    # --- НАСТРОЙКИ ОТСТУПОВ ---
-    # Давай вернемся к фиксированным пикселям, раз проценты на твоих видео не зашли.
-    # margin_x — отступ от ПРАВОГО края
-    # margin_y — отступ от ВЕРХНЕГО края
-    margin_x = 20 
-    margin_y = 20 
-
-    # Для вертикальных видео (Reels/Shorts) отступ сверху часто нужен больше (под 100)
-    # x_offset_calc: если высота > ширины, берем 30, иначе 30 (тут симметрично)
-    # y_offset_calc: если высота > ширины, берем 100, иначе 30
-    x_offset_calc = f"30"
-    y_offset_calc = f"(gt(H,W)*100+lte(H,W)*30)"
+    # --- НАСТРОЙКИ ОТСТУПОВ (Относительные) ---
+    # 0.03 означает 3% от ширины/высоты видео
+    pad_rel = 0.03
 
     # --- ФОРМУЛЫ ---
-    # 1. Масштабирование
-    # Важно: используем main_w для привязки ширины вотермарки к ширине видео
+    # 1. Масштабирование (привязываем ширину ВМ к ширине видео)
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. ПОЗИЦИОНИРОВАНИЕ
-    # X: W (ширина видео) - w (ширина лого) - отступ
-    x_expr = f"W-w-{x_offset_calc}"
-    
-    # Y: просто отступ (т.к. считаем от верхнего нуля)
-    y_expr = f"{y_offset_calc}"
+    # 3. ПОЗИЦИОНИРОВАНИЕ (Правый верхний угол)
+    # x = Ширина_видео - Ширина_ВМ - Отступ
+    # y = Отступ (зависит от ориентации: для вертикальных чуть больше)
+    x_expr = f"W-w-(W*{pad_rel})"
+    y_expr = f"if(gt(H,W), H*0.07, H*{pad_rel})"
     
     overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
 
     if duration > 25.0:
         f_point = duration - t_tail
-        logging.info(f"✂️ Обрезка + Smart Position (Scale: {wm_scale})")
+        logging.info(f"✂️ Обрезка + Правый верхний угол (Scale: {wm_scale})")
         
+        # ВАЖНО: Сначала накладываем вотермарк на весь поток, а ПОТОМ обрезаем. 
+        # Это исключает черные экраны и пропадание видео.
         v_filter = (
-            f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
-            f"[1:v][main]{scale_expr};"
+            f"[1:v][0:v]{scale_expr};"
             f"{wm_sar_fix};"
-            f"{overlay_expr}"
+            f"{overlay_expr},select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB"
         )
         a_filter = f"aselect='lt(t,{c_start})+between(t,{c_end},{f_point})',asetpts=N/SR/TB"
         
@@ -376,8 +366,23 @@ def add_watermark(input_video, watermark_img, output_video):
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", v_filter,
             "-af", a_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "26", # Чуть улучшил качество (crf 26)
             "-c:a", "aac", "-b:a", "128k", str(output_video)
+        ]
+    else:
+        logging.info(f"⚠️ Видео короткое, Правый верхний угол (Scale: {wm_scale})")
+        
+        full_filter = (
+            f"[1:v][0:v]{scale_expr};"
+            f"{wm_sar_fix};"
+            f"{overlay_expr}"
+        )
+        
+        cmd = [
+            "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
+            "-filter_complex", full_filter,
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
+            "-c:a", "copy", str(output_video)
         ]
     else:
         logging.info(f"⚠️ Видео короткое, Smart Position (Scale: {wm_scale})")
