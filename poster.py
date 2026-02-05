@@ -88,51 +88,51 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
             with open(img_path, 'rb') as f: return f.read()
         except: return b""
 
-def post_to_facebook(text, link, media_files=None):
+def post_to_facebook(text, link, image_paths=None, watermark_scale=WATERMARK_SCALE):
     """
-    Публикует пост в Facebook.
-    Приоритет: Видео -> Фото -> Ссылка.
+    Публикует пост в Facebook с полным текстом и вотермарком на фото.
     """
     if not FB_PAGE_ACCESS_TOKEN or not FB_PAGE_ID:
         logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
         return
 
-    # Базовый URL
+    # 1. Подготовка текста (убираем лишние пробелы)
+    full_message = f"{text}\n\nИсточник: {link}"
+    
     url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
     payload = {
         "access_token": FB_PAGE_ACCESS_TOKEN, 
-        "message": f"{text}\n\n{link}"
+        "message": full_message
     }
     files = {}
 
     try:
-        # Ищем видео или фото в скачанных файлах
-        video_file = next((f for f in (media_files or []) if str(f).endswith('.mp4')), None)
-        image_file = next((f for f in (media_files or []) if str(f).endswith(('.jpg', '.png', '.jpeg'))), None)
+        # 2. Обработка медиа (берем первое фото/видео для поста)
+        video_file = next((f for f in (image_paths or []) if str(f).endswith('.mp4')), None)
+        image_file = next((f for f in (image_paths or []) if str(f).endswith(('.jpg', '.png', '.jpeg'))), None)
 
         if video_file:
-            logging.info(f"📤 FB: Грузим видео {video_file.name}...")
+            logging.info(f"📤 FB: Отправка видео {video_file.name}...")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-            # У видео поле называется 'description', а не 'message'
-            payload = {
-                "access_token": FB_PAGE_ACCESS_TOKEN, 
-                "description": f"{text}\n\nИсточник: {link}"
-            }
+            payload["description"] = full_message # У видео поле называется description
             files = {'source': open(video_file, 'rb')}
         
         elif image_file:
-            logging.info(f"📤 FB: Грузим фото {image_file.name}...")
+            logging.info(f"📤 FB: Накладываем вотермарк и шлем фото {image_file.name}...")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
-            files = {'source': open(image_file, 'rb')}
+            # ПОЛУЧАЕМ БАЙТЫ С ВОТЕРМАРКОМ
+            img_bytes = apply_watermark(image_file, watermark_scale)
+            if img_bytes:
+                files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
         
         else:
-            logging.info("📤 FB: Грузим только ссылку...")
+            logging.info("📤 FB: Фото не найдено, шлем только текст...")
             payload["link"] = link
 
-        # Отправка запроса с таймаутом 60 сек (видео может грузиться долго)
+        # 3. Отправка
         r = requests.post(url, data=payload, files=files, timeout=60)
         
-        if files:
+        if files and 'source' in files and hasattr(files['source'], 'close'):
             files['source'].close()
 
         if r.status_code == 200:
@@ -142,6 +142,24 @@ def post_to_facebook(text, link, media_files=None):
 
     except Exception as e:
         logging.error(f"❌ Facebook Exception: {e}")
+
+# --- ВНУТРИ ФУНКЦИИ main ИЗМЕНИ БЛОК ВЫЗОВА ---
+
+# Находишь это место в main():
+                # --- FACEBOOK: POSTING ---
+                try:
+                    # ЧИТАЕМ ВЕСЬ ТЕКСТ ИЗ ФАЙЛА, А НЕ ТОЛЬКО ЗАГОЛОВОК
+                    article_body = art["text_path"].read_text(encoding="utf-8").strip()
+                    
+                    # Передаем в функцию (текст + ссылка + пути к картинкам)
+                    post_to_facebook(
+                        text=article_body, 
+                        link=art.get('link', ''), 
+                        image_paths=art["image_paths"],
+                        watermark_scale=watermark_scale
+                    )
+                except Exception as fb_e:
+                    logging.error(f"❌ FB Error for ID={art['id']}: {fb_e}")
 
 async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, data: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
