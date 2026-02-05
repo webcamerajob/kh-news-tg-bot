@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import re
+import requests  # Используем requests для синхронных вызовов Facebook
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
@@ -13,12 +14,17 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+# --- КОНСТАНТЫ ---
 MAX_POSTED_RECORDS = 300
 WATERMARK_SCALE = 0.35
 HTTPX_TIMEOUT = Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
-MAX_RETRIES    = 3
-RETRY_DELAY    = 5.0
+MAX_RETRIES     = 3
+RETRY_DELAY     = 5.0
 DEFAULT_DELAY = 10.0
+
+# --- НАСТРОЙКИ FACEBOOK ---
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 
 def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
@@ -81,6 +87,61 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
         try:
             with open(img_path, 'rb') as f: return f.read()
         except: return b""
+
+def post_to_facebook(text, media_files=None, watermark_scale=WATERMARK_SCALE):
+    """
+    Публикует пост в Facebook.
+    - Ссылка НЕ добавляется.
+    - Видео (если есть) отправляется файлом.
+    - Фото (если есть) отправляется с наложенным вотермарком.
+    """
+    if not FB_PAGE_ACCESS_TOKEN or not FB_PAGE_ID:
+        logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
+        return
+
+    # Сообщение - только текст и заголовок (переданные в text)
+    full_message = text
+    
+    # Ищем первое видео или первое фото
+    video_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.mp4', '.mov', '.m4v']), None)
+    image_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']), None)
+
+    try:
+        if video_file:
+            logging.info(f"📤 FB: Видео (WM уже наложен) -> {video_file.name}")
+            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+            # Для видео текст идет в description
+            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "description": full_message}
+            with open(video_file, 'rb') as f:
+                r = requests.post(url, data=payload, files={'source': f}, timeout=120)
+        
+        elif image_file:
+            logging.info(f"📤 FB: Накладываем вотермарк на фото -> {image_file.name}")
+            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message}
+            
+            # Накладываем вотермарк "на лету" и получаем байты
+            img_bytes = apply_watermark(image_file, watermark_scale)
+            
+            if img_bytes:
+                # ВАЖНО: передаем как кортеж (имя, байты, тип)
+                files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
+                r = requests.post(url, data=payload, files=files, timeout=60)
+            else:
+                logging.error(f"❌ Не удалось обработать фото для FB: {image_file.name}")
+                return
+        
+        else:
+            logging.info("📤 FB: Только текст (без медиа)...")
+            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
+            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message})
+
+        if r.status_code == 200:
+            logging.info(f"✅ FB Success: ID={r.json().get('id')}")
+        else:
+            logging.error(f"❌ FB Error: {r.status_code} - {r.text}")
+    except Exception as e:
+        logging.error(f"❌ FB Exception: {e}")
 
 async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, data: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
@@ -209,7 +270,13 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 aid = str(m.get("id"))
                 if aid and aid != 'None' and aid not in posted_ids_set:
                     if v := validate_article(m, d):
-                        to_post.append({"id": aid, "html_title": v[0], "text_path": v[1], "image_paths": v[2], "original_title": v[3]})
+                        to_post.append({
+                            "id": aid, 
+                            "html_title": v[0], 
+                            "text_path": v[1], 
+                            "image_paths": v[2], 
+                            "original_title": v[3]
+                        })
             except: continue
 
     to_post.sort(key=lambda x: int(x["id"]))
@@ -217,7 +284,6 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         logging.info("🔍 Нет новых статей для публикации.")
         return
 
-        # Обрезаем список заранее, чтобы знать точное количество
     if limit:
         to_post = to_post[:limit]
 
@@ -232,14 +298,18 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
             # Проверяем, является ли эта статья последней в текущем пакете
             is_last_article = (idx == total_articles - 1)
             try:
+                # --- TELEGRAM: MEDIA ---
                 if art["image_paths"]:
                     # Медиа всегда отправляем тихо, звук только на тексте
                     await send_media_group(client, token, chat_id, art["image_paths"], watermark_scale, silent=True)
                 
+                # Читаем текст из файла
                 txt = art["text_path"].read_text(encoding="utf-8").lstrip()
+                # Если в файле уже есть заголовок в начале, убираем его, чтобы не дублировать
                 if txt.startswith(art["original_title"]):
                     txt = txt[len(art["original_title"]):].lstrip()
                 
+                # HTML версия для Телеграм
                 full_html = f"{art['html_title']}\n\n{escape_html(txt)}"
                 chunks = chunk_text(re.sub(r'\n{3,}', '\n\n', full_html).strip())
                 
@@ -255,6 +325,22 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                     ]]} if is_last_chunk else None
                     
                     await send_message(client, token, chat_id, c, reply_markup=markup, silent=should_be_silent)
+                
+                # --- FACEBOOK: POSTING ---
+                try:
+                    # Собираем полный текст для FB (Заголовок + Тело)
+                    # Ссылку на источник НЕ добавляем.
+                    fb_full_text = f"{art['original_title']}\n\n{txt}"
+                    
+                    post_to_facebook(
+                        text=fb_full_text,
+                        media_files=art["image_paths"],
+                        watermark_scale=watermark_scale
+                    )
+                except Exception as fb_e:
+                    logging.error(f"❌ FB Error: {fb_e}")
+
+                # --- SUCESS MARKER ---
                 if art['id'] not in posted_ids_list:
                     posted_ids_list.append(art['id'])
                 sent += 1
