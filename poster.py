@@ -93,17 +93,17 @@ def post_to_facebook(text, link, media_files=None, watermark_scale=WATERMARK_SCA
         logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
         return
 
-    # Текст статьи полностью
     full_message = f"{text}\n\nИсточник: {link}"
     
-    # Ищем видео и фото
-    video_file = next((f for f in (media_files or []) if str(f).endswith(('.mp4', '.mov', '.m4v'))), None)
-    image_file = next((f for f in (media_files or []) if str(f).endswith(('.jpg', '.png', '.jpeg', '.webp'))), None)
+    # Расширяем список видео-расширений
+    video_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.mp4', '.mov', '.m4v']), None)
+    image_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']), None)
 
     try:
         if video_file:
-            logging.info(f"📤 FB: Видео (вотермарк уже наложен парсером) -> {video_file.name}")
+            logging.info(f"📤 FB: Видео (WM уже наложен) -> {video_file.name}")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
+            # Для видео текст идет в description
             payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "description": full_message}
             with open(video_file, 'rb') as f:
                 r = requests.post(url, data=payload, files={'source': f}, timeout=120)
@@ -113,23 +113,25 @@ def post_to_facebook(text, link, media_files=None, watermark_scale=WATERMARK_SCA
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
             payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message}
             
-            # Тот самый метод, который ты используешь для Телеграма
+            # Используем твою функцию обработки фото
             img_bytes = apply_watermark(image_file, watermark_scale)
             
             if img_bytes:
-                r = requests.post(url, data=payload, files={'source': ('image.jpg', img_bytes, 'image/jpeg')}, timeout=60)
+                # ВАЖНО: передаем как кортеж (имя, байты, тип)
+                files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
+                r = requests.post(url, data=payload, files=files, timeout=60)
             else:
                 return
         
         else:
-            logging.info("📤 FB: Только текст и ссылка...")
+            logging.info("📤 FB: Только текст...")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
             r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message, "link": link})
 
         if r.status_code == 200:
             logging.info(f"✅ FB Success: ID={r.json().get('id')}")
         else:
-            logging.error(f"❌ FB Error: {r.text}")
+            logging.error(f"❌ FB Error: {r.status_code} - {r.text}")
     except Exception as e:
         logging.error(f"❌ FB Exception: {e}")
 
