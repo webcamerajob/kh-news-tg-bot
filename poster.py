@@ -126,7 +126,7 @@ def post_to_facebook(text, link, media_files=None, watermark_scale=WATERMARK_SCA
         else:
             logging.info("📤 FB: Только текст...")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
-            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message, "link": link})
+            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message})
 
         if r.status_code == 200:
             logging.info(f"✅ FB Success: ID={r.json().get('id')}")
