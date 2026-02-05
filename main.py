@@ -331,30 +331,32 @@ def add_watermark(input_video, watermark_img, output_video):
     wm_scale = 0.4
 
     # --- НАСТРОЙКИ ОТСТУПОВ ---
-    # Для горизонтальных (16:9)
-    pad_x_horiz = 20
-    pad_y_horiz = 20 
+    # Давай вернемся к фиксированным пикселям, раз проценты на твоих видео не зашли.
+    # margin_x — отступ от ПРАВОГО края
+    # margin_y — отступ от ВЕРХНЕГО края
+    margin_x = 20 
+    margin_y = 20 
 
-    # Для вертикальных (9:16)
-    pad_x_vert = 20
-    pad_y_vert = 100  # 100 пикселей сверху
+    # Для вертикальных видео (Reels/Shorts) отступ сверху часто нужен больше (под 100)
+    # x_offset_calc: если высота > ширины, берем 30, иначе 30 (тут симметрично)
+    # y_offset_calc: если высота > ширины, берем 100, иначе 30
+    x_offset_calc = f"30"
+    y_offset_calc = f"(gt(H,W)*100+lte(H,W)*30)"
 
     # --- ФОРМУЛЫ ---
     # 1. Масштабирование
+    # Важно: используем main_w для привязки ширины вотермарки к ширине видео
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. ПОЗИЦИОНИРОВАНИЕ (ИСПРАВЛЕНО: H и W большие)
-    # gt(H,W) -> Проверяем высоту и ширину ГЛАВНОГО ВИДЕО
-    
-    # X:
-    x_offset_calc = f"(gt(H,W)*{pad_x_vert}+lte(H,W)*{pad_x_horiz})"
+    # 3. ПОЗИЦИОНИРОВАНИЕ
+    # X: W (ширина видео) - w (ширина лого) - отступ
     x_expr = f"W-w-{x_offset_calc}"
     
-    # Y:
-    y_expr = f"(gt(H,W)*{pad_y_vert}+lte(H,W)*{pad_y_horiz})"
+    # Y: просто отступ (т.к. считаем от верхнего нуля)
+    y_expr = f"{y_offset_calc}"
     
     overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
 
