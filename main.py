@@ -330,43 +330,35 @@ def add_watermark(input_video, watermark_img, output_video):
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
     wm_scale = 0.4
 
-    # --- НАСТРОЙКИ ОТСТУПОВ ---
-    # Для горизонтальных (16:9)
-    pad_x_horiz = 20
-    pad_y_horiz = 20 
-
-    # Для вертикальных (9:16)
-    pad_x_vert = 20
-    pad_y_vert = 100  # 100 пикселей сверху
+    # --- НАСТРОЙКИ ОТСТУПОВ (Относительные) ---
+    # 0.03 означает 3% от ширины/высоты видео
+    pad_rel = 0.03
 
     # --- ФОРМУЛЫ ---
-    # 1. Масштабирование
+    # 1. Масштабирование (привязываем ширину ВМ к ширине видео)
     scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
-    # 2. Фикс пикселей
+    # 2. Фикс пикселей (чтобы лого не плющило)
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
     
-    # 3. ПОЗИЦИОНИРОВАНИЕ (ИСПРАВЛЕНО: H и W большие)
-    # gt(H,W) -> Проверяем высоту и ширину ГЛАВНОГО ВИДЕО
-    
-    # X:
-    x_offset_calc = f"(gt(H,W)*{pad_x_vert}+lte(H,W)*{pad_x_horiz})"
-    x_expr = f"W-w-{x_offset_calc}"
-    
-    # Y:
-    y_expr = f"(gt(H,W)*{pad_y_vert}+lte(H,W)*{pad_y_horiz})"
+    # 3. ПОЗИЦИОНИРОВАНИЕ (Правый верхний угол)
+    # x = Ширина_видео - Ширина_ВМ - Отступ
+    # y = Отступ (зависит от ориентации: для вертикальных чуть больше - 7%)
+    x_expr = f"W-w-(W*{pad_rel})"
+    y_expr = f"if(gt(H,W), H*0.07, H*{pad_rel})"
     
     overlay_expr = f"[vid][wm_fixed]overlay=x='{x_expr}':y='{y_expr}'"
 
     if duration > 25.0:
         f_point = duration - t_tail
-        logging.info(f"✂️ Обрезка + Smart Position (Scale: {wm_scale})")
+        logging.info(f"✂️ Обрезка + Правый верхний угол (Scale: {wm_scale})")
         
+        # ВАЖНО: Сначала накладываем вотермарк на весь поток, а ПОТОМ обрезаем. 
+        # Это исключает черные экраны и пропадание видео.
         v_filter = (
-            f"[0:v]select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB[main];"
-            f"[1:v][main]{scale_expr};"
+            f"[1:v][0:v]{scale_expr};"
             f"{wm_sar_fix};"
-            f"{overlay_expr}"
+            f"{overlay_expr},select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB"
         )
         a_filter = f"aselect='lt(t,{c_start})+between(t,{c_end},{f_point})',asetpts=N/SR/TB"
         
@@ -374,11 +366,11 @@ def add_watermark(input_video, watermark_img, output_video):
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", v_filter,
             "-af", a_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
-        logging.info(f"⚠️ Видео короткое, Smart Position (Scale: {wm_scale})")
+        logging.info(f"⚠️ Видео короткое, Правый верхний угол (Scale: {wm_scale})")
         
         full_filter = (
             f"[1:v][0:v]{scale_expr};"
@@ -389,7 +381,7 @@ def add_watermark(input_video, watermark_img, output_video):
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", full_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
             "-c:a", "copy", str(output_video)
         ]
     
