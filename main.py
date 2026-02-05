@@ -67,6 +67,22 @@ IPHONE_HEADERS = {
 
 FALLBACK_HEADERS = IPHONE_HEADERS
 
+def rotate_warp():
+    """Переподключает WARP для смены IP"""
+    logging.info("♻️ WARP: Ротация IP...")
+    try:
+        # Разрываем соединение
+        subprocess.run(["warp-cli", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        # Подключаем снова
+        subprocess.run(["warp-cli", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Ждем стабилизации (WARP иногда тупит пару секунд после коннекта)
+        time.sleep(5)
+        logging.info("✅ WARP: Переподключено.")
+    except Exception as e:
+        logging.error(f"❌ Ошибка ротации WARP: {e}")
+
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
 def direct_google_translate(text: str, to_lang: str = "ru") -> str:
@@ -451,49 +467,58 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug,link,title,date"}
     endpoint = f"{url}/wp-json/wp/v2/posts"
     
-    # Заголовки, маскирующиеся под обычный браузер
+    # Заголовки
     fallback_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "Referer": "https://www.google.com/"
     }
 
-    for attempt in range(1, 4):
+    # Используем глобальную переменную, чтобы можно было её обновить
+    global SCRAPER 
+
+    for attempt in range(1, 6): # Увеличил кол-во попыток до 5
         try:
-            logging.info(f"📥 Скачиваем список статей (Попытка {attempt}/3)...")
+            logging.info(f"📥 Скачиваем список статей (Попытка {attempt}/5)...")
             
             response = None
             # 1. Пробуем через WARP (curl_cffi)
             try:
                 response = SCRAPER.get(endpoint, params=params, timeout=45)
             except Exception as e:
-                logging.warning(f"⚠️ SCRAPER (Plan A) ошибка: {e}. Переход на requests...")
+                logging.warning(f"⚠️ SCRAPER ошибка: {e}. Пробуем ротацию...")
                 
-            # 2. Если Plan A не сработал, пробуем requests
+            # АНАЛИЗ ОТВЕТА
+            is_blocked = False
             if not response:
-                try:
-                    response = requests.get(endpoint, params=params, headers=fallback_headers, timeout=45)
-                except Exception as e:
-                    logging.error(f"❌ Requests (Plan B) ошибка: {e}")
+                is_blocked = True
+            elif response.status_code in [403, 503, 429]:
+                is_blocked = True
+                logging.warning(f"⚠️ Cloudflare Block (Code {response.status_code}).")
+            elif "text/html" in response.headers.get("Content-Type", "") or "<!DOCTYPE html>" in response.text[:100]:
+                is_blocked = True
+                logging.warning(f"⚠️ Получен HTML (Cloudflare Challenge) вместо JSON.")
 
-            if not response:
-                time.sleep(5)
-                continue
+            # ЕСЛИ ЗАБЛОКИРОВАЛИ -> РОТАЦИЯ
+            if is_blocked:
+                logging.info("🔄 Запускаем процедуру смены IP и сессии...")
+                
+                # 1. Дергаем WARP
+                rotate_warp()
+                
+                # 2. Пересоздаем сессию (ВАЖНО: сброс TLS fingerprint)
+                logging.info("🛠 Пересоздание сессии SCRAPER...")
+                SCRAPER = cffi_requests.Session(
+                    impersonate="chrome120", # Можно попробовать повысить версию
+                    proxies={"http": WARP_PROXY, "https": WARP_PROXY},
+                    http_version=CurlHttpVersion.V1_1
+                )
+                
+                # Короткая пауза перед новым запросом
+                time.sleep(3)
+                continue # Идем на следующий круг цикла (attempt + 1)
 
-            # 3. АНАЛИЗ ОТВЕТА (Самое важное!)
-            # Если вернулся код ошибки (403, 503)
-            if response.status_code in [403, 503, 429]:
-                logging.warning(f"⚠️ Cloudflare Block (Code {response.status_code}). Ждем...")
-                time.sleep(15 * attempt)
-                continue
-            
-            # Если вернулся HTML вместо JSON
-            if "text/html" in response.headers.get("Content-Type", "") or "<!DOCTYPE html>" in response.text[:100]:
-                logging.warning(f"⚠️ Получен HTML (Cloudflare Challenge) вместо JSON. Ждем...")
-                time.sleep(15 * attempt)
-                continue
-
-            # 4. Безопасный парсинг
+            # 4. Безопасный парсинг (если не заблокированы)
             try:
                 data = response.json()
                 if isinstance(data, list):
@@ -503,12 +528,15 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
                 return []
             except Exception:
                 logging.error("❌ Ошибка парсинга JSON (видимо, пришел мусор).")
+                rotate_warp() # Если пришел мусор - тоже меняем IP на всякий случай
+                continue
                 
         except Exception as e:
             logging.error(f"❌ Общая ошибка цикла: {e}")
-            time.sleep(10)
+            rotate_warp()
+            time.sleep(5)
 
-    logging.error("💀 Не удалось получить список статей после 3 попыток.")
+    logging.error("💀 Не удалось получить список статей после всех попыток.")
     return []
 
 def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
