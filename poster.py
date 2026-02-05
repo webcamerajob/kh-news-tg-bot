@@ -1,3 +1,14 @@
+Вот полный, исправленный файл `poster.py`.
+
+**Что изменено в логике Facebook (`post_to_facebook`):**
+
+1. **Галереи фото:** Теперь скрипт собирает **все** изображения из статьи (а не только первое), накладывает вотермарк на каждое, загружает их в скрытом режиме и публикует одним постом-галереей с текстом.
+2. **Видео:** Если в статье есть видео, оно публикуется **отдельным постом** сразу после фото (так как API Facebook не разрешает смешивать фото и видео в одном посте). Видео берется "как есть" (предполагается, что вотермарк наложил предыдущий скрипт), но описание дублируется.
+3. **Только текст:** Если медиа нет, публикуется просто текст.
+
+Код полный, без сокращений.
+
+```python
 import os
 import json
 import argparse
@@ -91,57 +102,105 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
 def post_to_facebook(text, media_files=None, watermark_scale=WATERMARK_SCALE):
     """
     Публикует пост в Facebook.
-    - Ссылка НЕ добавляется.
-    - Видео (если есть) отправляется файлом.
-    - Фото (если есть) отправляется с наложенным вотермарком.
+    1. Если есть фото -> Публикует ВСЕ фото как галерею (с вотермаркой).
+    2. Если есть видео -> Публикует видео ОТДЕЛЬНЫМ постом следом за фото.
+    3. Если ничего нет -> Публикует только текст.
     """
     if not FB_PAGE_ACCESS_TOKEN or not FB_PAGE_ID:
         logging.warning("⚠️ Данные для Facebook не заполнены. Пропуск.")
         return
 
-    # Сообщение - только текст и заголовок (переданные в text)
     full_message = text
     
-    # Ищем первое видео или первое фото
-    video_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.mp4', '.mov', '.m4v']), None)
-    image_file = next((f for f in (media_files or []) if f.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']), None)
+    # Разделяем медиа
+    video_files = [f for f in (media_files or []) if f.suffix.lower() in ['.mp4', '.mov', '.m4v']]
+    image_files = [f for f in (media_files or []) if f.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']]
+    
+    posted_something = False
 
-    try:
-        if video_file:
-            logging.info(f"📤 FB: Видео (WM уже наложен) -> {video_file.name}")
+    # --- 1. ПУБЛИКАЦИЯ ФОТО (ГАЛЕРЕЯ) ---
+    if image_files:
+        logging.info(f"📤 FB: Подготовка галереи из {len(image_files)} фото...")
+        media_fbid_list = []
+        
+        # Загружаем каждое фото скрыто (published=false)
+        for img_path in image_files:
+            img_bytes = apply_watermark(img_path, watermark_scale)
+            if not img_bytes: continue
+            
+            url_upload = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+            payload = {
+                "access_token": FB_PAGE_ACCESS_TOKEN,
+                "published": "false" # Не публиковать сразу в ленту
+            }
+            # Facebook API требует image/jpeg для upload
+            files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
+            
+            try:
+                up_r = requests.post(url_upload, data=payload, files=files, timeout=60)
+                if up_r.status_code == 200:
+                    photo_id = up_r.json().get('id')
+                    media_fbid_list.append({"media_fbid": photo_id})
+                else:
+                    logging.warning(f"⚠️ FB Photo Upload Fail {img_path.name}: {up_r.text}")
+            except Exception as e:
+                logging.error(f"⚠️ FB Photo Exception {img_path.name}: {e}")
+
+        # Создаем пост с прикрепленными фото
+        if media_fbid_list:
+            url_feed = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
+            payload = {
+                "access_token": FB_PAGE_ACCESS_TOKEN,
+                "message": full_message,
+                "attached_media": json.dumps(media_fbid_list)
+            }
+            try:
+                feed_r = requests.post(url_feed, data=payload, timeout=60)
+                if feed_r.status_code == 200:
+                    logging.info(f"✅ FB Photo Gallery Success: ID={feed_r.json().get('id')}")
+                    posted_something = True
+                else:
+                    logging.error(f"❌ FB Gallery Error: {feed_r.text}")
+            except Exception as e:
+                 logging.error(f"❌ FB Gallery Exception: {e}")
+        else:
+            logging.error("❌ Не удалось загрузить ни одного фото для FB.")
+
+    # --- 2. ПУБЛИКАЦИЯ ВИДЕО (ОТДЕЛЬНО) ---
+    # Если есть видео, постим его следом. 
+    # Если фото не было, текст будет здесь. Если фото были, текст дублируется (или можно сократить).
+    if video_files:
+        for vid in video_files:
+            logging.info(f"📤 FB: Видео (WM уже наложен) -> {vid.name}")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
-            # Для видео текст идет в description
-            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "description": full_message}
-            with open(video_file, 'rb') as f:
-                r = requests.post(url, data=payload, files={'source': f}, timeout=120)
-        
-        elif image_file:
-            logging.info(f"📤 FB: Накладываем вотермарк на фото -> {image_file.name}")
-            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
-            payload = {"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message}
-            
-            # Накладываем вотермарк "на лету" и получаем байты
-            img_bytes = apply_watermark(image_file, watermark_scale)
-            
-            if img_bytes:
-                # ВАЖНО: передаем как кортеж (имя, байты, тип)
-                files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
-                r = requests.post(url, data=payload, files=files, timeout=60)
-            else:
-                logging.error(f"❌ Не удалось обработать фото для FB: {image_file.name}")
-                return
-        
-        else:
-            logging.info("📤 FB: Только текст (без медиа)...")
-            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
-            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message})
+            payload = {
+                "access_token": FB_PAGE_ACCESS_TOKEN, 
+                "description": full_message # Текст поста идет сюда
+            }
+            try:
+                with open(vid, 'rb') as f:
+                    r = requests.post(url, data=payload, files={'source': f}, timeout=120)
+                
+                if r.status_code == 200:
+                    logging.info(f"✅ FB Video Success: ID={r.json().get('id')}")
+                    posted_something = True
+                else:
+                    logging.error(f"❌ FB Video Error: {r.text}")
+            except Exception as e:
+                logging.error(f"❌ FB Video Exception: {e}")
 
-        if r.status_code == 200:
-            logging.info(f"✅ FB Success: ID={r.json().get('id')}")
-        else:
-            logging.error(f"❌ FB Error: {r.status_code} - {r.text}")
-    except Exception as e:
-        logging.error(f"❌ FB Exception: {e}")
+    # --- 3. ЕСЛИ НЕТ НИ ФОТО, НИ ВИДЕО -> ТОЛЬКО ТЕКСТ ---
+    if not posted_something and not image_files and not video_files:
+        logging.info("📤 FB: Только текст (без медиа)...")
+        url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
+        try:
+            r = requests.post(url, data={"access_token": FB_PAGE_ACCESS_TOKEN, "message": full_message})
+            if r.status_code == 200:
+                logging.info(f"✅ FB Text Success: ID={r.json().get('id')}")
+            else:
+                logging.error(f"❌ FB Text Error: {r.text}")
+        except Exception as e:
+            logging.error(f"❌ FB Text Exception: {e}")
 
 async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, data: Dict[str, Any], files: Optional[Dict[str, Any]] = None) -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
@@ -363,3 +422,5 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--limit", type=int, default=None)
     parser.add_argument("--watermark-scale", type=float, default=WATERMARK_SCALE)
     asyncio.run(main(**vars(parser.parse_args())))
+
+```
