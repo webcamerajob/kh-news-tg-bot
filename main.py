@@ -35,6 +35,7 @@ FETCH_DEPTH = 30
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
+    "arcee-ai/trinity-large-preview:free",
     "deepseek/deepseek-chat",           
     "openai/gpt-4o-mini",               
     "google/gemini-2.0-flash-exp:free", 
