@@ -32,7 +32,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           # Важно для правильного ребейза и сохранения истории json
           fetch-depth: 0 
