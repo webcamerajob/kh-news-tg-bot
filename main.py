@@ -819,6 +819,9 @@ def main():
                 continue 
             
             logging.info(f"🆕 Найдена новая статья ID={aid}. Загружаем детали...")
+
+            time.sleep(5)
+
             full_post = fetch_single_post_full(args.base_url, aid)
             
             if full_post:
