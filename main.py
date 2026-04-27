@@ -35,10 +35,10 @@ FETCH_DEPTH = 30
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free", # Оставляем, но нужна пауза
-    "qwen/qwen-2.5-72b-instruct",            # Убрал :free, если 404 — пробуй без него
-    "google/gemini-2.0-flash-001",           # Вместо exp:free. Она платная, но почти бесплатная
-    "deepseek/deepseek-chat",               # Твой спаситель в логах
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct",        # Убрал :free
+    "google/gemini-2.0-flash-001",       # Рабочий эндпоинт
+    "deepseek/deepseek-chat",            # Твой единственный живой вариант в логах
     "openai/gpt-4o-mini"
 ]
 
