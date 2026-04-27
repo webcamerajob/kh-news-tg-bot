@@ -150,6 +150,10 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
         for model in AI_MODELS:
             try:
                 logging.info(f"🚀 Запрос к OpenRouter: {model}...")
+
+                if model != AI_MODELS[0]: 
+                    time.sleep(2)
+
                 response = requests.post(
                     url="https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "HTTP-Referer": "https://github.com/kh-news-bot", "X-Title": "NewsBot"},
