@@ -58,39 +58,39 @@ jobs:
       
       - name: Install & Connect Cloudflare WARP
         run: |
-          # 1. Добавляем репозиторий
+          # 1. Установка
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
+          sudo apt-get update && sudo apt-get install -y cloudflare-warp
           
-          # 2. Установка
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
+          # 2. Демон уже запущен установщиком. Для надежности просто рестартуем его:
+          sudo systemctl restart warp-svc
           
-          # 3. !!! ИСПРАВЛЕНИЕ ОШИБКИ SOCKET BOUND !!!
-          # Принудительно останавливаем все копии, которые могли запуститься при установке
-          sudo pkill warp-svc || true
-          # Удаляем зависший файл сокета, из-за которого была ошибка
-          sudo rm -rf /run/cloudflare-warp/warp_service
-          sudo rm -rf /var/lib/cloudflare-warp/settings.json
+          # Ждем пару секунд, чтобы сокет точно создался
+          sleep 3
           
-          # 4. Чистый запуск сервиса
-          sudo warp-svc --accept-tos & 
-          # Ждем, пока сервис создаст новый сокет
-          sleep 5
-          
-          # 5. Регистрация
+          # 3. Настройка и подключение
           warp-cli --accept-tos registration new
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos proxy port 40000
           warp-cli --accept-tos connect
           
-          echo "⏳ Waiting for WARP stabilization (15s)..."
-          sleep 15
-          
+          # 4. Проверка статуса без слепых ожиданий
+          echo "⏳ Ожидание статуса Connected..."
+          for i in {1..10}; do
+            STATUS=$(warp-cli --accept-tos status)
+            if echo "$STATUS" | grep -q "Connected"; then
+              echo "✅ WARP успешно подключен!"
+              break
+            fi
+            sleep 3
+          done
+
       - name: "🌍 Verify Proxy IP"
         run: |
           echo "External IP (via WARP):"
-          curl -s --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
+          # Добавлена попытка повтора, если прокси еще не пробросил трафик
+          curl -s --retry 5 --retry-delay 2 --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
       
       - name: "Run Parser"
         id: parse_step
