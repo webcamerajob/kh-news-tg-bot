@@ -35,12 +35,11 @@ FETCH_DEPTH = 30
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free", # Самая мощная из бесплатных на сегодня
-    "qwen/qwen-2.5-72b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",      # Безотказная, огромный контекст
-    "deepseek/deepseek-chat",               # Если есть баланс — лучшая по качеству
-    "openai/gpt-4o-mini",                   # Быстрый и дешевый резерв
-    "meta-llama/llama-3.1-8b-instruct:free"  # Легкая и быстрая, если 70B перегружена
+    "meta-llama/llama-3.3-70b-instruct:free", # Оставляем, но нужна пауза
+    "qwen/qwen-2.5-72b-instruct",            # Убрал :free, если 404 — пробуй без него
+    "google/gemini-2.0-flash-001",           # Вместо exp:free. Она платная, но почти бесплатная
+    "deepseek/deepseek-chat",               # Твой спаситель в логах
+    "openai/gpt-4o-mini"
 ]
 
 # Константа для порта WARP
@@ -820,7 +819,7 @@ def main():
             
             logging.info(f"🆕 Найдена новая статья ID={aid}. Загружаем детали...")
 
-            time.sleep(5)
+            time.sleep(10)
 
             full_post = fetch_single_post_full(args.base_url, aid)
             
