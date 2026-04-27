@@ -36,6 +36,7 @@ OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
     "meta-llama/llama-3.3-70b-instruct:free", # Самая мощная из бесплатных на сегодня
+    "qwen/qwen-2.5-72b-instruct:free",
     "google/gemini-2.0-flash-exp:free",      # Безотказная, огромный контекст
     "deepseek/deepseek-chat",               # Если есть баланс — лучшая по качеству
     "openai/gpt-4o-mini",                   # Быстрый и дешевый резерв
