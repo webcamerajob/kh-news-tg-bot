@@ -639,14 +639,14 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
         
-        # Facebook видео: ищем гибко, так как версия (v7.0) может меняться
+        # Facebook видео: ищем вхождение домена и плагина, игнорируя версию v7.0/v12.0 и т.д.
         if "facebook.com" in src and "plugins/video.php" in src:
             parsed = urlparse.urlparse(src)
-            # Извлекаем параметр 'href', где лежит реальная ссылка на видео
+            # Достаем параметр 'href', в котором зашита ссылка на само видео
             fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
             
             if fb_url:
-                # Очищаем от лишних параметров Facebook, если они есть
+                # Очищаем ссылку от лишних параметров Facebook
                 fb_url = fb_url.split('&')[0] 
                 if fb_url not in fb_video_tasks:
                     fb_video_tasks.append(fb_url)
