@@ -36,6 +36,10 @@ FETCH_DEPTH = 30
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
+    "google/gemini-2.0-flash-lite-preview-02-05:free", # Самая быстрая и умная из бесплатных
+    "google/gemini-2.0-pro-exp-02-05:free",           # Мощнее, но лимиты строже
+    "mistralai/pixtral-12b:free",                     # Хорошая альтернатива от Mistral
+    "qwen/qwen-2-7b-instruct:free"                    # Легкая и быстрая
     "qwen/qwen-2.5-72b-instruct",        # Убрал :free
     "google/gemini-2.0-flash-001",       # Рабочий эндпоинт
     "deepseek/deepseek-chat",            # Твой единственный живой вариант в логах
@@ -573,18 +577,22 @@ def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
         return None
 
 def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = None):
+    # Задержка для обхода лимитов
     time.sleep(2)
     aid, slug, link = str(post["id"]), post["slug"], post.get("link")
     
+    # Извлекаем и чистим заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = sanitize_text(raw_title)
 
+    # Проверка на стоп-слова
     if stopwords:
         for ph in stopwords:
             if ph in title.lower():
                 logging.info(f"🚫 ID={aid}: Стоп-слово '{ph}'")
                 return None
 
+    # Шаг 1: Загрузка HTML (основной скрапер + fallback)
     html_txt = ""
     try:
         resp = SCRAPER.get(link, timeout=30)
@@ -605,6 +613,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             logging.error(f"❌ ID={aid}: Не удалось открыть статью: {e}")
             return None
 
+    # Проверка на изменения через хеш контента
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
     if meta_path.exists():
@@ -613,37 +622,52 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             if m.get("hash") == curr_hash:
                 logging.info(f"⏭️ ID={aid}: Без изменений.")
                 return m
-        except: pass
+        except:
+            pass
 
     logging.info(f"Processing ID={aid}: {title[:30]}...")
-
     soup = BeautifulSoup(html_txt, "html.parser")
     
+    # Находим основной контент (важно сделать это до очистки soup)
+    c_div = soup.find("div", class_="entry-content")
+    
+    # --- ШАГ 1: ПОИСК ВИДЕО (В т.ч. вне c_div) ---
+    fb_video_tasks = []
+    youtube_tasks = []
+    import urllib.parse as urlparse
+
+    for iframe in soup.find_all("iframe"):
+        src = iframe.get("src", "")
+        
+        # Facebook видео
+        if "facebook.com/plugins/video.php" in src:
+            parsed = urlparse.urlparse(src)
+            fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
+            if fb_url and fb_url not in fb_video_tasks:
+                fb_video_tasks.append(fb_url)
+                logging.info(f"🎯 Найдено FB видео: {fb_url}")
+        
+        # YouTube видео (iframe)
+        elif "youtube.com/embed" in src or "youtu.be" in src:
+            if src.startswith("//"): src = "https:" + src
+            if src not in youtube_tasks:
+                youtube_tasks.append(src)
+                logging.info(f"🎯 Найдено YouTube iframe: {src}")
+
+    # --- ШАГ 2: ОЧИСТКА МУСОРА ---
+    # Удаляем виджеты, рекламу и связанные посты
     for garbage in soup.find_all(["div", "ul", "ol", "section", "aside"], 
                                 class_=re.compile(r"rp4wp|related|ad-|post-widget-thumbnail|sharedaddy")):
         garbage.decompose()
-    
-    fb_video_tasks = []
-    if c_div:
-        # Поиск видео из Facebook (Khmertimes часто их юзает)
-        for iframe in c_div.find_all("iframe"):
-            src = iframe.get("src", "")
-            if "facebook.com/plugins/video.php" in src:
-                import urllib.parse as urlparse
-                parsed = urlparse.urlparse(src)
-                fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
-                if fb_url and fb_url not in fb_video_tasks:
-                    fb_video_tasks.append(fb_url)
 
-    for j in soup.find_all(["span", "script", "style", "iframe"]):
-        src = j.get("src", "")
-        if "youtube" in src or "youtu.be" in src:
-            continue
+    # Удаляем скрипты и стили
+    for j in soup.find_all(["span", "script", "style"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
         if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: 
             j.decompose()
 
+    # --- ШАГ 3: СБОР МЕДИА-РЕСУРСОВ ---
     ordered_srcs = []
     seen_srcs = set()
 
@@ -652,58 +676,42 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             ordered_srcs.append(url)
             seen_srcs.add(url)
 
+    # Featured Image (миниатюра записи)
     if "_embedded" in post and (m := post["_embedded"].get("wp:featuredmedia")):
         if isinstance(m, list) and (u := m[0].get("source_url")):
             if "logo" not in u.lower():
                 add_src(u)
 
-    for link_tag in soup.find_all("a", class_="ci-lightbox", limit=10):
-        if h := link_tag.get("href"): 
-            if "gif" not in h.lower():
-                add_src(h)
-
-    c_div = soup.find("div", class_="entry-content")
     video_srcs = []
-    youtube_tasks = []
-
     if c_div:
+        # Картинки из текста
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
         
-        # Видео (mp4/mov)
-        for vid in c_div.find_all("video"):
-            if src := vid.get("src"):
-                if src not in seen_srcs: video_srcs.append(src); seen_srcs.add(src)
-            for source in vid.find_all("source"):
-                if src := source.get("src"):
-                    if src not in seen_srcs: video_srcs.append(src); seen_srcs.add(src)
-        
-        for a_tag in c_div.find_all("a"):
-            if href := a_tag.get("href"):
-                if href.lower().endswith(('.mp4', '.mov', '.m4v')):
-                    if href not in seen_srcs: video_srcs.append(href); seen_srcs.add(href)
-        
-        # YouTube iframe
-        for iframe in c_div.find_all("iframe"):
-            src = iframe.get("src", "")
-            if "youtube.com/embed" in src or "youtu.be" in src:
-                if src.startswith("//"): src = "https:" + src
-                youtube_tasks.append(src)
-        
-        # YouTube links
+        # Ссылки на YouTube (текстовые)
         for yt_a in c_div.find_all("a"):
             href = yt_a.get("href", "")
             if "youtube.com/watch" in href or "youtu.be/" in href:
                 if href not in youtube_tasks:
                     youtube_tasks.append(href)
-    
+
+        # Прямые ссылки на видеофайлы
+        for a_tag in c_div.find_all("a"):
+            href = a_tag.get("href", "")
+            if href.lower().endswith(('.mp4', '.mov', '.m4v')):
+                if href not in seen_srcs: 
+                    video_srcs.append(href)
+                    seen_srcs.add(href)
+
+    # Добавляем найденные файлы видео в общую очередь скачивания
     for v in video_srcs:
         ordered_srcs.append(v)
     
     images_dir = OUTPUT_DIR / f"{aid}_{slug}" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. Скачивание обычных файлов
+    # 1. Скачивание статических файлов (картинки, mp4 по ссылкам)
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         with ThreadPoolExecutor(3) as ex:
@@ -716,88 +724,71 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                 if res := f.result():
                     images_results[idx] = Path(res).name
 
-    # 2. Скачивание YouTube и наложение вотермарки
+    # 2. Обработка YouTube (скачивание + вотермарка)
     youtube_files = []
-    if youtube_tasks:
-        logging.info(f"▶️ Найдено {len(youtube_tasks)} видео с YouTube.")
+    for yt_url in youtube_tasks:
+        video_hash = hashlib.md5(yt_url.encode()).hexdigest()[:10]
+        raw_vid_path = images_dir / f"temp_{video_hash}.mp4"
+        final_vid_path = images_dir / f"{video_hash}.mp4"
         
-        for idx, yt_url in enumerate(youtube_tasks):
-            # Хешируем ссылку для имени файла
-            video_hash = hashlib.md5(yt_url.encode()).hexdigest()[:10]
-            
-            raw_vid_path = images_dir / f"temp_{video_hash}.mp4"
-            final_vid_path = images_dir / f"{video_hash}.mp4"
-            
-            # Если финальное видео уже есть - пропускаем
-            if final_vid_path.exists():
-                youtube_files.append(final_vid_path.name)
-                continue
+        if final_vid_path.exists():
+            youtube_files.append(final_vid_path.name)
+            continue
 
-            # Скачиваем (360p)
-            images_dir.mkdir(parents=True, exist_ok=True)
-            if download_via_loader_to(yt_url, raw_vid_path):
-                # Если вотермарка задана - рендерим
-                if watermark_img_path and watermark_img_path.exists():
-                    if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
-                        youtube_files.append(final_vid_path.name)
-                        # Удаляем сырое
-                        if raw_vid_path.exists(): raw_vid_path.unlink()
-                    else:
-                        # Если рендер не вышел, берем сырое (переименовываем)
-                        raw_vid_path.rename(final_vid_path)
-                        youtube_files.append(final_vid_path.name)
+        if download_via_loader_to(yt_url, raw_vid_path):
+            if watermark_img_path and watermark_img_path.exists():
+                if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
+                    youtube_files.append(final_vid_path.name)
+                    if raw_vid_path.exists(): raw_vid_path.unlink()
                 else:
-                    # Без вотермарки просто переименовываем
                     raw_vid_path.rename(final_vid_path)
                     youtube_files.append(final_vid_path.name)
             else:
-                # Очистка мусора при ошибке
-                if raw_vid_path.exists(): raw_vid_path.unlink()
+                raw_vid_path.rename(final_vid_path)
+                youtube_files.append(final_vid_path.name)
+        elif raw_vid_path.exists(): raw_vid_path.unlink()
 
-    # 3. Скачивание Facebook видео и вотермарка
+    # 3. Обработка Facebook видео
     fb_files = []
-    if fb_video_tasks:
-        logging.info(f"🔵 Найдено {len(fb_video_tasks)} видео с Facebook.")
-        for fb_url in fb_video_tasks:
-            video_hash = hashlib.md5(fb_url.encode()).hexdigest()[:10]
-            raw_vid_path = images_dir / f"raw_fb_{video_hash}.mp4"
-            final_vid_path = images_dir / f"fb_{video_hash}.mp4"
+    for fb_url in fb_video_tasks:
+        video_hash = hashlib.md5(fb_url.encode()).hexdigest()[:10]
+        raw_vid_path = images_dir / f"raw_fb_{video_hash}.mp4"
+        final_vid_path = images_dir / f"fb_{video_hash}.mp4"
 
-            if final_vid_path.exists():
-                fb_files.append(final_vid_path.name)
-                continue
+        if final_vid_path.exists():
+            fb_files.append(final_vid_path.name)
+            continue
 
-            if download_via_loader_to(fb_url, raw_vid_path):
-                if watermark_img_path and watermark_img_path.exists():
-                    if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
-                        fb_files.append(final_vid_path.name)
-                        if raw_vid_path.exists(): raw_vid_path.unlink()
-                    else:
-                        raw_vid_path.rename(final_vid_path)
-                        fb_files.append(final_vid_path.name)
+        if download_via_loader_to(fb_url, raw_vid_path):
+            if watermark_img_path and watermark_img_path.exists():
+                if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
+                    fb_files.append(final_vid_path.name)
+                    if raw_vid_path.exists(): raw_vid_path.unlink()
                 else:
                     raw_vid_path.rename(final_vid_path)
                     fb_files.append(final_vid_path.name)
+            else:
+                raw_vid_path.rename(final_vid_path)
+                fb_files.append(final_vid_path.name)
 
     final_images = [img for img in images_results if img is not None]
     final_images.extend(youtube_files)
     final_images.extend(fb_files)
 
     if not final_images:
-        logging.warning(f"⚠️ ID={aid}: Нет норм картинок/видео. Skip.")
+        logging.warning(f"⚠️ ID={aid}: Нет медиафайлов. Skip.")
         return None
 
+    # --- ШАГ 4: ТЕКСТ И ПЕРЕВОД ---
     if c_div:
+        # Финальная очистка контента от iframe перед извлечением текста
         for iframe in c_div.find_all("iframe"):
             iframe.decompose()
-
-    paras = []
-    if c_div:
-        for r in c_div.find_all(["ul", "ol", "div"], class_=re.compile(r"rp4wp|related|ad-")): 
-            r.decompose()
+        
         paras = [sanitize_text(p.get_text(strip=True)) for p in c_div.find_all("p")]
-    
-    raw_body_text = "\n\n".join(paras)
+        raw_body_text = "\n\n".join(paras)
+    else:
+        raw_body_text = ""
 
     final_title = title
     translated_body = ""
@@ -805,6 +796,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
         final_title = sanitize_text(final_title)
 
+    # Сохранение файлов
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     
@@ -824,6 +816,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
 
     with open(meta_path, "w", encoding="utf-8") as f: 
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
     return meta
 
 # --- MAIN ---
