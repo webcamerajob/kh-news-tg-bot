@@ -640,13 +640,17 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         src = iframe.get("src", "")
         
         # Facebook видео
-        if "facebook.com/plugins/video.php" in src:
+        if "facebook.com" in src and "plugins/video.php" in src:
+            import urllib.parse as urlparse
             parsed = urlparse.urlparse(src)
+            # Извлекаем href из параметров запроса
             fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
+            
             if fb_url and fb_url not in fb_video_tasks:
+                # Очищаем URL от лишних параметров Facebook (watch/?v=...)
                 fb_video_tasks.append(fb_url)
                 logging.info(f"🎯 Найдено FB видео: {fb_url}")
-        
+                
         # YouTube видео (iframe)
         elif "youtube.com/embed" in src or "youtu.be" in src:
             if src.startswith("//"): src = "https:" + src
