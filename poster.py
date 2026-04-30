@@ -11,6 +11,7 @@ from io import BytesIO
 import httpx
 from httpx import HTTPStatusError, ReadTimeout, Timeout
 from PIL import Image
+import subprocess
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -54,6 +55,38 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
     if current_chunk: chunks.append(current_chunk)
     return chunks
 
+def extract_video_thumb(video_path: Path) -> Optional[bytes]:
+    """Извлекает кадр из видео для использования как thumbnail в Telegram."""
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        cmd = [
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-ss", "00:00:01",       # кадр на 1-й секунде
+            "-vframes", "1",
+            "-vf", "scale='min(320,iw)':-2",  # Telegram thumb до 320px
+            "-q:v", "5",
+            tmp_path
+        ]
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        
+        if r.returncode != 0 or not Path(tmp_path).exists():
+            return None
+        
+        data = Path(tmp_path).read_bytes()
+        Path(tmp_path).unlink(missing_ok=True)
+        
+        # TG thumbnail должен быть < 200 KB
+        if len(data) > 200 * 1024:
+            logging.warning(f"⚠️ Thumb {video_path.name} > 200KB, пропускаем")
+            return None
+        return data
+    except Exception as e:
+        logging.error(f"❌ Ошибка извлечения thumb для {video_path.name}: {e}")
+        return None
+        
 def apply_watermark(img_path: Path, scale: float) -> bytes:
     try:
         base_img = Image.open(img_path).convert("RGBA")
@@ -234,9 +267,9 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             size_mb = f_path.stat().st_size / (1024 * 1024)
             logging.info(f"🔎 Файл: {f_path.name} | Размер: {size_mb:.2f} MB")
             
-            if ext in ['.mp4', '.mov', '.m4v']:
+            
+    	    if ext in ['.mp4', '.mov', '.m4v']:
                 m_type, m_mime = "video", "video/mp4"
-                # TG Bot API лимит на uploadable — 50 MB
                 if f_path.stat().st_size > 49 * 1024 * 1024:
                     logging.warning(f"⚠️ Файл {f_path.name} > 49MB, пропускаем в Telegram (FB обработает)")
                     continue
@@ -248,7 +281,19 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             if not m_bytes: continue
             
             files_to_send[f_key] = (f_path.name, m_bytes, m_mime)
-            media_array.append({"type": m_type, "media": f"attach://{f_key}"})
+            
+            media_item = {"type": m_type, "media": f"attach://{f_key}"}
+            
+            # Для видео — генерим thumbnail и прикрепляем
+            if m_type == "video":
+                thumb_bytes = extract_video_thumb(f_path)
+                if thumb_bytes:
+                    thumb_key = f"thumb_{idx}"
+                    files_to_send[thumb_key] = (f"{f_path.stem}_thumb.jpg", thumb_bytes, "image/jpeg")
+                    media_item["thumbnail"] = f"attach://{thumb_key}"
+                    logging.info(f"🖼️ Добавлен thumbnail для {f_path.name}")
+            
+            media_array.append(media_item)
         
         if not media_array: continue
 
