@@ -366,7 +366,7 @@ def download_youtube_via_loader_to(video_url, output_path):
                 "start": "1",
                 "end": "1",
                 "iframe_source": "direct-iframe",
-                "format": "720",
+                "format": "360",
                 "url": video_url,
             }
             r = requests.get(download_api, params=params, headers=headers, timeout=30)
