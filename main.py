@@ -613,6 +613,12 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             logging.error(f"❌ ID={aid}: Не удалось открыть статью: {e}")
             return None
 
+    # DEBUG: дамп сырого HTML
+    debug_path = OUTPUT_DIR / f"{aid}_{slug}" / "raw.html"
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
+    debug_path.write_text(html_txt, encoding="utf-8")
+    logging.info(f"DEBUG: HTML сохранён в {debug_path}, размер {len(html_txt)} байт")
+
     # Проверка на изменения через хеш контента
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
@@ -635,6 +641,16 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     fb_video_tasks = []
     youtube_tasks = []
     import urllib.parse as urlparse
+
+    # DEBUG: что вообще есть в HTML по части видео
+    all_iframes = soup.find_all("iframe")
+    logging.info(f"DEBUG: Всего iframe в HTML: {len(all_iframes)}")
+    for ifr in all_iframes:
+        logging.info(f"  iframe src: {ifr.get('src', '')[:120]}")
+    fb_blockquotes = soup.find_all("blockquote", class_=re.compile("fb-"))
+    fb_divs = soup.find_all("div", class_=re.compile("fb-video|fb-post"))
+    fb_data = soup.find_all(attrs={"data-href": re.compile("facebook.com")})
+    logging.info(f"DEBUG: fb blockquote={len(fb_blockquotes)}, fb div={len(fb_divs)}, data-href={len(fb_data)}")
     
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
