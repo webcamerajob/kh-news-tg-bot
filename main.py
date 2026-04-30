@@ -358,7 +358,7 @@ def download_via_loader_to(video_url, output_path):
                 logging.warning("⚠️ yt-dlp отработал, но файл пуст.")
                 time.sleep(3)
         except Exception as e:
-            logging.error(f"❌ Ошибка yt-dlp: {e}")
+            logging.error(f"❌ Ошибка yt-dlp: {type(e).__name__}: {e}")
             time.sleep(5) # Ждем перед ретраем
             
     return False
