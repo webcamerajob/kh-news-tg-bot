@@ -488,7 +488,7 @@ def add_watermark(input_video, watermark_img, output_video):
 
     # --- ФОРМУЛЫ ---
     # 1. Масштабирование (привязываем ширину ВМ к ширине видео)
-    scale_expr = f"scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
+    scale_expr = f"[0:v]scale='if(gt(ih,720),-2,iw)':'min(ih,720)'[main];[1:v][main]scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
     
     # 2. Фикс пикселей (чтобы лого не плющило)
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
@@ -508,7 +508,7 @@ def add_watermark(input_video, watermark_img, output_video):
         # ВАЖНО: Сначала накладываем вотермарк на весь поток, а ПОТОМ обрезаем. 
         # Это исключает черные экраны и пропадание видео.
         v_filter = (
-            f"[1:v][0:v]{scale_expr};"
+            f"{scale_expr};"
             f"{wm_sar_fix};"
             f"{overlay_expr},select='lt(t,{c_start})+between(t,{c_end},{f_point})',setpts=N/FRAME_RATE/TB"
         )
@@ -518,14 +518,14 @@ def add_watermark(input_video, watermark_img, output_video):
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", v_filter,
             "-af", a_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "30",
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
         logging.info(f"⚠️ Видео короткое, Правый верхний угол (Scale: {wm_scale})")
         
         full_filter = (
-            f"[1:v][0:v]{scale_expr};"
+            f"{scale_expr};"
             f"{wm_sar_fix};"
             f"{overlay_expr}"
         )
@@ -533,7 +533,7 @@ def add_watermark(input_video, watermark_img, output_video):
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", full_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "30",
             "-c:a", "copy", str(output_video)
         ]
     
