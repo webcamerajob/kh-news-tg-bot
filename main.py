@@ -658,6 +658,18 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
+
+    fb_video_tasks = []
+    if c_div:
+        # Поиск видео из Facebook (Khmertimes часто их юзает)
+        for iframe in c_div.find_all("iframe"):
+            src = iframe.get("src", "")
+            if "facebook.com/plugins/video.php" in src:
+                import urllib.parse as urlparse
+                parsed = urlparse.urlparse(src)
+                fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
+                if fb_url and fb_url not in fb_video_tasks:
+                    fb_video_tasks.append(fb_url)
         
         # Видео (mp4/mov)
         for vid in c_div.find_all("video"):
@@ -742,8 +754,34 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                 # Очистка мусора при ошибке
                 if raw_vid_path.exists(): raw_vid_path.unlink()
 
+    # 3. Скачивание Facebook видео и вотермарка
+    fb_files = []
+    if fb_video_tasks:
+        logging.info(f"🔵 Найдено {len(fb_video_tasks)} видео с Facebook.")
+        for fb_url in fb_video_tasks:
+            video_hash = hashlib.md5(fb_url.encode()).hexdigest()[:10]
+            raw_vid_path = images_dir / f"raw_fb_{video_hash}.mp4"
+            final_vid_path = images_dir / f"fb_{video_hash}.mp4"
+
+            if final_vid_path.exists():
+                fb_files.append(final_vid_path.name)
+                continue
+
+            if download_via_loader_to(fb_url, raw_vid_path):
+                if watermark_img_path and watermark_img_path.exists():
+                    if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
+                        fb_files.append(final_vid_path.name)
+                        if raw_vid_path.exists(): raw_vid_path.unlink()
+                    else:
+                        raw_vid_path.rename(final_vid_path)
+                        fb_files.append(final_vid_path.name)
+                else:
+                    raw_vid_path.rename(final_vid_path)
+                    fb_files.append(final_vid_path.name)
+
     final_images = [img for img in images_results if img is not None]
     final_images.extend(youtube_files)
+    final_images.extend(fb_files)
 
     if not final_images:
         logging.warning(f"⚠️ ID={aid}: Нет норм картинок/видео. Skip.")
