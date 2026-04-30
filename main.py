@@ -638,17 +638,26 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
-        logging.info(f"🔍 Проверка iframe src: {src[:50]}...") # Лог для отладки
         
-        # Facebook видео (улучшенный поиск с поддержкой версий v7.0, v12.0 и т.д.)
+        # Facebook видео: ищем гибко, так как версия (v7.0) может меняться
         if "facebook.com" in src and "plugins/video.php" in src:
             parsed = urlparse.urlparse(src)
-            # Извлекаем реальную ссылку на видео из параметра href
+            # Извлекаем параметр 'href', где лежит реальная ссылка на видео
             fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
+            
             if fb_url:
+                # Очищаем от лишних параметров Facebook, если они есть
+                fb_url = fb_url.split('&')[0] 
                 if fb_url not in fb_video_tasks:
                     fb_video_tasks.append(fb_url)
                     logging.info(f"🎯 Найдено FB видео: {fb_url}")
+        
+        # YouTube видео
+        elif "youtube.com/embed" in src or "youtu.be" in src:
+            if src.startswith("//"): src = "https:" + src
+            if src not in youtube_tasks:
+                youtube_tasks.append(src)
+                logging.info(f"🎯 Найдено YouTube iframe: {src}")
                 
         # YouTube видео (iframe)
         elif "youtube.com/embed" in src or "youtu.be" in src:
