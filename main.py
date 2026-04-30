@@ -342,6 +342,72 @@ def get_video_duration(video_path: Path) -> float:
         return float(result.stdout.strip())
     except: return 0.0
 
+def download_youtube_via_loader_to(video_url, output_path):
+    """Скачивает YouTube-видео через loader.to API, в обход блокировок YouTube."""
+    api = "https://loader.to/ajax/download.php"
+    progress_api = "https://loader.to/ajax/progress.php"
+    
+    for attempt in range(1, 4):
+        try:
+            logging.info(f"⬇️ [loader.to] Заказ конверсии (Попытка {attempt}): {video_url}")
+            
+            r = requests.get(api, params={"format": "mp4", "url": video_url}, timeout=30)
+            if r.status_code != 200:
+                logging.warning(f"⚠️ loader.to API ответил {r.status_code}")
+                time.sleep(5)
+                continue
+            
+            data = r.json()
+            if not data.get("success"):
+                logging.warning(f"⚠️ loader.to отказ: {data}")
+                time.sleep(5)
+                continue
+            
+            job_id = data.get("id")
+            if not job_id:
+                logging.warning("⚠️ loader.to не вернул id")
+                time.sleep(5)
+                continue
+            
+            # Опрос прогресса
+            download_url = None
+            for poll in range(60):  # до ~3 минут ожидания
+                time.sleep(3)
+                pr = requests.get(progress_api, params={"id": job_id}, timeout=20)
+                if pr.status_code != 200:
+                    continue
+                pd = pr.json()
+                progress = pd.get("progress", 0)
+                if poll % 5 == 0:
+                    logging.info(f"⏳ loader.to прогресс: {progress/10:.0f}%")
+                if pd.get("success") == 1 and pd.get("download_url"):
+                    download_url = pd["download_url"]
+                    break
+            
+            if not download_url:
+                logging.warning("⚠️ loader.to: таймаут конверсии")
+                continue
+            
+            logging.info(f"⬇️ Скачиваем готовый mp4: {download_url}")
+            vr = requests.get(download_url, timeout=120, stream=True)
+            if vr.status_code == 200:
+                with open(output_path, "wb") as f:
+                    for chunk in vr.iter_content(chunk_size=1024 * 256):
+                        if chunk:
+                            f.write(chunk)
+                
+                if Path(output_path).exists() and Path(output_path).stat().st_size > 10000:
+                    logging.info("✅ YouTube-видео скачано через loader.to!")
+                    return True
+                else:
+                    logging.warning("⚠️ Файл слишком мал, видимо пустой")
+            
+        except Exception as e:
+            logging.error(f"❌ loader.to error [{type(e).__name__}]: {e}")
+            time.sleep(5)
+    
+    return False
+    
 def download_via_loader_to(video_url, output_path):
     """
     Скачивает видео через yt-dlp.
@@ -784,7 +850,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             youtube_files.append(final_vid_path.name)
             continue
 
-        if download_via_loader_to(yt_url, raw_vid_path):
+        if download_youtube_via_loader_to(yt_url, raw_vid_path):
             if watermark_img_path and watermark_img_path.exists():
                 if add_watermark(raw_vid_path, watermark_img_path, final_vid_path):
                     youtube_files.append(final_vid_path.name)
