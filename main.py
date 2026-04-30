@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
+import yt_dlp
 
 # Для перевода
 import requests 
@@ -325,19 +326,37 @@ def get_video_duration(video_path: Path) -> float:
     except: return 0.0
 
 def download_via_loader_to(video_url, output_path):
-    session = cffi_requests.Session(impersonate="chrome120")
-    try:
-        resp = session.get("https://loader.to/ajax/download.php", params={"format": "360", "url": video_url}, timeout=15)
-        task_id = resp.json().get("id")
-        for _ in range(25):
-            time.sleep(3)
-            status = session.get("https://loader.to/ajax/progress.php", params={"id": task_id}, timeout=10).json()
-            if status.get("success") == 1:
-                file_resp = session.get(status.get("download_url"), stream=True, timeout=120)
-                with open(output_path, 'wb') as f:
-                    for chunk in file_resp.iter_content(8192): f.write(chunk)
+    """
+    Скачивает видео через yt-dlp.
+    Название функции оставил старым, чтобы не ломать твой остальной код.
+    """
+    ydl_opts = {
+        'outtmpl': str(output_path),
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': True,
+        # Игнорируем ошибки плейлистов, качаем только само видео
+        'noplaylist': True 
+    }
+    
+    for attempt in range(1, 4):
+        try:
+            logging.info(f"⬇️ Качаем видео (Попытка {attempt}): {video_url}")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+            
+            # Проверяем, что файл реально скачался и он не пустой
+            if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                logging.info("✅ Видео успешно скачано!")
                 return True
-    except: pass
+            else:
+                logging.warning("⚠️ yt-dlp отработал, но файл пуст.")
+                time.sleep(3)
+        except Exception as e:
+            logging.error(f"❌ Ошибка yt-dlp: {e}")
+            time.sleep(5) # Ждем перед ретраем
+            
     return False
 
 def add_watermark(input_video, watermark_img, output_video):
