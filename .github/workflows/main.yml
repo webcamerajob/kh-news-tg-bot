@@ -89,30 +89,36 @@ jobs:
       - name: "🌍 Verify Proxy IP"
         run: |
           echo "External IP (via WARP):"
-          # Добавлена попытка повтора, если прокси еще не пробросил трафик
           curl -s --retry 5 --retry-delay 2 --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
-
+ 
       - name: Install dependencies
         run: pip install yt-dlp
-        
+ 
       - name: "Run Parser"
         id: parse_step
         env:
-          # ВАЖНО: Передаем ключ OpenRouter вместо массива Groq
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          set -o pipefail
           python3 main.py \
             --base-url "https://www.khmertimeskh.com" \
             --slug "national" \
             --limit $BATCH_LIMIT \
             --lang 'ru' \
             --posted-state-file articles/posted.json \
-            --stopwords-file stopwords.txt | tee parser_output.txt
-          
-          # Вытаскиваем статус из логов
-          NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
-          echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
-
+            --stopwords-file stopwords.txt 2>&1 | tee parser_output.txt
+ 
+          echo "=== DEBUG: searching status ==="
+          grep "NEW_ARTICLES_STATUS:" parser_output.txt || echo "NOT FOUND"
+ 
+          if grep -q "NEW_ARTICLES_STATUS:true" parser_output.txt; then
+            echo "new_articles_found=true" >> $GITHUB_OUTPUT
+            echo "Status: true"
+          else
+            echo "new_articles_found=false" >> $GITHUB_OUTPUT
+            echo "Status: false"
+          fi
+ 
       - name: Debug files
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
@@ -122,7 +128,7 @@ jobs:
           find articles -name "meta.json" -exec cat {} \;
           echo "=== full tree ==="
           find articles -type f | head -50
-      
+ 
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
@@ -130,23 +136,19 @@ jobs:
             --parsed-dir articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
-
+ 
       - name: Commit and Push (Conflict Resistant)
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Добавляем файл, только если он существует
+ 
           [ -f "articles/posted.json" ] && git add articles/posted.json
-          
-          # Если есть что коммитить
+ 
           if ! git diff --cached --quiet; then
             git commit -m "chore: update posted.json"
-            
-            # Ребейз с приоритетом наших изменений (ours) при конфликте строк JSON
             git pull --rebase -X ours origin main
             git push origin main
           else
-            echo "✅ No changes to posted.json"
+            echo "No changes to posted.json"
           fi
