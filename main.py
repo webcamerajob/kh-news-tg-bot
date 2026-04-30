@@ -340,8 +340,12 @@ def download_via_loader_to(video_url, output_path):
         'merge_output_format': 'mp4',
         'quiet': True,
         'no_warnings': True,
+        'cookiefile': 'fb_cookies.txt',
         # Игнорируем ошибки плейлистов, качаем только само видео
-        'noplaylist': True 
+        'noplaylist': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
     }
     
     for attempt in range(1, 4):
