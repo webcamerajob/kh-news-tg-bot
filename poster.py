@@ -236,11 +236,15 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             
             if ext in ['.mp4', '.mov', '.m4v']:
                 m_type, m_mime = "video", "video/mp4"
+                # TG Bot API лимит на uploadable — 50 MB
+                if f_path.stat().st_size > 49 * 1024 * 1024:
+                    logging.warning(f"⚠️ Файл {f_path.name} > 49MB, пропускаем в Telegram (FB обработает)")
+                    continue
                 m_bytes = f_path.read_bytes()
             else:
                 m_type, m_mime = "photo", "image/jpeg"
                 m_bytes = apply_watermark(f_path, watermark_scale)
-
+    
             if not m_bytes: continue
             
             files_to_send[f_key] = (f_path.name, m_bytes, m_mime)
