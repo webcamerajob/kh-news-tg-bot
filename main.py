@@ -643,9 +643,9 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         # Facebook видео (улучшенный поиск с поддержкой версий v7.0, v12.0 и т.д.)
         if "facebook.com" in src and "plugins/video.php" in src:
             parsed = urlparse.urlparse(src)
+            # Извлекаем реальную ссылку на видео из параметра href
             fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
             if fb_url:
-                fb_url = fb_url.split('&')[0] # Чистим хвосты
                 if fb_url not in fb_video_tasks:
                     fb_video_tasks.append(fb_url)
                     logging.info(f"🎯 Найдено FB видео: {fb_url}")
