@@ -658,7 +658,34 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         logging.info(f"  blockquote class={bq.get('class')} cite={bq.get('cite', '')[:200]}")
     for d in fb_divs:
         logging.info(f"  div class={d.get('class')} data-href={d.get('data-href', '')[:200]}")
+
+    # Сбор FB-видео из заглушек div.fb-video / blockquote.fb-xfbml-parse-ignore
+    for fb_el in soup.find_all("div", class_=re.compile(r"\bfb-video\b")):
+        raw = fb_el.get("data-href", "")
+        if not raw:
+            continue
+        p = urlparse.urlparse(raw)
+        qs = urlparse.parse_qs(p.query)
+        vid = qs.get("v", [None])[0]
+        if vid:
+            canonical = f"https://www.facebook.com/reel/{vid}"
+        else:
+            m = re.search(r"/(?:reel|videos|watch)/(\d+)", raw)
+            canonical = f"https://www.facebook.com/reel/{m.group(1)}" if m else raw
+        if canonical not in fb_video_tasks:
+            fb_video_tasks.append(canonical)
+            logging.info(f"Найдено FB видео (div.fb-video): {canonical}")
     
+    for bq in soup.find_all("blockquote", class_=re.compile(r"fb-xfbml-parse-ignore")):
+        cite = bq.get("cite", "")
+        m = re.search(r"/(?:reel|videos|watch)/(\d+)", cite)
+        if not m:
+            continue
+        canonical = f"https://www.facebook.com/reel/{m.group(1)}"
+        if canonical not in fb_video_tasks:
+            fb_video_tasks.append(canonical)
+            logging.info(f"Найдено FB видео (blockquote): {canonical}")
+            
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
  
