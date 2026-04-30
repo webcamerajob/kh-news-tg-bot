@@ -651,6 +651,13 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     fb_divs = soup.find_all("div", class_=re.compile("fb-video|fb-post"))
     fb_data = soup.find_all(attrs={"data-href": re.compile("facebook.com")})
     logging.info(f"DEBUG: fb blockquote={len(fb_blockquotes)}, fb div={len(fb_divs)}, data-href={len(fb_data)}")
+    for el in fb_data:
+    logging.info(f"  data-href: {el.get('data-href', '')[:200]} | tag={el.name} | class={el.get('class')}")
+
+    for bq in fb_blockquotes:
+        logging.info(f"  blockquote class={bq.get('class')} cite={bq.get('cite', '')[:200]}")
+    for d in fb_divs:
+        logging.info(f"  div class={d.get('class')} data-href={d.get('data-href', '')[:200]}")
     
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
