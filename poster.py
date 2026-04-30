@@ -231,6 +231,9 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             f_key = f"media_{idx}"
             ext = f_path.suffix.lower()
             
+            size_mb = f_path.stat().st_size / (1024 * 1024)
+            logging.info(f"🔎 Файл: {f_path.name} | Размер: {size_mb:.2f} MB")
+            
             if ext in ['.mp4', '.mov', '.m4v']:
                 m_type, m_mime = "video", "video/mp4"
                 m_bytes = f_path.read_bytes()
