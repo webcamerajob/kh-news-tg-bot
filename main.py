@@ -638,33 +638,31 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     
     for iframe in soup.find_all("iframe"):
         src = iframe.get("src", "")
-        
-        # Facebook видео: ищем вхождение домена и плагина, игнорируя версию v7.0/v12.0 и т.д.
+ 
         if "facebook.com" in src and "plugins/video.php" in src:
             parsed = urlparse.urlparse(src)
-            # Достаем параметр 'href', в котором зашита ссылка на само видео
             fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
-            
+ 
             if fb_url:
-                # Очищаем ссылку от лишних параметров Facebook
-                fb_url = fb_url.split('&')[0] 
-                if fb_url not in fb_video_tasks:
-                    fb_video_tasks.append(fb_url)
-                    logging.info(f"🎯 Найдено FB видео: {fb_url}")
-        
-        # YouTube видео
+                fb_parsed = urlparse.urlparse(fb_url)
+                fb_qs = urlparse.parse_qs(fb_parsed.query)
+                video_id = fb_qs.get('v', [None])[0]
+ 
+                if video_id:
+                    canonical = f"https://www.facebook.com/watch/?v={video_id}"
+                else:
+                    canonical = fb_url
+ 
+                if canonical not in fb_video_tasks:
+                    fb_video_tasks.append(canonical)
+                    logging.info(f"Найдено FB видео: {canonical}")
+ 
         elif "youtube.com/embed" in src or "youtu.be" in src:
-            if src.startswith("//"): src = "https:" + src
+            if src.startswith("//"):
+                src = "https:" + src
             if src not in youtube_tasks:
                 youtube_tasks.append(src)
-                logging.info(f"🎯 Найдено YouTube iframe: {src}")
-                
-        # YouTube видео (iframe)
-        elif "youtube.com/embed" in src or "youtu.be" in src:
-            if src.startswith("//"): src = "https:" + src
-            if src not in youtube_tasks:
-                youtube_tasks.append(src)
-                logging.info(f"🎯 Найдено YouTube iframe: {src}")
+                logging.info(f"Найдено YouTube iframe: {src}")
 
     # --- ШАГ 2: ОЧИСТКА МУСОРА ---
     # Удаляем виджеты, рекламу и связанные посты
