@@ -343,45 +343,94 @@ def get_video_duration(video_path: Path) -> float:
     except: return 0.0
 
 def download_youtube_via_loader_to(video_url, output_path):
-    """Скачивает YouTube через loader.to /api/card/ эндпоинт."""
-    api = "https://loader.to/api/card/"
+    """Скачивает YouTube через AJAX-эндпоинты loader.to (как делает их card-виджет)."""
+    domain = "p.savenow.to"
+    download_api = f"https://{domain}/ajax/download.php"
+    progress_api = f"https://{domain}/api/progress"
+    
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    headers = {
+        "User-Agent": ua,
+        "Referer": "https://loader.to/",
+        "Origin": "https://loader.to",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+    }
     
     for attempt in range(1, 4):
         try:
             logging.info(f"⬇️ [loader.to] Попытка {attempt}: {video_url}")
             
-            params = {"url": video_url, "format": "720"}
-            r = requests.get(api, params=params, timeout=30, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            })
+            params = {
+                "button": "1",
+                "start": "1",
+                "end": "1",
+                "iframe_source": "direct-iframe",
+                "format": "720",
+                "url": video_url,
+            }
+            r = requests.get(download_api, params=params, headers=headers, timeout=30)
             
             if r.status_code != 200:
-                logging.warning(f"⚠️ loader.to HTTP {r.status_code}: {r.text[:200]}")
+                logging.warning(f"⚠️ download.php HTTP {r.status_code}: {r.text[:200]}")
                 time.sleep(5)
                 continue
             
-            body = r.text
+            try:
+                data = r.json()
+            except Exception:
+                logging.warning(f"⚠️ download.php не JSON: {r.text[:200]}")
+                time.sleep(5)
+                continue
             
-            # ВАРИАНТ A: в HTML есть прямая ссылка на mp4
-            direct_match = re.search(r'href=[\'"]([^\'"]+\.mp4[^\'"]*)[\'"]', body)
-            if direct_match:
-                download_url = direct_match.group(1)
-                logging.info(f"⬇️ Найден прямой mp4 в карточке")
-                if _save_remote_file(download_url, output_path):
+            job_id = data.get("id")
+            if not job_id:
+                logging.warning(f"⚠️ download.php без id: {data}")
+                time.sleep(5)
+                continue
+            
+            logging.info(f"📋 Job ID: {job_id}, опрашиваем прогресс...")
+            
+            # Опрос (до ~3 минут)
+            download_url = None
+            for poll in range(120):
+                time.sleep(1.5)
+                try:
+                    pr = requests.get(progress_api, params={"id": job_id}, headers=headers, timeout=20)
+                    if pr.status_code != 200:
+                        continue
+                    pd = pr.json()
+                except Exception:
+                    continue
+                
+                progress = pd.get("progress", 0)
+                if poll % 10 == 0:
+                    logging.info(f"⏳ loader.to: {progress/10:.0f}%")
+                
+                if pd.get("download_url") and pd.get("success") == 1:
+                    download_url = pd["download_url"]
+                    break
+            
+            if not download_url:
+                logging.warning("⚠️ loader.to: таймаут конверсии")
+                continue
+            
+            logging.info(f"⬇️ Скачиваем готовый mp4: {download_url[:80]}...")
+            vr = requests.get(download_url, timeout=180, stream=True, headers={"User-Agent": ua})
+            if vr.status_code == 200:
+                with open(output_path, "wb") as f:
+                    for chunk in vr.iter_content(chunk_size=1024 * 256):
+                        if chunk:
+                            f.write(chunk)
+                
+                size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+                if size > 10000:
+                    logging.info(f"✅ YouTube скачан через loader.to ({size // 1024} KB)")
                     return True
-            
-            # ВАРИАНТ B: в HTML есть data-id / job-id для опроса прогресса
-            id_match = (re.search(r'data-id=[\'"]([^\'"]+)[\'"]', body) or
-                        re.search(r'[\'"]id[\'"]\s*:\s*[\'"]([a-zA-Z0-9_-]+)[\'"]', body))
-            if id_match:
-                job_id = id_match.group(1)
-                logging.info(f"📋 Job ID из карточки: {job_id}")
-                download_url = _poll_loader_to_progress(job_id)
-                if download_url and _save_remote_file(download_url, output_path):
-                    return True
-            
-            logging.warning(f"⚠️ В ответе card не найдено ни прямой ссылки, ни id. Ответ: {body[:300]}")
-            time.sleep(5)
+                else:
+                    logging.warning(f"⚠️ Файл слишком мал ({size} байт)")
+            else:
+                logging.warning(f"⚠️ Скачивание HTTP {vr.status_code}")
             
         except Exception as e:
             logging.error(f"❌ loader.to error [{type(e).__name__}]: {e}")
