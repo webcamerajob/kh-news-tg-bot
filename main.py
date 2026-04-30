@@ -39,7 +39,7 @@ AI_MODELS = [
     "google/gemini-2.0-flash-lite-preview-02-05:free", # Самая быстрая и умная из бесплатных
     "google/gemini-2.0-pro-exp-02-05:free",           # Мощнее, но лимиты строже
     "mistralai/pixtral-12b:free",                     # Хорошая альтернатива от Mistral
-    "qwen/qwen-2-7b-instruct:free"                    # Легкая и быстрая
+    "qwen/qwen-2-7b-instruct:free",                   # Легкая и быстрая
     "qwen/qwen-2.5-72b-instruct",        # Убрал :free
     "google/gemini-2.0-flash-001",       # Рабочий эндпоинт
     "deepseek/deepseek-chat",            # Твой единственный живой вариант в логах
