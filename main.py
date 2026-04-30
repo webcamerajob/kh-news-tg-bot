@@ -73,19 +73,29 @@ IPHONE_HEADERS = {
 
 FALLBACK_HEADERS = IPHONE_HEADERS
 
-def rotate_warp():
-    """Переподключает WARP для смены IP"""
-    logging.info("♻️ WARP: Ротация IP...")
+def rotate_warp(hard: bool = False):
+    """Переподключает WARP. hard=True — полная перерегистрация (новый device, новый IP)."""
     try:
-        # Разрываем соединение
-        subprocess.run(["warp-cli", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
-        # Подключаем снова
-        subprocess.run(["warp-cli", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Ждем стабилизации (WARP иногда тупит пару секунд после коннекта)
-        time.sleep(5)
-        logging.info("✅ WARP: Переподключено.")
+        if hard:
+            logging.info("♻️ WARP: HARD ротация (новая регистрация)...")
+            subprocess.run(["warp-cli", "--accept-tos", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            subprocess.run(["warp-cli", "--accept-tos", "registration", "delete"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            subprocess.run(["warp-cli", "--accept-tos", "registration", "new"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            subprocess.run(["warp-cli", "--accept-tos", "mode", "proxy"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["warp-cli", "--accept-tos", "proxy", "port", "40000"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["warp-cli", "--accept-tos", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(8)
+            logging.info("✅ WARP: Перерегистрирован.")
+        else:
+            logging.info("♻️ WARP: Ротация IP...")
+            subprocess.run(["warp-cli", "--accept-tos", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            subprocess.run(["warp-cli", "--accept-tos", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(5)
+            logging.info("✅ WARP: Переподключено.")
     except Exception as e:
         logging.error(f"❌ Ошибка ротации WARP: {e}")
 
@@ -504,7 +514,7 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
     # Используем глобальную переменную, чтобы можно было её обновить
     global SCRAPER 
 
-    for attempt in range(1, 6): # Увеличил кол-во попыток до 5
+    for attempt in range(1, 9):
         try:
             logging.info(f"📥 Скачиваем список статей (Попытка {attempt}/5)...")
             
@@ -530,8 +540,8 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
             if is_blocked:
                 logging.info("🔄 Запускаем процедуру смены IP и сессии...")
                 
-                # 1. Дергаем WARP
-                rotate_warp()
+                # Первые 2 попытки — мягкая ротация, потом hard (новая регистрация)
+                rotate_warp(hard=(attempt >= 2))
                 
                 # 2. Пересоздаем сессию (ВАЖНО: сброс TLS fingerprint)
                 logging.info("🛠 Пересоздание сессии SCRAPER...")
@@ -555,12 +565,12 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
                 return []
             except Exception:
                 logging.error("❌ Ошибка парсинга JSON (видимо, пришел мусор).")
-                rotate_warp() # Если пришел мусор - тоже меняем IP на всякий случай
+                rotate_warp(hard=(attempt >= 2))
                 continue
                 
         except Exception as e:
             logging.error(f"❌ Общая ошибка цикла: {e}")
-            rotate_warp()
+            rotate_warp(hard=(attempt >= 2))
             time.sleep(5)
 
     logging.error("💀 Не удалось получить список статей после всех попыток.")
