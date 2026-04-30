@@ -437,52 +437,6 @@ def download_youtube_via_loader_to(video_url, output_path):
             time.sleep(5)
     
     return False
-
-def _poll_loader_to_progress(job_id):
-    """Опрос прогресса конверсии loader.to до получения download_url."""
-    progress_api = "https://loader.to/ajax/progress.php"
-    for poll in range(60):  # ~3 минуты
-        time.sleep(3)
-        try:
-            pr = requests.get(progress_api, params={"id": job_id}, timeout=20)
-            if pr.status_code != 200:
-                continue
-            pd = pr.json()
-        except Exception:
-            continue
-        
-        progress = pd.get("progress", 0)
-        if poll % 5 == 0:
-            logging.info(f"⏳ loader.to прогресс: {progress/10:.0f}%")
-        
-        if pd.get("download_url") and progress >= 1000:
-            return pd["download_url"]
-        if str(pd.get("text", "")).lower() in ("failed", "error"):
-            logging.warning(f"⚠️ loader.to job failed: {pd}")
-            return None
-    return None
-
-def _save_remote_file(url, output_path):
-    """Скачивает файл по прямой ссылке."""
-    try:
-        r = requests.get(url, timeout=180, stream=True, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        if r.status_code == 200:
-            with open(output_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 256):
-                    if chunk:
-                        f.write(chunk)
-            size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
-            if size > 10000:
-                logging.info(f"✅ Скачано {size // 1024} KB")
-                return True
-            logging.warning(f"⚠️ Файл пуст или слишком мал ({size} байт)")
-        else:
-            logging.warning(f"⚠️ Скачивание HTTP {r.status_code}")
-    except Exception as e:
-        logging.error(f"❌ Save error: {e}")
-    return False
     
 def download_via_loader_to(video_url, output_path):
     """
