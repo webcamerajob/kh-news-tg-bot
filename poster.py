@@ -267,8 +267,7 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             size_mb = f_path.stat().st_size / (1024 * 1024)
             logging.info(f"🔎 Файл: {f_path.name} | Размер: {size_mb:.2f} MB")
             
-            
-    	    if ext in ['.mp4', '.mov', '.m4v']:
+            if ext in ['.mp4', '.mov', '.m4v']:
                 m_type, m_mime = "video", "video/mp4"
                 if f_path.stat().st_size > 49 * 1024 * 1024:
                     logging.warning(f"⚠️ Файл {f_path.name} > 49MB, пропускаем в Telegram (FB обработает)")
@@ -277,11 +276,11 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             else:
                 m_type, m_mime = "photo", "image/jpeg"
                 m_bytes = apply_watermark(f_path, watermark_scale)
-    
+ 
             if not m_bytes: continue
-            
+ 
             files_to_send[f_key] = (f_path.name, m_bytes, m_mime)
-            
+ 
             media_item = {"type": m_type, "media": f"attach://{f_key}"}
             
             # Для видео — генерим thumbnail и прикрепляем
