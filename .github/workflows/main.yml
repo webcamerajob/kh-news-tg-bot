@@ -113,6 +113,16 @@ jobs:
           NEW_ARTICLES_STATUS=$(grep "NEW_ARTICLES_STATUS:" parser_output.txt | cut -d: -f2 | tr -d '[:space:]')
           echo "new_articles_found=$NEW_ARTICLES_STATUS" >> $GITHUB_OUTPUT
 
+      - name: Debug files
+        if: steps.parse_step.outputs.new_articles_found == 'true'
+        run: |
+          echo "=== mp4 files ==="
+          find articles -name "*.mp4" -exec ls -la {} \;
+          echo "=== meta.json ==="
+          find articles -name "meta.json" -exec cat {} \;
+          echo "=== full tree ==="
+          find articles -type f | head -50
+      
       - name: Run poster
         if: steps.parse_step.outputs.new_articles_found == 'true'
         run: |
