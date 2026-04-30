@@ -343,69 +343,96 @@ def get_video_duration(video_path: Path) -> float:
     except: return 0.0
 
 def download_youtube_via_loader_to(video_url, output_path):
-    """Скачивает YouTube-видео через loader.to API, в обход блокировок YouTube."""
-    api = "https://loader.to/ajax/download.php"
-    progress_api = "https://loader.to/ajax/progress.php"
+    """Скачивает YouTube через loader.to /api/card/ эндпоинт."""
+    api = "https://loader.to/api/card/"
     
     for attempt in range(1, 4):
         try:
-            logging.info(f"⬇️ [loader.to] Заказ конверсии (Попытка {attempt}): {video_url}")
+            logging.info(f"⬇️ [loader.to] Попытка {attempt}: {video_url}")
             
-            r = requests.get(api, params={"format": "mp4", "url": video_url}, timeout=30)
+            params = {"url": video_url, "format": "720"}
+            r = requests.get(api, params=params, timeout=30, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            
             if r.status_code != 200:
-                logging.warning(f"⚠️ loader.to API ответил {r.status_code}")
+                logging.warning(f"⚠️ loader.to HTTP {r.status_code}: {r.text[:200]}")
                 time.sleep(5)
                 continue
             
-            data = r.json()
-            if not data.get("success"):
-                logging.warning(f"⚠️ loader.to отказ: {data}")
-                time.sleep(5)
-                continue
+            body = r.text
             
-            job_id = data.get("id")
-            if not job_id:
-                logging.warning("⚠️ loader.to не вернул id")
-                time.sleep(5)
-                continue
-            
-            # Опрос прогресса
-            download_url = None
-            for poll in range(60):  # до ~3 минут ожидания
-                time.sleep(3)
-                pr = requests.get(progress_api, params={"id": job_id}, timeout=20)
-                if pr.status_code != 200:
-                    continue
-                pd = pr.json()
-                progress = pd.get("progress", 0)
-                if poll % 5 == 0:
-                    logging.info(f"⏳ loader.to прогресс: {progress/10:.0f}%")
-                if pd.get("success") == 1 and pd.get("download_url"):
-                    download_url = pd["download_url"]
-                    break
-            
-            if not download_url:
-                logging.warning("⚠️ loader.to: таймаут конверсии")
-                continue
-            
-            logging.info(f"⬇️ Скачиваем готовый mp4: {download_url}")
-            vr = requests.get(download_url, timeout=120, stream=True)
-            if vr.status_code == 200:
-                with open(output_path, "wb") as f:
-                    for chunk in vr.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            f.write(chunk)
-                
-                if Path(output_path).exists() and Path(output_path).stat().st_size > 10000:
-                    logging.info("✅ YouTube-видео скачано через loader.to!")
+            # ВАРИАНТ A: в HTML есть прямая ссылка на mp4
+            direct_match = re.search(r'href=[\'"]([^\'"]+\.mp4[^\'"]*)[\'"]', body)
+            if direct_match:
+                download_url = direct_match.group(1)
+                logging.info(f"⬇️ Найден прямой mp4 в карточке")
+                if _save_remote_file(download_url, output_path):
                     return True
-                else:
-                    logging.warning("⚠️ Файл слишком мал, видимо пустой")
+            
+            # ВАРИАНТ B: в HTML есть data-id / job-id для опроса прогресса
+            id_match = (re.search(r'data-id=[\'"]([^\'"]+)[\'"]', body) or
+                        re.search(r'[\'"]id[\'"]\s*:\s*[\'"]([a-zA-Z0-9_-]+)[\'"]', body))
+            if id_match:
+                job_id = id_match.group(1)
+                logging.info(f"📋 Job ID из карточки: {job_id}")
+                download_url = _poll_loader_to_progress(job_id)
+                if download_url and _save_remote_file(download_url, output_path):
+                    return True
+            
+            logging.warning(f"⚠️ В ответе card не найдено ни прямой ссылки, ни id. Ответ: {body[:300]}")
+            time.sleep(5)
             
         except Exception as e:
             logging.error(f"❌ loader.to error [{type(e).__name__}]: {e}")
             time.sleep(5)
     
+    return False
+
+def _poll_loader_to_progress(job_id):
+    """Опрос прогресса конверсии loader.to до получения download_url."""
+    progress_api = "https://loader.to/ajax/progress.php"
+    for poll in range(60):  # ~3 минуты
+        time.sleep(3)
+        try:
+            pr = requests.get(progress_api, params={"id": job_id}, timeout=20)
+            if pr.status_code != 200:
+                continue
+            pd = pr.json()
+        except Exception:
+            continue
+        
+        progress = pd.get("progress", 0)
+        if poll % 5 == 0:
+            logging.info(f"⏳ loader.to прогресс: {progress/10:.0f}%")
+        
+        if pd.get("download_url") and progress >= 1000:
+            return pd["download_url"]
+        if str(pd.get("text", "")).lower() in ("failed", "error"):
+            logging.warning(f"⚠️ loader.to job failed: {pd}")
+            return None
+    return None
+
+def _save_remote_file(url, output_path):
+    """Скачивает файл по прямой ссылке."""
+    try:
+        r = requests.get(url, timeout=180, stream=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        if r.status_code == 200:
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        f.write(chunk)
+            size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+            if size > 10000:
+                logging.info(f"✅ Скачано {size // 1024} KB")
+                return True
+            logging.warning(f"⚠️ Файл пуст или слишком мал ({size} байт)")
+        else:
+            logging.warning(f"⚠️ Скачивание HTTP {r.status_code}")
+    except Exception as e:
+        logging.error(f"❌ Save error: {e}")
     return False
     
 def download_via_loader_to(video_url, output_path):
