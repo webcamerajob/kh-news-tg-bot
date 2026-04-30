@@ -91,7 +91,10 @@ jobs:
           echo "External IP (via WARP):"
           # Добавлена попытка повтора, если прокси еще не пробросил трафик
           curl -s --retry 5 --retry-delay 2 --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
-      
+
+      - name: Install dependencies
+        run: pip install yt-dlp
+        
       - name: "Run Parser"
         id: parse_step
         env:
