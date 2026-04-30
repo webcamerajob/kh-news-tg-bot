@@ -36,14 +36,17 @@ FETCH_DEPTH = 30
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
-    "google/gemini-2.0-flash-lite-preview-02-05:free", # Самая быстрая и умная из бесплатных
-    "google/gemini-2.0-pro-exp-02-05:free",           # Мощнее, но лимиты строже
-    "mistralai/pixtral-12b:free",                     # Хорошая альтернатива от Mistral
-    "qwen/qwen-2-7b-instruct:free",                   # Легкая и быстрая
+    "openai/gpt-oss-120b:free",                  # 131K, MoE, сильнейшая в списке
+    "z-ai/glm-4.5-air:free",                     # 131K, агентная, держит инструкции
+    "meta-llama/llama-3.3-70b-instruct:free",    # 66K, проверенная рабочая лошадка
+    "google/gemma-3-27b-it:free",                # 131K, многоязычная
+    "google/gemma-3-12b-it:free",                # 33K, легче и быстрее
+    "openai/gpt-oss-20b:free",                   # 131K, запасной от OpenAI
+    "nousresearch/hermes-3-llama-3.1-405b:free", # 131K, тяжёлый fallback
     "qwen/qwen-2.5-72b-instruct",        # Убрал :free
     "google/gemini-2.0-flash-001",       # Рабочий эндпоинт
     "deepseek/deepseek-chat",            # Твой единственный живой вариант в логах
-    "openai/gpt-4o-mini"
+    "openai/gpt-4o-mini",
 ]
 
 # Константа для порта WARP
