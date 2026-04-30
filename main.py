@@ -518,7 +518,7 @@ def add_watermark(input_video, watermark_img, output_video):
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", v_filter,
             "-af", a_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "30",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
             "-c:a", "aac", "-b:a", "128k", str(output_video)
         ]
     else:
@@ -533,7 +533,7 @@ def add_watermark(input_video, watermark_img, output_video):
         cmd = [
             "ffmpeg", "-y", "-i", str(input_video), "-i", str(watermark_img),
             "-filter_complex", full_filter,
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "30",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
             "-c:a", "copy", str(output_video)
         ]
     
