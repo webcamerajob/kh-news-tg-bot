@@ -622,6 +622,18 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     for garbage in soup.find_all(["div", "ul", "ol", "section", "aside"], 
                                 class_=re.compile(r"rp4wp|related|ad-|post-widget-thumbnail|sharedaddy")):
         garbage.decompose()
+    
+    fb_video_tasks = []
+    if c_div:
+        # Поиск видео из Facebook (Khmertimes часто их юзает)
+        for iframe in c_div.find_all("iframe"):
+            src = iframe.get("src", "")
+            if "facebook.com/plugins/video.php" in src:
+                import urllib.parse as urlparse
+                parsed = urlparse.urlparse(src)
+                fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
+                if fb_url and fb_url not in fb_video_tasks:
+                    fb_video_tasks.append(fb_url)
 
     for j in soup.find_all(["span", "script", "style", "iframe"]):
         src = j.get("src", "")
@@ -658,18 +670,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
-
-    fb_video_tasks = []
-    if c_div:
-        # Поиск видео из Facebook (Khmertimes часто их юзает)
-        for iframe in c_div.find_all("iframe"):
-            src = iframe.get("src", "")
-            if "facebook.com/plugins/video.php" in src:
-                import urllib.parse as urlparse
-                parsed = urlparse.urlparse(src)
-                fb_url = urlparse.parse_qs(parsed.query).get('href', [None])[0]
-                if fb_url and fb_url not in fb_video_tasks:
-                    fb_video_tasks.append(fb_url)
         
         # Видео (mp4/mov)
         for vid in c_div.find_all("video"):
