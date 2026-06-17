@@ -2,8 +2,8 @@ name: AI Parse & Post Articles
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # ИСПРАВЛЕНО: Не отменяем текущий процесс, чтобы он успел сохранить posted.json
-  cancel-in-progress: false 
+  # Не отменяем текущий прогон, чтобы он успел сохранить posted.json
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -11,91 +11,109 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    # 05:30 - 06:30 утра (по Индокитаю)
+    # 05:30 - 06:30 (Индокитай)
     - cron: '30 22-23 * * *'
-    # 07:30 - 18:30 (по Индокитаю)
+    # 07:30 - 18:30 (Индокитай)
     - cron: '30 0-11 * * *'
-    
+
 env:
   POST_DELAY: 10
   BATCH_LIMIT: 10
-  TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
-  TELEGRAM_CHANNEL:   ${{ secrets.TELEGRAM_CHANNEL }}
-  WG_CONFIG:          ${{ secrets.WG_CONFIG }}
-  FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+  TELEGRAM_TOKEN:       ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_CHANNEL:     ${{ secrets.TELEGRAM_CHANNEL }}
+  WG_CONFIG:            ${{ secrets.WG_CONFIG }}
+  FB_PAGE_ID:           ${{ secrets.FB_PAGE_ID }}
   FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
 
 jobs:
   build-and-publish:
-    name: Parse and Publish (Khmertimes)
+    name: "Parse & Publish (attempt ${{ matrix.attempt }})"
     runs-on: ubuntu-latest
-    
+    # КЛЮЧЕВОЕ: каждый attempt = НОВЫЙ раннер = новый Azure-IP + свежая
+    # регистрация WARP = реально другой egress. Это и есть "новый воркфлоу",
+    # только внутри одного прогона и последовательно.
+    strategy:
+      fail-fast: false      # один заблокированный раннер не должен рубить остальные
+      max-parallel: 1       # строго по очереди, чтобы успешный attempt погасил следующие
+      matrix:
+        attempt: [1, 2, 3]
+
     steps:
+      # --- Проверяем, не пробился ли уже предыдущий attempt этого прогона ---
+      - name: Check prior success
+        id: prior
+        uses: actions/download-artifact@v4
+        with:
+          name: fetch-done
+          path: _done
+        continue-on-error: true
+
+      - name: Set skip flag
+        id: guard
+        run: |
+          if [ "${{ steps.prior.outcome }}" = "success" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "✅ Предыдущий раннер уже пробился. Пропускаем этот attempt."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout code
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/checkout@v4.2.2
         with:
-          # Важно для правильного ребейза и сохранения истории json
-          fetch-depth: 0 
+          fetch-depth: 0
 
       - name: Set up Python
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # --- Установка FFmpeg (нужен для video_processor.py, если используешь) ---
       - name: Install FFmpeg
+        if: steps.guard.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
       - name: Install requirements
+        if: steps.guard.outputs.skip != 'true'
         run: |
           pip install --upgrade pip
-          pip install --no-cache-dir curl_cffi requests beautifulsoup4
+          pip install --no-cache-dir curl_cffi requests beautifulsoup4 yt-dlp
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
-      
+
       - name: Install & Connect Cloudflare WARP
+        if: steps.guard.outputs.skip != 'true'
         run: |
-          # 1. Установка
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
           sudo apt-get update && sudo apt-get install -y cloudflare-warp
-          
-          # 2. Демон уже запущен установщиком. Для надежности просто рестартуем его:
           sudo systemctl restart warp-svc
-          
-          # Ждем пару секунд, чтобы сокет точно создался
           sleep 3
-          
-          # 3. Настройка и подключение
           warp-cli --accept-tos registration new
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos proxy port 40000
           warp-cli --accept-tos connect
-          
-          # 4. Проверка статуса без слепых ожиданий
-          echo "⏳ Ожидание статуса Connected..."
+          echo "⏳ Ожидание Connected..."
           for i in {1..10}; do
-            STATUS=$(warp-cli --accept-tos status)
-            if echo "$STATUS" | grep -q "Connected"; then
-              echo "✅ WARP успешно подключен!"
-              break
+            if warp-cli --accept-tos status | grep -q "Connected"; then
+              echo "✅ WARP подключён"; break
             fi
             sleep 3
           done
 
-      - name: "🌍 Verify Proxy IP"
+      - name: "🌍 Verify egress IP"
+        if: steps.guard.outputs.skip != 'true'
         run: |
-          echo "External IP (via WARP):"
-          curl -s --retry 5 --retry-delay 2 --socks5-hostname 127.0.0.1:40000 https://ifconfig.me
- 
-      - name: Install dependencies
-        run: pip install yt-dlp
- 
-      - name: "Run Parser"
+          echo "Egress IP этого раннера (через WARP):"
+          curl -s --retry 5 --retry-delay 2 --socks5-hostname 127.0.0.1:40000 https://ifconfig.me || true
+
+      - name: Run parser
         id: parse_step
+        if: steps.guard.outputs.skip != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -107,34 +125,34 @@ jobs:
             --lang 'ru' \
             --posted-state-file articles/posted.json \
             --stopwords-file stopwords.txt 2>&1 | tee parser_output.txt
- 
-          echo "=== DEBUG: searching status ==="
-          grep "NEW_ARTICLES_STATUS:" parser_output.txt || echo "NOT FOUND"
- 
+
+          if grep -q "FETCH_FAILED:true" parser_output.txt; then
+            echo "fetched=false" >> $GITHUB_OUTPUT
+            echo "::warning::Cloudflare заблокировал раннер #${{ matrix.attempt }}. Эстафета следующему."
+            exit 0
+          fi
+
+          echo "fetched=true" >> $GITHUB_OUTPUT
           if grep -q "NEW_ARTICLES_STATUS:true" parser_output.txt; then
             echo "new_articles_found=true" >> $GITHUB_OUTPUT
-            echo "Status: true"
           else
             echo "new_articles_found=false" >> $GITHUB_OUTPUT
-            echo "Status: false"
           fi
- 
+
       - name: Run poster
-        if: steps.parse_step.outputs.new_articles_found == 'true'
+        if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true' && steps.parse_step.outputs.new_articles_found == 'true'
         run: |
           python3 poster.py \
             --parsed-dir articles \
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
- 
+
       - name: Commit and Push (Conflict Resistant)
-        if: always()
+        if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
- 
           [ -f "articles/posted.json" ] && git add articles/posted.json
- 
           if ! git diff --cached --quiet; then
             git commit -m "chore: update posted.json"
             git pull --rebase -X ours origin main
@@ -142,3 +160,17 @@ jobs:
           else
             echo "No changes to posted.json"
           fi
+
+      # Пробились (список получен) -> поднимаем флаг, чтобы следующие attempt'ы скипнулись.
+      # Заблокировало -> артефакт НЕ создаём, следующий свежий раннер попробует снова.
+      - name: Mark success
+        if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true'
+        run: mkdir -p _done && echo "ok" > _done/done.txt
+
+      - name: Upload success marker
+        if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetch-done
+          path: _done/done.txt
+          retention-days: 1
