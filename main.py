@@ -599,32 +599,28 @@ def fetch_cat_id(url, slug):
                 logging.error(f"💀 Все попытки исчерпаны. Возвращаем дефолтный ID 19.")
                 return 19
 
-def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
+def fetch_posts_light(url: str, cid: int, limit: int) -> Optional[List[Dict]]:
+    """
+    Список постов при успехе; [] если API ответил пусто/ошибкой;
+    None если не пробились (Cloudflare) — сигнал воркфлоу взять свежий раннер.
+    """
     params = {"categories": cid, "per_page": limit, "_fields": "id,slug,link,title,date"}
     endpoint = f"{url}/wp-json/wp/v2/posts"
-    
-    # Заголовки
-    fallback_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Referer": "https://www.google.com/"
-    }
+    global SCRAPER
 
-    # Используем глобальную переменную, чтобы можно было её обновить
-    global SCRAPER 
-
-    for attempt in range(1, 9):
+    # Ротация WARP на одном раннере бесполезна (egress из того же помеченного пула
+    # Cloudflare). 2 быстрые попытки -> при блоке выходим, эстафету берёт следующий
+    # свежий раннер из matrix в воркфлоу.
+    MAX = 2
+    for attempt in range(1, MAX + 1):
         try:
-            logging.info(f"📥 Скачиваем список статей (Попытка {attempt}/5)...")
-            
+            logging.info(f"📥 Скачиваем список статей (Попытка {attempt}/{MAX})...")
             response = None
-            # 1. Пробуем через WARP (curl_cffi)
             try:
                 response = SCRAPER.get(endpoint, params=params, timeout=45)
             except Exception as e:
-                logging.warning(f"⚠️ SCRAPER ошибка: {e}. Пробуем ротацию...")
-                
-            # АНАЛИЗ ОТВЕТА
+                logging.warning(f"⚠️ SCRAPER ошибка: {e}")
+
             is_blocked = False
             if not response:
                 is_blocked = True
@@ -633,47 +629,36 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> List[Dict]:
                 logging.warning(f"⚠️ Cloudflare Block (Code {response.status_code}).")
             elif "text/html" in response.headers.get("Content-Type", "") or "<!DOCTYPE html>" in response.text[:100]:
                 is_blocked = True
-                logging.warning(f"⚠️ Получен HTML (Cloudflare Challenge) вместо JSON.")
+                logging.warning("⚠️ Получен HTML (Cloudflare Challenge) вместо JSON.")
 
-            # ЕСЛИ ЗАБЛОКИРОВАЛИ -> РОТАЦИЯ
             if is_blocked:
-                logging.info("🔄 Запускаем процедуру смены IP и сессии...")
-                
-                # Первые 2 попытки — мягкая ротация, потом hard (новая регистрация)
-                rotate_warp(hard=(attempt >= 2))
-                
-                # 2. Пересоздаем сессию (ВАЖНО: сброс TLS fingerprint)
-                logging.info("🛠 Пересоздание сессии SCRAPER...")
-                SCRAPER = cffi_requests.Session(
-                    impersonate="chrome120", # Можно попробовать повысить версию
-                    proxies={"http": WARP_PROXY, "https": WARP_PROXY},
-                    http_version=CurlHttpVersion.V1_1
-                )
-                
-                # Короткая пауза перед новым запросом
-                time.sleep(3)
-                continue # Идем на следующий круг цикла (attempt + 1)
+                if attempt < MAX:
+                    logging.info("🛠 Пересоздание сессии SCRAPER и повтор...")
+                    SCRAPER = cffi_requests.Session(
+                        impersonate="chrome120",
+                        proxies={"http": WARP_PROXY, "https": WARP_PROXY},
+                        http_version=CurlHttpVersion.V1_1
+                    )
+                    time.sleep(3)
+                continue
 
-            # 4. Безопасный парсинг (если не заблокированы)
             try:
                 data = response.json()
                 if isinstance(data, list):
                     return data
-                elif isinstance(data, dict) and "code" in data:
-                     logging.error(f"❌ API Error: {data.get('message')}")
-                return []
+                if isinstance(data, dict) and "code" in data:
+                    logging.error(f"❌ API Error: {data.get('message')}")
+                    return []
             except Exception:
-                logging.error("❌ Ошибка парсинга JSON (видимо, пришел мусор).")
-                rotate_warp(hard=(attempt >= 2))
+                logging.error("❌ Ошибка парсинга JSON (пришёл мусор).")
                 continue
-                
+
         except Exception as e:
             logging.error(f"❌ Общая ошибка цикла: {e}")
-            rotate_warp(hard=(attempt >= 2))
-            time.sleep(5)
+            time.sleep(3)
 
-    logging.error("💀 Не удалось получить список статей после всех попыток.")
-    return []
+    logging.error("💀 Список не получен (Cloudflare).")
+    return None
 
 def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
     try:
@@ -993,6 +978,11 @@ def main():
         cid = fetch_cat_id(args.base_url, args.slug)
         
         posts_light = fetch_posts_light(args.base_url, cid, FETCH_DEPTH)
+        if posts_light is None:
+            logging.error("💀 Не пробились через Cloudflare. Эстафета следующему раннеру.")
+            print("FETCH_FAILED:true", flush=True)
+            sys.exit(0)
+
         posted = load_posted_ids(Path(args.posted_state_file))
         stop = load_stopwords(Path(args.stopwords_file))
         
