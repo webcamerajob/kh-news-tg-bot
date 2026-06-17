@@ -147,8 +147,10 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
+      # always(): коммитим posted.json ДАЖЕ если poster упал на полпути.
+      # Иначе пропущенный коммит -> следующий прогон перепостит -> дубли.
       - name: Commit and Push (Conflict Resistant)
-        if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true'
+        if: ${{ always() && steps.guard.outputs.skip != 'true' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
