@@ -36,17 +36,16 @@ FETCH_DEPTH = 50
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
-    "openai/gpt-oss-120b:free",                  # 131K, MoE, сильнейшая в списке
-    "z-ai/glm-4.5-air:free",                     # 131K, агентная, держит инструкции
-    "meta-llama/llama-3.3-70b-instruct:free",    # 66K, проверенная рабочая лошадка
-    "google/gemma-3-27b-it:free",                # 131K, многоязычная
-    "google/gemma-3-12b-it:free",                # 33K, легче и быстрее
-    "openai/gpt-oss-20b:free",                   # 131K, запасной от OpenAI
-    "nousresearch/hermes-3-llama-3.1-405b:free", # 131K, тяжёлый fallback
-    "qwen/qwen-2.5-72b-instruct",        # Убрал :free
-    "google/gemini-2.0-flash-001",       # Рабочий эндпоинт
-    "deepseek/deepseek-chat",            # Твой единственный живой вариант в логах
-    "openai/gpt-4o-mini",
+    "openai/gpt-oss-20b:free",                  # рабочая сейчас, стабильная, норм качество
+    "openrouter/free",                          # авто-роутер: сам подберёт живую free-модель, не протухает
+    "openai/gpt-oss-120b:free",                 # иногда 403 (модерация ввода), но как запас ок
+    "meta-llama/llama-3.3-70b-instruct:free",   # бывает 429, иногда отвечает
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    # --- платные фолбэки (за кредиты) ---
+    # "qwen/qwen-2.5-72b-instruct",
+    # "google/gemini-2.0-flash-001",
+    # "deepseek/deepseek-chat",
+    # "openai/gpt-4o-mini",
 ]
 
 # Константа для порта WARP
