@@ -396,21 +396,29 @@ def download_youtube_via_loader_to(video_url, output_path):
                 time.sleep(1.5)
                 try:
                     pr = requests.get(progress_api, params={"id": job_id}, headers=headers, timeout=20)
-                    if pr.status_code != 200:
-                        continue
+                except Exception as e:
+                    if poll % 10 == 0:
+                        logging.warning(f"   progress: req error {type(e).__name__}: {e}")
+                    continue
+                if pr.status_code != 200:
+                    if poll % 10 == 0:
+                        logging.warning(f"   progress: HTTP {pr.status_code} | body={pr.text[:150]!r}")
+                    continue
+                try:
                     pd = pr.json()
                 except Exception:
+                    if poll % 10 == 0:
+                        logging.warning(f"   progress: non-JSON | body={pr.text[:150]!r}")
                     continue
-                
-                progress = pd.get("progress", 0)
-            if poll % 10 == 0:
-                logging.info(f"⏳ loader.to: {progress/10:.0f}% | success={pd.get('success')!r} | keys={list(pd.keys())}")
 
-            # ссылку берём как только появилась; success бывает '1'/1/true — строго ==1 не требуем
-            du = pd.get("download_url")
-            if du:
-                download_url = du
-                break
+                progress = pd.get("progress", 0)
+                if poll % 10 == 0:
+                    logging.info(f"⏳ loader.to: {progress/10:.0f}% | success={pd.get('success')!r} | keys={list(pd.keys())}")
+
+                du = pd.get("download_url")
+                if du:
+                    download_url = du
+                    break
             
             if not download_url:
                 logging.warning("⚠️ loader.to: таймаут конверсии")
