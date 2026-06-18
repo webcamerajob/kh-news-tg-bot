@@ -806,11 +806,12 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             ordered_srcs.append(url)
             seen_srcs.add(url)
 
-    # Featured Image (миниатюра записи)
-    if "_embedded" in post and (m := post["_embedded"].get("wp:featuredmedia")):
-        if isinstance(m, list) and (u := m[0].get("source_url")):
-            if "logo" not in u.lower():
-                add_src(u)
+    # Featured image: media-эндпоинт закрыт (401), берём og:image из HTML head
+    og = soup.find("meta", attrs={"property": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
+    if og and (u := og.get("content")) and "logo" not in u.lower():
+        add_src(u)
+    else:
+        logging.warning(f"DIAG ID={aid}: og:image НЕ найден | html_len={len(html_txt)}")
 
     video_srcs = []
     if c_div:
