@@ -403,12 +403,14 @@ def download_youtube_via_loader_to(video_url, output_path):
                     continue
                 
                 progress = pd.get("progress", 0)
-                if poll % 10 == 0:
-                    logging.info(f"⏳ loader.to: {progress/10:.0f}%")
-                
-                if pd.get("download_url") and pd.get("success") == 1:
-                    download_url = pd["download_url"]
-                    break
+            if poll % 10 == 0:
+                logging.info(f"⏳ loader.to: {progress/10:.0f}% | success={pd.get('success')!r} | keys={list(pd.keys())}")
+
+            # ссылку берём как только появилась; success бывает '1'/1/true — строго ==1 не требуем
+            du = pd.get("download_url")
+            if du:
+                download_url = du
+                break
             
             if not download_url:
                 logging.warning("⚠️ loader.to: таймаут конверсии")
