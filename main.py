@@ -396,24 +396,14 @@ def download_youtube_via_loader_to(video_url, output_path):
                 time.sleep(1.5)
                 try:
                     pr = requests.get(progress_api, params={"id": job_id}, headers=headers, timeout=20)
-                except Exception as e:
-                    if poll % 10 == 0:
-                        logging.warning(f"   progress: req error {type(e).__name__}: {e}")
-                    continue
-                if pr.status_code != 200:
-                    if poll % 10 == 0:
-                        logging.warning(f"   progress: HTTP {pr.status_code} | body={pr.text[:150]!r}")
-                    continue
-                try:
+                    if pr.status_code != 200:
+                        continue
                     pd = pr.json()
                 except Exception:
-                    if poll % 10 == 0:
-                        logging.warning(f"   progress: non-JSON | body={pr.text[:150]!r}")
                     continue
 
-                progress = pd.get("progress", 0)
                 if poll % 10 == 0:
-                    logging.info(f"⏳ loader.to: {progress/10:.0f}% | success={pd.get('success')!r} | keys={list(pd.keys())}")
+                    logging.info(f"⏳ loader.to: {pd.get('progress', 0)/10:.0f}%")
 
                 du = pd.get("download_url")
                 if du:
