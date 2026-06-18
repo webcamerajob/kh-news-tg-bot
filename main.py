@@ -604,7 +604,7 @@ def fetch_posts_light(url: str, cid: int, limit: int) -> Optional[List[Dict]]:
     Список постов при успехе; [] если API ответил пусто/ошибкой;
     None если не пробились (Cloudflare) — сигнал воркфлоу взять свежий раннер.
     """
-    params = {"categories": cid, "per_page": limit, "_fields": "id,slug,link,title,date"}
+    params = {"categories": cid, "per_page": limit, "_embed": "1"}
     endpoint = f"{url}/wp-json/wp/v2/posts"
     global SCRAPER
 
