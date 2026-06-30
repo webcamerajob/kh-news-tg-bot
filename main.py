@@ -346,7 +346,7 @@ def download_youtube_via_loader_to(video_url, output_path):
     domain = "p.savenow.to"
     download_api = f"https://{domain}/ajax/download.php"
     progress_api = f"https://{domain}/api/progress"
-    
+
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     headers = {
         "User-Agent": ua,
@@ -355,11 +355,11 @@ def download_youtube_via_loader_to(video_url, output_path):
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
     }
-    
-    for attempt in range(1, 4):
+
+    for attempt in range(1, 3):   # 2 попытки вместо 3 (сервис флакает, незачем висеть)
         try:
             logging.info(f"⬇️ [loader.to] Попытка {attempt}: {video_url}")
-            
+
             params = {
                 "button": "1",
                 "start": "1",
@@ -369,29 +369,30 @@ def download_youtube_via_loader_to(video_url, output_path):
                 "url": video_url,
             }
             r = requests.get(download_api, params=params, headers=headers, timeout=30)
-            
+
             if r.status_code != 200:
                 logging.warning(f"⚠️ download.php HTTP {r.status_code}: {r.text[:200]}")
                 time.sleep(5)
                 continue
-            
+
             try:
                 data = r.json()
             except Exception:
                 logging.warning(f"⚠️ download.php не JSON: {r.text[:200]}")
                 time.sleep(5)
                 continue
-            
+
             job_id = data.get("id")
             if not job_id:
                 logging.warning(f"⚠️ download.php без id: {data}")
                 time.sleep(5)
                 continue
-            
+
             logging.info(f"📋 Job ID: {job_id}, опрашиваем прогресс...")
-            
-            # Опрос (до ~3 минут)
+
+            # Опрос (до ~3 минут), но если застряли на 100% без ссылки — рвём через ~30с
             download_url = None
+            stuck_at_100 = 0
             for poll in range(120):
                 time.sleep(1.5)
                 try:
@@ -402,18 +403,26 @@ def download_youtube_via_loader_to(video_url, output_path):
                 except Exception:
                     continue
 
+                progress = pd.get("progress", 0)
                 if poll % 10 == 0:
-                    logging.info(f"⏳ loader.to: {pd.get('progress', 0)/10:.0f}%")
+                    logging.info(f"⏳ loader.to: {progress/10:.0f}%")
 
                 du = pd.get("download_url")
                 if du:
                     download_url = du
                     break
-            
+
+                # 100%, но ссылки всё нет — ждём максимум ~30с и бросаем эту попытку
+                if progress >= 1000:
+                    stuck_at_100 += 1
+                    if stuck_at_100 >= 20:   # 20 * 1.5с = 30с
+                        logging.warning("⚠️ loader.to: 100% без ссылки 30с — рвём попытку")
+                        break
+
             if not download_url:
                 logging.warning("⚠️ loader.to: таймаут конверсии")
                 continue
-            
+
             logging.info(f"⬇️ Скачиваем готовый mp4: {download_url[:80]}...")
             vr = requests.get(download_url, timeout=180, stream=True, headers={"User-Agent": ua})
             if vr.status_code == 200:
@@ -421,7 +430,7 @@ def download_youtube_via_loader_to(video_url, output_path):
                     for chunk in vr.iter_content(chunk_size=1024 * 256):
                         if chunk:
                             f.write(chunk)
-                
+
                 size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
                 if size > 10000:
                     logging.info(f"✅ YouTube скачан через loader.to ({size // 1024} KB)")
@@ -430,11 +439,11 @@ def download_youtube_via_loader_to(video_url, output_path):
                     logging.warning(f"⚠️ Файл слишком мал ({size} байт)")
             else:
                 logging.warning(f"⚠️ Скачивание HTTP {vr.status_code}")
-            
+
         except Exception as e:
             logging.error(f"❌ loader.to error [{type(e).__name__}]: {e}")
             time.sleep(5)
-    
+
     return False
     
 def download_via_loader_to(video_url, output_path):
