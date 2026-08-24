@@ -1,4 +1,5 @@
 import random
+import threading
 import argparse
 import logging
 import json
@@ -75,31 +76,49 @@ IPHONE_HEADERS = {
 
 FALLBACK_HEADERS = IPHONE_HEADERS
 
+# Лок для защиты от параллельного вызова ротации из разных потоков
+WARP_LOCK = threading.Lock()
+
 def rotate_warp(hard: bool = False):
-    """Переподключает WARP. hard=True — полная перерегистрация (новый device, новый IP)."""
-    try:
-        if hard:
-            logging.info("♻️ WARP: HARD ротация (новая регистрация)...")
-            subprocess.run(["warp-cli", "--accept-tos", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            subprocess.run(["warp-cli", "--accept-tos", "registration", "delete"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            subprocess.run(["warp-cli", "--accept-tos", "registration", "new"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            subprocess.run(["warp-cli", "--accept-tos", "mode", "proxy"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["warp-cli", "--accept-tos", "proxy", "port", "40000"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["warp-cli", "--accept-tos", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(8)
-            logging.info("✅ WARP: Перерегистрирован.")
-        else:
-            logging.info("♻️ WARP: Ротация IP...")
-            subprocess.run(["warp-cli", "--accept-tos", "disconnect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-            subprocess.run(["warp-cli", "--accept-tos", "connect"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(5)
-            logging.info("✅ WARP: Переподключено.")
-    except Exception as e:
-        logging.error(f"❌ Ошибка ротации WARP: {e}")
+    """Переподключает WARP с защитой от зависания (timeout) и гонки потоков (lock)."""
+    # Если ротация уже выполняется одним потоком, остальные ждут его завершения
+    with WARP_LOCK:
+        try:
+            def run_warp_cmd(cmd_list: list):
+                """Вспомогательный вызов warp-cli с жестким таймаутом 15 секунд."""
+                subprocess.run(
+                    ["warp-cli", "--accept-tos"] + cmd_list,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15
+                )
+
+            if hard:
+                logging.info("♻️ WARP: HARD ротация (новая регистрация)...")
+                run_warp_cmd(["disconnect"])
+                time.sleep(2)
+                run_warp_cmd(["registration", "delete"])
+                time.sleep(2)
+                run_warp_cmd(["registration", "new"])
+                time.sleep(2)
+                run_warp_cmd(["mode", "proxy"])
+                run_warp_cmd(["proxy", "port", "40000"])
+                run_warp_cmd(["connect"])
+                time.sleep(8)
+                logging.info("✅ WARP: Перерегистрирован.")
+            else:
+                logging.info("♻️ WARP: Ротация IP...")
+                run_warp_cmd(["disconnect"])
+                time.sleep(2)
+                run_warp_cmd(["connect"])
+                time.sleep(5)
+                logging.info("✅ WARP: Переподключено.")
+
+        except subprocess.TimeoutExpired:
+            logging.error("❌ Ошибка: команда warp-cli превысила таймаут (15 сек) и была принудительно завершена.")
+        except Exception as e:
+            logging.error(f"❌ Ошибка ротации WARP: {e}")
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
