@@ -191,11 +191,24 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
 
 def strip_ai_chatter(text: str) -> str:
     text = text.strip()
-    match = re.match(r'^\s*\*\*(.*?)\*\*', text, re.DOTALL)
+    
+    # 1. Срезаем типичные вводные фразы ИИ ("Here is the edited text:", "Summary:", и т.д.)
+    text = re.sub(
+        r'^\s*(?:\*\*|\*|#)*\s*(?:Here is|Here\'s|Edited story|Summary|Final text|Edited text|Note|Response)[:\s\*\#\-\=]*', 
+        '', 
+        text, 
+        flags=re.IGNORECASE
+    ).strip()
+
+    # 2. Вырезаем заголовок в звездочках ТОЛЬКО на первой строке (БЕЗ re.DOTALL) и только если это служебная метка ИИ
+    match = re.match(r'^\s*\*\*(.*?)\*\*', text)
     if match:
-        removed_header = match.group(1).strip()
-        logging.info(f"✂️ Вырезан заголовок ИИ: '**{removed_header}**'")
-        return text[match.end():].strip()
+        header_content = match.group(1).strip().lower()
+        meta_keywords = ['here is', 'summary', 'edited', 'note', 'final story', 'revision', 'cleaned']
+        if any(kw in header_content for kw in meta_keywords):
+            logging.info(f"✂️ Вырезан заголовок ИИ: '**{match.group(1).strip()}**'")
+            return text[match.end():].strip()
+
     return text
 
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
@@ -262,21 +275,22 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     combined_text = f"{title}{DELIMITER}{clean_body}"
     logging.info(f"🌍 [Google] Перевод...")
     translated_full = direct_google_translate(combined_text, lang)
+    
     final_title = title
     final_text = clean_body
+    
     if translated_full:
-        if DELIMITER in translated_full:
-            parts = translated_full.split(DELIMITER, 1)
-            final_title = parts[0].strip()
-            final_text = parts[1].strip()
-        elif "|||" in translated_full:
-            parts = translated_full.split("|||", 1)
+        # Устойчивое разделение через Regex: находит "|||", "| | |", " ||| " с любыми пробелами от Google Translate
+        parts = re.split(r'\s*\|\s*\|\s*\|\s*', translated_full, maxsplit=1)
+        if len(parts) == 2 and parts[1].strip():
             final_title = parts[0].strip()
             final_text = parts[1].strip()
         else:
-            parts = translated_full.split('\n', 1)
-            final_title = parts[0].strip()
-            final_text = parts[1].strip() if len(parts) > 1 else ""
+            # Резервный механизм: если Google полностью испортил разделитель, переводим элементы по отдельности
+            logging.warning("⚠️ Разделитель искажен Google Translate. Выполняется раздельный перевод...")
+            final_title = direct_google_translate(title, lang) or title
+            final_text = direct_google_translate(clean_body, lang) or clean_body
+
     return final_title, final_text
 
 # --- БЛОК 2: ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
