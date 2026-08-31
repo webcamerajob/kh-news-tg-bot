@@ -203,17 +203,18 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     if OPENROUTER_KEY and len(body) > 500:
         logging.info("⏳ Подготовка к ИИ-чистке (OpenRouter)...")
         safe_body = body[:15000].replace('\x00', '')
-        prompt = (
-            f"You are a ruthless news editor.\n"
-            f"INPUT: Raw news text.\n"
-            f"OUTPUT: A cleaned-up version of the story in ENGLISH.\n\n"
+        
+        system_prompt = (
+            "You are a ruthless news editor. Your ONLY task is to return the final edited text in ENGLISH.\n\n"
             "STRICT EDITING RULES:\n"
             "1. CONSOLIDATE NARRATIVE & SPEECH: If the author states a fact, and then a speaker repeats the same meaning, DELETE the speaker's part.\n"
             "2. KEEP UNIQUE DETAILS: Only keep quotes if they add numbers, dates, or emotion.\n"
             "3. REMOVE FLUFF: Delete ads and diplomatic praise.\n"
-            "4. NO META-TALK: Start with the story immediately.\n\n"
-            f"RAW TEXT:\n{safe_body}"
+            "4. ABSOLUTE ZERO META-TALK: Do NOT write intros, explanations, thought processes, notes, or change logs. Start with the story immediately."
         )
+        
+        user_prompt = f"RAW TEXT:\n{safe_body}\n\nFINAL EDITED STORY:"
+        
         ai_result = ""
         for model in AI_MODELS:
             try:
@@ -224,8 +225,20 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
 
                 response = requests.post(
                     url="https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_KEY}", "HTTP-Referer": "https://github.com/kh-news-bot", "X-Title": "NewsBot"},
-                    json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.3, "max_tokens": 4096},
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_KEY}", 
+                        "HTTP-Referer": "https://github.com/kh-news-bot", 
+                        "X-Title": "NewsBot"
+                    },
+                    json={
+                        "model": model, 
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ], 
+                        "temperature": 0.1, 
+                        "max_tokens": 4096
+                    },
                     timeout=50
                 )
                 if response.status_code == 200:
