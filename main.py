@@ -236,7 +236,7 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
                         ], 
-                        "temperature": 0.1, 
+                        "temperature": 0.0, 
                         "max_tokens": 4096
                     },
                     timeout=50
