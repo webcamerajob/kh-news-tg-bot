@@ -37,6 +37,9 @@ FETCH_DEPTH = 50
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
+    
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+
     "openai/gpt-oss-20b:free",                  # рабочая сейчас, стабильная, норм качество
     "openrouter/free",                          # авто-роутер: сам подберёт живую free-модель, не протухает
     "openai/gpt-oss-120b:free",                 # иногда 403 (модерация ввода), но как запас ок
