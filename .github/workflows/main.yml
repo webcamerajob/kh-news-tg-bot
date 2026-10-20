@@ -25,17 +25,13 @@ env:
   WG_CONFIG:            ${{ secrets.WG_CONFIG }}
   FB_PAGE_ID:           ${{ secrets.FB_PAGE_ID }}
   FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
-  # 👇 Добавили ключи ИИ на глобальный уровень, чтобы скрипт их видел
-  DEEPSEEK_API_KEY:     ${{ secrets.DEEPSEEK_API_KEY }}
   OPENROUTER_API_KEY:   ${{ secrets.OPENROUTER_API_KEY }}
 
 jobs:
   build-and-publish:
     name: "Parse & Publish (attempt ${{ matrix.attempt }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # жёсткий потолок на КАЖДУЮ попытку (вместо дефолтных 6 часов)
-    # ГЛАВНОЕ: каждый attempt = новый раннер = новый IP + свежая регистрация WARP
-    # = реально другой egress. Тот же эффект, что "новый прогон", но последовательно.
+    timeout-minutes: 30   # жёсткий потолок на КАЖДУЮ попытку
     strategy:
       fail-fast: false      # заблокированный раннер не должен рубить остальные попытки
       max-parallel: 1       # строго по очереди, чтобы успешная попытка погасила остальные
@@ -43,7 +39,6 @@ jobs:
         attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     steps:
-      # Проверяем, не пробился ли уже предыдущий attempt этого прогона
       - name: Check prior success
         id: prior
         uses: actions/download-artifact@v4
@@ -91,19 +86,16 @@ jobs:
 
       - name: Install & Connect Cloudflare WARP
         if: steps.guard.outputs.skip != 'true'
-        timeout-minutes: 5            # WARP должен встать за пару минут; дольше = висит
+        timeout-minutes: 5
         env:
-          DEBIAN_FRONTEND: noninteractive   # чтобы apt не ждал интерактивный ввод
+          DEBIAN_FRONTEND: noninteractive
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
           sudo apt-get update
-          # --no-install-recommends: режем GUI-обвязку (webkit, gstreamer, pipewire ~370МБ);
-          # для warp-cli в proxy-режиме она не нужна. Retries - на случай тормозов их мирора.
           sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 cloudflare-warp
           sudo systemctl restart warp-svc
           sleep 3
-          # || true: команда не должна ронять шаг сама по себе; арбитр ниже - это status.
           timeout 30 warp-cli --accept-tos registration new || true
           warp-cli --accept-tos mode proxy || true
           warp-cli --accept-tos proxy port 40000 || true
@@ -157,8 +149,6 @@ jobs:
             --state-file articles/posted.json \
             --limit $BATCH_LIMIT
 
-      # always(): коммитим posted.json ДАЖЕ если poster упал на полпути.
-      # Иначе пропущенный коммит -> следующий прогон перепостит -> дубли.
       - name: Commit and Push (Conflict Resistant)
         if: ${{ always() && steps.guard.outputs.skip != 'true' }}
         run: |
@@ -173,8 +163,6 @@ jobs:
             echo "No changes to posted.json"
           fi
 
-      # Пробились (список получен) -> поднимаем флаг, чтобы остальные попытки скипнулись.
-      # Заблокировало -> артефакт не создаём; следующий свежий раннер попробует снова.
       - name: Mark success
         if: steps.guard.outputs.skip != 'true' && steps.parse_step.outputs.fetched == 'true'
         run: mkdir -p _done && echo "ok" > _done/done.txt
