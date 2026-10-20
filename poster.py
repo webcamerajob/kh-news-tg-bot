@@ -55,13 +55,44 @@ def chunk_text(text: str, size: int = 4096) -> List[str]:
     if current_chunk: chunks.append(current_chunk)
     return chunks
 
+def prepare_telegram_chunks(title_html: str, txt: str, max_size: int = 4096) -> List[str]:
+    """
+    Формирует текст для Telegram по методу «аккордеона»:
+    - Заголовок и первый абзац видны сразу.
+    - Весь остальной текст скрыт под нативным спойлером (<tg-spoiler>).
+    """
+    paras = [p.strip() for p in txt.replace('\r\n', '\n').split('\n\n') if p.strip()]
+    if not paras:
+        return [title_html]
+    
+    first_para = escape_html(paras[0])
+    rest_paras = [escape_html(p) for p in paras[1:]]
+    
+    if not rest_paras:
+        return [f"{title_html}\n\n{first_para}"]
+    
+    head_text = f"{title_html}\n\n{first_para}"
+    rest_text = "\n\n".join(rest_paras)
+    
+    # Если вся статья помещается в лимит сообщения, прячем весь остальной текст под один общий спойлер
+    full_single_spoiler = f"{head_text}\n\n<tg-spoiler>{rest_text}</tg-spoiler>"
+    if len(full_single_spoiler) <= max_size:
+        return [full_single_spoiler]
+    
+    # Если текст длинный, оборачиваем каждый последующий абзац отдельно, чтобы не ломать HTML при разбивке на чанки
+    rest_spoiler_paras = [f"<tg-spoiler>{p}</tg-spoiler>" for p in rest_paras]
+    rest_combined = "\n\n".join(rest_spoiler_paras)
+    full_multi_spoiler = f"{head_text}\n\n{rest_combined}"
+    
+    return chunk_text(full_multi_spoiler, size=max_size)
+
 def extract_video_thumb(video_path: Path) -> Optional[bytes]:
     """Извлекает кадр из видео для использования как thumbnail в Telegram."""
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
-        
+
         cmd = [
             "ffmpeg", "-y", "-i", str(video_path),
             "-ss", "00:00:01",       # кадр на 1-й секунде
@@ -71,13 +102,13 @@ def extract_video_thumb(video_path: Path) -> Optional[bytes]:
             tmp_path
         ]
         r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        
+
         if r.returncode != 0 or not Path(tmp_path).exists():
             return None
-        
+
         data = Path(tmp_path).read_bytes()
         Path(tmp_path).unlink(missing_ok=True)
-        
+
         # TG thumbnail должен быть < 200 KB
         if len(data) > 200 * 1024:
             logging.warning(f"⚠️ Thumb {video_path.name} > 200KB, пропускаем")
@@ -86,7 +117,7 @@ def extract_video_thumb(video_path: Path) -> Optional[bytes]:
     except Exception as e:
         logging.error(f"❌ Ошибка извлечения thumb для {video_path.name}: {e}")
         return None
-        
+
 def apply_watermark(img_path: Path, scale: float) -> bytes:
     try:
         base_img = Image.open(img_path).convert("RGBA")
@@ -97,20 +128,20 @@ def apply_watermark(img_path: Path, scale: float) -> bytes:
             img_byte_arr = BytesIO()
             base_img.convert("RGB").save(img_byte_arr, format='JPEG', quality=90)
             return img_byte_arr.getvalue()
-        
+
         watermark_img = Image.open(watermark_path).convert("RGBA")
         wm_width, wm_height = watermark_img.size
         new_wm_width = int(base_width * scale)
         new_wm_height = int(wm_height * (new_wm_width / wm_width))
-        
+
         resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
         watermark_img = watermark_img.resize((new_wm_width, new_wm_height), resample=resample_filter)
-        
+
         overlay = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
         padding = int(base_width * 0.02)
         position = (base_width - new_wm_width - padding, padding)
         overlay.paste(watermark_img, position, watermark_img)
-        
+
         composite_img = Image.alpha_composite(base_img, overlay).convert("RGB")
         img_byte_arr = BytesIO()
         composite_img.save(img_byte_arr, format='JPEG', quality=90)
@@ -133,31 +164,30 @@ def post_to_facebook(text, media_files=None, watermark_scale=WATERMARK_SCALE):
         return
 
     full_message = text
-    
+
     # Разделяем медиа
     video_files = [f for f in (media_files or []) if f.suffix.lower() in ['.mp4', '.mov', '.m4v']]
     image_files = [f for f in (media_files or []) if f.suffix.lower() in ['.jpg', '.png', '.jpeg', '.webp']]
-    
+
     posted_something = False
 
     # --- 1. ПУБЛИКАЦИЯ ФОТО (ГАЛЕРЕЯ) ---
     if image_files:
         logging.info(f"📤 FB: Подготовка галереи из {len(image_files)} фото...")
         media_fbid_list = []
-        
+
         # Загружаем каждое фото скрыто (published=false)
         for img_path in image_files:
             img_bytes = apply_watermark(img_path, watermark_scale)
             if not img_bytes: continue
-            
+
             url_upload = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
             payload = {
                 "access_token": FB_PAGE_ACCESS_TOKEN,
-                "published": "false" # Не публиковать сразу в ленту
+                "published": "false"
             }
-            # Facebook API требует image/jpeg для upload
             files = {'source': ('image.jpg', img_bytes, 'image/jpeg')}
-            
+
             try:
                 up_r = requests.post(url_upload, data=payload, files=files, timeout=60)
                 if up_r.status_code == 200:
@@ -168,7 +198,6 @@ def post_to_facebook(text, media_files=None, watermark_scale=WATERMARK_SCALE):
             except Exception as e:
                 logging.error(f"⚠️ FB Photo Exception {img_path.name}: {e}")
 
-        # Создаем пост с прикрепленными фото
         if media_fbid_list:
             url_feed = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
             payload = {
@@ -189,20 +218,18 @@ def post_to_facebook(text, media_files=None, watermark_scale=WATERMARK_SCALE):
             logging.error("❌ Не удалось загрузить ни одного фото для FB.")
 
     # --- 2. ПУБЛИКАЦИЯ ВИДЕО (ОТДЕЛЬНО) ---
-    # Если есть видео, постим его следом. 
-    # Если фото не было, текст будет здесь. Если фото были, текст дублируется (или можно сократить).
     if video_files:
         for vid in video_files:
             logging.info(f"📤 FB: Видео (WM уже наложен) -> {vid.name}")
             url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/videos"
             payload = {
                 "access_token": FB_PAGE_ACCESS_TOKEN, 
-                "description": full_message # Текст поста идет сюда
+                "description": full_message
             }
             try:
                 with open(vid, 'rb') as f:
                     r = requests.post(url, data=payload, files={'source': f}, timeout=120)
-                
+
                 if r.status_code == 200:
                     logging.info(f"✅ FB Video Success: ID={r.json().get('id')}")
                     posted_something = True
@@ -249,24 +276,23 @@ async def _post_with_retry(client: httpx.AsyncClient, method: str, url: str, dat
 async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, media_files: List[Path], watermark_scale: float, silent: bool = True) -> bool:
     if not media_files: return False
     url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
-    
+
     overall_success = True
-    
-    # Делим общий список файлов на пачки по 10 штук
+
     for i in range(0, len(media_files), 10):
         chunk = media_files[i : i + 10]
         media_array = []
         files_to_send = {}
-        
+
         logging.info(f"📦 Отправка пачки медиа {i//10 + 1} (файлов: {len(chunk)})")
-        
+
         for idx, f_path in enumerate(chunk):
             f_key = f"media_{idx}"
             ext = f_path.suffix.lower()
-            
+
             size_mb = f_path.stat().st_size / (1024 * 1024)
             logging.info(f"🔎 Файл: {f_path.name} | Размер: {size_mb:.2f} MB")
-            
+
             if ext in ['.mp4', '.mov', '.m4v']:
                 m_type, m_mime = "video", "video/mp4"
                 if f_path.stat().st_size > 49 * 1024 * 1024:
@@ -276,14 +302,13 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             else:
                 m_type, m_mime = "photo", "image/jpeg"
                 m_bytes = apply_watermark(f_path, watermark_scale)
- 
+
             if not m_bytes: continue
- 
+
             files_to_send[f_key] = (f_path.name, m_bytes, m_mime)
- 
+
             media_item = {"type": m_type, "media": f"attach://{f_key}"}
-            
-            # Для видео — генерим thumbnail и прикрепляем
+
             if m_type == "video":
                 thumb_bytes = extract_video_thumb(f_path)
                 if thumb_bytes:
@@ -291,9 +316,9 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
                     files_to_send[thumb_key] = (f"{f_path.stem}_thumb.jpg", thumb_bytes, "image/jpeg")
                     media_item["thumbnail"] = f"attach://{thumb_key}"
                     logging.info(f"🖼️ Добавлен thumbnail для {f_path.name}")
-            
+
             media_array.append(media_item)
-        
+
         if not media_array: continue
 
         data = {
@@ -301,16 +326,14 @@ async def send_media_group(client: httpx.AsyncClient, token: str, chat_id: str, 
             "media": json.dumps(media_array),
             "disable_notification": silent
         }
-        
-        # Если хотя бы одна пачка упала, помечаем общий успех как False
+
         if not await _post_with_retry(client, "POST", url, data, files_to_send):
             overall_success = False
             logging.error(f"❌ Ошибка при отправке пачки {i//10 + 1}")
-        
-        # Если есть еще пачки для этого же поста, ждем немного
+
         if i + 10 < len(media_files):
             await asyncio.sleep(2)
-            
+
     return overall_success
 
 async def send_message(client: httpx.AsyncClient, token: str, chat_id: str, text: str, silent: bool = False, **kwargs) -> bool:
@@ -331,7 +354,6 @@ def validate_article(art: Dict[str, Any], article_dir: Path) -> Optional[Tuple[s
     if not all([aid, title, text_fn]): return None
     tp = article_dir / text_fn
     if not tp.is_file(): return None
-    # Здесь мы собираем и картинки, и видео, так как они все лежат в images
     v_imgs = [article_dir / "images" / img for img in art.get("images", []) if (article_dir / "images" / img).is_file()]
     return f"<b>{escape_html(title)}</b>", tp, v_imgs, title
 
@@ -347,7 +369,7 @@ def load_posted_ids(state_file: Path) -> List[str]:
 async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark_scale: float):
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHANNEL")
-    chat_id2 = os.getenv("TELEGRAM_CHANNEL_2")  # необязательный второй канал (дубль-постинг)
+    chat_id2 = os.getenv("TELEGRAM_CHANNEL_2")
     chat_ids = [c for c in (chat_id, chat_id2) if c]
     if not token or not chat_ids:
         logging.error("🚨 Переменные окружения не установлены!")
@@ -355,10 +377,10 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
 
     parsed_root = Path(parsed_dir)
     state_file_path = Path(state_file)
-    
+
     posted_ids_list = load_posted_ids(state_file_path)
     posted_ids_set = set(posted_ids_list)
-    
+
     to_post = []
     if not parsed_root.exists():
         logging.error(f"📂 Директория {parsed_dir} не найдена!")
@@ -396,46 +418,37 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
         sent = 0
         for idx, art in enumerate(to_post):
             logging.info(f"📤 ID={art['id']} ({idx + 1}/{total_articles})")
-            
-            # Проверяем, является ли эта статья последней в текущем пакете
+
             is_last_article = (idx == total_articles - 1)
             try:
                 # --- TELEGRAM: MEDIA ---
                 if art["image_paths"]:
-                    # Медиа всегда отправляем тихо, звук только на тексте
                     for cid in chat_ids:
                         await send_media_group(client, token, cid, art["image_paths"], watermark_scale, silent=True)
-                
+
                 # Читаем текст из файла
                 txt = art["text_path"].read_text(encoding="utf-8").lstrip()
-                # Если в файле уже есть заголовок в начале, убираем его, чтобы не дублировать
                 if txt.startswith(art["original_title"]):
                     txt = txt[len(art["original_title"]):].lstrip()
-                
-                # HTML версия для Телеграм
-                full_html = f"{art['html_title']}\n\n{escape_html(txt)}"
-                chunks = chunk_text(re.sub(r'\n{3,}', '\n\n', full_html).strip())
-                
+
+                # Формируем куски текста с аккордеоном (спойлером) для Telegram
+                chunks = prepare_telegram_chunks(art['html_title'], txt)
+
                 for i, c in enumerate(chunks):
                     is_last_chunk = (i == len(chunks) - 1)
-
-                    # ЗВУК ВКЛЮЧАЕТСЯ ТОЛЬКО ЕСЛИ: Последняя статья И Последний кусок текста
                     should_be_silent = not (is_last_article and is_last_chunk)
 
                     markup = {"inline_keyboard": [[
                         {"text": "Обмен валют", "url": "https://t.me/mister1dollar"},
                         {"text": "Отзывы", "url": "https://t.me/feedback1dollar"}
                     ]]} if is_last_chunk else None
-                    
+
                     for cid in chat_ids:
                         await send_message(client, token, cid, c, reply_markup=markup, silent=should_be_silent)
-                
+
                 # --- FACEBOOK: POSTING ---
                 try:
-                    # Собираем полный текст для FB (Заголовок + Тело)
-                    # Ссылку на источник НЕ добавляем.
                     fb_full_text = f"{art['original_title']}\n\n{txt}"
-                    
                     post_to_facebook(
                         text=fb_full_text,
                         media_files=art["image_paths"],
@@ -448,15 +461,14 @@ async def main(parsed_dir: str, state_file: str, limit: Optional[int], watermark
                 if art['id'] not in posted_ids_list:
                     posted_ids_list.append(art['id'])
                 sent += 1
-                
+
                 posted_ids_list = posted_ids_list[-MAX_POSTED_RECORDS:]
                 state_file_path.write_text(json.dumps([int(i) for i in posted_ids_list], indent=2))
                 logging.info(f"✅ Успешно опубликовано: ID={art['id']}")
 
             except Exception as e:
                 logging.error(f"❌ Критическая ошибка при отправке ID={art['id']}: {e}")
-            
-            # Не ждем после самой последней статьи
+
             if not is_last_article:
                 await asyncio.sleep(float(os.getenv("POST_DELAY", DEFAULT_DELAY)))
 
