@@ -34,8 +34,8 @@ MAX_POSTED_RECORDS = 300
 FETCH_DEPTH = 50
 
 # --- НАСТРОЙКИ AI ---
-# ОСНОВНОЙ: DeepSeek API (модель DeepSeek V3)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")  # Возвращаем для безопасности
 
 # РЕЗЕРВНЫЙ: OpenRouter (закомментирован)
 # OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
