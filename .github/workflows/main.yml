@@ -1,4 +1,4 @@
-name: AI Parse & Post Articles
+Name: AI Parse & Post Articles
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +25,9 @@ env:
   WG_CONFIG:            ${{ secrets.WG_CONFIG }}
   FB_PAGE_ID:           ${{ secrets.FB_PAGE_ID }}
   FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+  # 👇 Добавили ключи ИИ на глобальный уровень, чтобы скрипт их видел
+  DEEPSEEK_API_KEY:     ${{ secrets.DEEPSEEK_API_KEY }}
+  OPENROUTER_API_KEY:   ${{ secrets.OPENROUTER_API_KEY }}
 
 jobs:
   build-and-publish:
@@ -123,8 +126,6 @@ jobs:
       - name: Run parser
         id: parse_step
         if: steps.guard.outputs.skip != 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -o pipefail
           python3 main.py \
