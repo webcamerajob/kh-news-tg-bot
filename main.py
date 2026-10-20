@@ -34,18 +34,23 @@ MAX_POSTED_RECORDS = 300
 FETCH_DEPTH = 50
 
 # --- НАСТРОЙКИ AI ---
-OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
+# ОСНОВНОЙ: DeepSeek API (модель DeepSeek V3)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+# РЕЗЕРВНЫЙ: OpenRouter (закомментирован)
+# OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 
 AI_MODELS = [
+    # --- ОСНОВНАЯ МОДЕЛЬ (DeepSeek V3) ---
+    "deepseek-chat",
     
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-
-    "openai/gpt-oss-20b:free",                  # рабочая сейчас, стабильная, норм качество
-    "openrouter/free",                          # авто-роутер: сам подберёт живую free-модель, не протухает
-    "openai/gpt-oss-120b:free",                 # иногда 403 (модерация ввода), но как запас ок
-    "meta-llama/llama-3.3-70b-instruct:free",   # бывает 429, иногда отвечает
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    # --- платные фолбэки (за кредиты) ---
+    # --- РЕЗЕРВНЫЕ МОДЕЛИ (OpenRouter - закомментированы) ---
+    # "nvidia/nemotron-3-ultra-550b-a55b:free",
+    # "openai/gpt-oss-20b:free",                  
+    # "openrouter/free",                          
+    # "openai/gpt-oss-120b:free",                 
+    # "meta-llama/llama-3.3-70b-instruct:free",   
+    # "nousresearch/hermes-3-llama-3.1-405b:free",
     # "qwen/qwen-2.5-72b-instruct",
     # "google/gemini-2.0-flash-001",
     # "deepseek/deepseek-chat",
@@ -84,7 +89,6 @@ WARP_LOCK = threading.Lock()
 
 def rotate_warp(hard: bool = False):
     """Переподключает WARP с защитой от зависания (timeout) и гонки потоков (lock)."""
-    # Если ротация уже выполняется одним потоком, остальные ждут его завершения
     with WARP_LOCK:
         try:
             def run_warp_cmd(cmd_list: list):
@@ -140,7 +144,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
     translated_parts = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
-    # Два эндпоинта Google (обычный и Chrome-расширение)
     endpoints = [
         ("https://translate.googleapis.com/translate_a/single", {"client": "gtx", "sl": "en", "tl": to_lang, "dt": "t"}),
         ("https://clients5.google.com/translate_a/t", {"client": "dict-chrome-ex", "sl": "en", "tl": to_lang})
@@ -157,7 +160,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
             params = base_params.copy()
             params["q"] = chunk.strip()
 
-            # 1. Пробуем через WARP (SCRAPER из вашего main.py) — обходит бан IP
             try:
                 r = SCRAPER.get(url, params=params, headers=headers, timeout=7)
                 if r.status_code == 200:
@@ -170,7 +172,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
             except Exception:
                 pass
 
-            # 2. Запасной прямой запрос
             try:
                 r = requests.get(url, params=params, headers=headers, timeout=7)
                 if r.status_code == 200:
@@ -195,7 +196,6 @@ def direct_google_translate(text: str, to_lang: str = "ru") -> str:
 def strip_ai_chatter(text: str) -> str:
     text = text.strip()
     
-    # 1. Срезаем типичные вводные фразы ИИ ("Here is the edited text:", "Summary:", и т.д.)
     text = re.sub(
         r'^\s*(?:\*\*|\*|#)*\s*(?:Here is|Here\'s|Edited story|Summary|Final text|Edited text|Note|Response)[:\s\*\#\-\=]*', 
         '', 
@@ -203,7 +203,6 @@ def strip_ai_chatter(text: str) -> str:
         flags=re.IGNORECASE
     ).strip()
 
-    # 2. Вырезаем заголовок в звездочках ТОЛЬКО на первой строке (БЕЗ re.DOTALL) и только если это служебная метка ИИ
     match = re.match(r'^\s*\*\*(.*?)\*\*', text)
     if match:
         header_content = match.group(1).strip().lower()
@@ -216,10 +215,11 @@ def strip_ai_chatter(text: str) -> str:
 
 def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     clean_body = body
-    if OPENROUTER_KEY and len(body) > 500:
-        logging.info("⏳ Подготовка к ИИ-чистке (OpenRouter)...")
+    if (DEEPSEEK_API_KEY or OPENROUTER_KEY) and len(body) > 500:
+        logging.info("⏳ Подготовка к ИИ-обработке...")
         safe_body = body[:15000].replace('\x00', '')
         
+        # --- ВАШ ИСХОДНЫЙ ПРОМПТ ---
         system_prompt = (
             "You are a ruthless news editor. Your ONLY task is to return the final edited text in ENGLISH.\n\n"
             "STRICT EDITING RULES:\n"
@@ -234,18 +234,33 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
         ai_result = ""
         for model in AI_MODELS:
             try:
-                logging.info(f"🚀 Запрос к OpenRouter: {model}...")
+                # Если модель содержит слэш, это OpenRouter, иначе нативный DeepSeek API
+                if "/" in model:
+                    if not OPENROUTER_KEY:
+                        continue
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {OPENROUTER_KEY}", 
+                        "HTTP-Referer": "https://github.com/kh-news-bot", 
+                        "X-Title": "NewsBot"
+                    }
+                    logging.info(f"🚀 Запрос к OpenRouter: {model}...")
+                else:
+                    if not DEEPSEEK_API_KEY:
+                        continue
+                    url = "https://api.deepseek.com/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                    logging.info(f"🚀 Запрос к DeepSeek API ({model})...")
 
                 if model != AI_MODELS[0]: 
                     time.sleep(2)
 
                 response = requests.post(
-                    url="https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENROUTER_KEY}", 
-                        "HTTP-Referer": "https://github.com/kh-news-bot", 
-                        "X-Title": "NewsBot"
-                    },
+                    url=url,
+                    headers=headers,
                     json={
                         "model": model, 
                         "messages": [
@@ -283,13 +298,11 @@ def smart_process_and_translate(title: str, body: str, lang: str) -> (str, str):
     final_text = clean_body
     
     if translated_full:
-        # Устойчивое разделение через Regex: находит "|||", "| | |", " ||| " с любыми пробелами от Google Translate
         parts = re.split(r'\s*\|\s*\|\s*\|\s*', translated_full, maxsplit=1)
         if len(parts) == 2 and parts[1].strip():
             final_title = parts[0].strip()
             final_text = parts[1].strip()
         else:
-            # Резервный механизм: если Google полностью испортил разделитель, переводим элементы по отдельности
             logging.warning("⚠️ Разделитель искажен Google Translate. Выполняется раздельный перевод...")
             final_title = direct_google_translate(title, lang) or title
             final_text = direct_google_translate(clean_body, lang) or clean_body
@@ -388,7 +401,6 @@ def save_image(url, folder):
         ext = orig_fn.split('.')[-1].lower()
     else:
         ext = 'jpg'
-    # Video extensions handling
     if len(ext) > 4 and ext not in ['mp4', 'mov', 'm4v']: ext = 'jpg'
     
     fn = f"{url_hash}.{ext}"
@@ -410,10 +422,6 @@ def save_image(url, folder):
     except Exception as e:
         logging.error(f"❌ Не удалось скачать файл {url}: {e}")
     return None
-
-# ==============================================================================
-# === ВНЕДРЕННЫЕ ФУНКЦИИ (LOADER.TO + FFMPEG SUBPROCESS) ===
-# ==============================================================================
 
 def get_video_duration(video_path: Path) -> float:
     """Получает длительность видео через ffprobe."""
@@ -438,7 +446,7 @@ def download_youtube_via_loader_to(video_url, output_path):
         "X-Requested-With": "XMLHttpRequest",
     }
 
-    for attempt in range(1, 3):   # 2 попытки вместо 3 (сервис флакает, незачем висеть)
+    for attempt in range(1, 3):
         try:
             logging.info(f"⬇️ [loader.to] Попытка {attempt}: {video_url}")
 
@@ -472,7 +480,6 @@ def download_youtube_via_loader_to(video_url, output_path):
 
             logging.info(f"📋 Job ID: {job_id}, опрашиваем прогресс...")
 
-            # Опрос (до ~3 минут), но если застряли на 100% без ссылки — рвём через ~30с
             download_url = None
             stuck_at_100 = 0
             for poll in range(120):
@@ -494,10 +501,9 @@ def download_youtube_via_loader_to(video_url, output_path):
                     download_url = du
                     break
 
-                # 100%, но ссылки всё нет — ждём максимум ~30с и бросаем эту попытку
                 if progress >= 1000:
                     stuck_at_100 += 1
-                    if stuck_at_100 >= 20:   # 20 * 1.5с = 30с
+                    if stuck_at_100 >= 20:
                         logging.warning("⚠️ loader.to: 100% без ссылки 30с — рвём попытку")
                         break
 
@@ -529,10 +535,6 @@ def download_youtube_via_loader_to(video_url, output_path):
     return False
     
 def download_via_loader_to(video_url, output_path):
-    """
-    Скачивает видео через yt-dlp.
-    Название функции оставил старым, чтобы не ломать твой остальной код.
-    """
     ydl_opts = {
         'outtmpl': str(output_path),
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -548,7 +550,6 @@ def download_via_loader_to(video_url, output_path):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
             
-            # Проверяем, что файл реально скачался и он не пустой
             if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
                 logging.info("✅ Видео успешно скачано!")
                 return True
@@ -557,7 +558,7 @@ def download_via_loader_to(video_url, output_path):
                 time.sleep(3)
         except Exception as e:
             logging.error(f"❌ Ошибка yt-dlp: {type(e).__name__}: {e}")
-            time.sleep(5) # Ждем перед ретраем
+            time.sleep(5)
             
     return False
 
@@ -568,24 +569,12 @@ def add_watermark(input_video, watermark_img, output_video):
 
     duration = get_video_duration(input_video)
     
-    # ПАРАМЕТРЫ ВИДЕО
     c_start, c_end, t_tail = 0.0, 0.0, 11.0
     wm_scale = 0.4
-
-    # --- НАСТРОЙКИ ОТСТУПОВ (Относительные) ---
-    # 0.03 означает 3% от ширины/высоты видео
     pad_rel = 0.03
 
-    # --- ФОРМУЛЫ ---
-    # 1. Масштабирование (привязываем ширину ВМ к ширине видео)
     scale_expr = f"[0:v]scale='if(gt(ih,720),-2,iw)':'min(ih,720)'[main];[1:v][main]scale2ref=w=iw*{wm_scale}:h=ow/(main_w/main_h)[wm][vid]"
-    
-    # 2. Фикс пикселей (чтобы лого не плющило)
     wm_sar_fix = "[wm]setsar=1[wm_fixed]"
-    
-    # 3. ПОЗИЦИОНИРОВАНИЕ (Правый верхний угол)
-    # x = Ширина_видео - Ширина_ВМ - Отступ
-    # y = Отступ (зависит от ориентации: для вертикальных чуть больше - 7%)
     x_expr = f"W-w-(W*{pad_rel})"
     y_expr = f"if(gt(H,W), H*0.07, H*{pad_rel})"
     
@@ -595,8 +584,6 @@ def add_watermark(input_video, watermark_img, output_video):
         f_point = duration - t_tail
         logging.info(f"✂️ Обрезка + Правый верхний угол (Scale: {wm_scale})")
         
-        # ВАЖНО: Сначала накладываем вотермарк на весь поток, а ПОТОМ обрезаем. 
-        # Это исключает черные экраны и пропадание видео.
         v_filter = (
             f"{scale_expr};"
             f"{wm_sar_fix};"
@@ -637,16 +624,11 @@ def add_watermark(input_video, watermark_img, output_video):
 # --- БЛОК 4: API И ПАРСИНГ ---
 
 def fetch_cat_id(url, slug):
-    # --- HARDCODE BLOCK ---
-    # Чтобы лишний раз не дёргать Cloudflare на старте,
-    # возвращаем известные ID сразу.
     if slug == "national":
         logging.info(f"ℹ️ [Skip Net] Используем Hardcoded ID для '{slug}': 19")
         return 19
-    # ----------------------
 
     endpoint = f"{url}/wp-json/wp/v2/categories?slug={slug}"
-    # Используем Fallback заголовки
     fallback_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -655,7 +637,6 @@ def fetch_cat_id(url, slug):
         try:
             logging.info(f"📡 Попытка {attempt}/3: Запрос к API {slug}...")
             
-            # Попытка 1: Через curl_cffi (WARP)
             try:
                 r = SCRAPER.get(endpoint, timeout=30)
             except Exception as e:
@@ -664,7 +645,6 @@ def fetch_cat_id(url, slug):
 
             content_type = r.headers.get("Content-Type", "")
             
-            # Проверка на Cloudflare
             if "text/html" in content_type or "<!DOCTYPE html>" in r.text[:100]:
                 logging.warning(f"⚠️ Cloudflare Challenge detected.")
                 raise ValueError("Cloudflare JS Challenge active")
@@ -685,22 +665,14 @@ def fetch_cat_id(url, slug):
             if attempt < 3:
                 time.sleep(5 * attempt)
             else:
-                # ВМЕСТО ПАДЕНИЯ ВОЗВРАЩАЕМ 19 КАК ПОСЛЕДНЮЮ НАДЕЖДУ
                 logging.error(f"💀 Все попытки исчерпаны. Возвращаем дефолтный ID 19.")
                 return 19
 
 def fetch_posts_light(url: str, cid: int, limit: int) -> Optional[List[Dict]]:
-    """
-    Список постов при успехе; [] если API ответил пусто/ошибкой;
-    None если не пробились (Cloudflare) — сигнал воркфлоу взять свежий раннер.
-    """
     params = {"categories": cid, "per_page": limit, "_embed": "1"}
     endpoint = f"{url}/wp-json/wp/v2/posts"
     global SCRAPER
 
-    # Ротация WARP на одном раннере бесполезна (egress из того же помеченного пула
-    # Cloudflare). 2 быстрые попытки -> при блоке выходим, эстафету берёт следующий
-    # свежий раннер из matrix в воркфлоу.
     MAX = 2
     for attempt in range(1, MAX + 1):
         try:
@@ -760,22 +732,18 @@ def fetch_single_post_full(url: str, aid: str) -> Optional[Dict]:
         return None
 
 def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = None):
-    # Задержка для обхода лимитов
     time.sleep(2)
     aid, slug, link = str(post["id"]), post["slug"], post.get("link")
     
-    # Извлекаем и чистим заголовок
     raw_title = BeautifulSoup(post["title"]["rendered"], "html.parser").get_text(strip=True)
     title = sanitize_text(raw_title)
 
-    # Проверка на стоп-слова
     if stopwords:
         for ph in stopwords:
             if ph in title.lower():
                 logging.info(f"🚫 ID={aid}: Стоп-слово '{ph}'")
                 return None
 
-    # Шаг 1: Загрузка HTML (основной скрапер + fallback)
     html_txt = ""
     try:
         resp = SCRAPER.get(link, timeout=30)
@@ -796,7 +764,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             logging.error(f"❌ ID={aid}: Не удалось открыть статью: {e}")
             return None
 
-    # Проверка на изменения через хеш контента
     meta_path = OUTPUT_DIR / f"{aid}_{slug}" / "meta.json"
     curr_hash = hashlib.sha256(html_txt.encode()).hexdigest()
     if meta_path.exists():
@@ -811,15 +778,12 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
     logging.info(f"Processing ID={aid}: {title[:30]}...")
     soup = BeautifulSoup(html_txt, "html.parser")
     
-    # Находим основной контент (важно сделать это до очистки soup)
     c_div = soup.find("div", class_="entry-content")
     
-    # --- ШАГ 1: ПОИСК ВИДЕО (В т.ч. вне c_div) ---
     fb_video_tasks = []
     youtube_tasks = []
     import urllib.parse as urlparse
 
-    # Сбор FB-видео из заглушек div.fb-video / blockquote.fb-xfbml-parse-ignore
     for fb_el in soup.find_all("div", class_=re.compile(r"\bfb-video\b")):
         raw = fb_el.get("data-href", "")
         if not raw:
@@ -874,20 +838,16 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                 youtube_tasks.append(src)
                 logging.info(f"Найдено YouTube iframe: {src}")
 
-    # --- ШАГ 2: ОЧИСТКА МУСОРА ---
-    # Удаляем виджеты, рекламу и связанные посты
     for garbage in soup.find_all(["div", "ul", "ol", "section", "aside"], 
                                 class_=re.compile(r"rp4wp|related|ad-|post-widget-thumbnail|sharedaddy")):
         garbage.decompose()
 
-    # Удаляем скрипты и стили
     for j in soup.find_all(["span", "script", "style"]):
         if not hasattr(j, 'attrs') or j.attrs is None: continue 
         c = str(j.get("class", ""))
         if j.get("data-mce-type") or "mce_SELRES" in c or "widget" in c: 
             j.decompose()
 
-    # --- ШАГ 3: СБОР МЕДИА-РЕСУРСОВ ---
     ordered_srcs = []
     seen_srcs = set()
 
@@ -896,7 +856,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
             ordered_srcs.append(url)
             seen_srcs.add(url)
 
-    # Featured image: media-эндпоинт закрыт (401), берём og:image из HTML head
     og = soup.find("meta", attrs={"property": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
     if og and (u := og.get("content")) and "logo" not in u.lower():
         add_src(u)
@@ -905,19 +864,16 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
 
     video_srcs = []
     if c_div:
-        # Картинки из текста
         for img in c_div.find_all("img"):
             if u := extract_img_url(img):
                 add_src(u)
         
-        # Ссылки на YouTube (текстовые)
         for yt_a in c_div.find_all("a"):
             href = yt_a.get("href", "")
             if "youtube.com/watch" in href or "youtu.be/" in href:
                 if href not in youtube_tasks:
                     youtube_tasks.append(href)
 
-        # Прямые ссылки на видеофайлы
         for a_tag in c_div.find_all("a"):
             href = a_tag.get("href", "")
             if href.lower().endswith(('.mp4', '.mov', '.m4v')):
@@ -925,14 +881,12 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                     video_srcs.append(href)
                     seen_srcs.add(href)
 
-    # Добавляем найденные файлы видео в общую очередь скачивания
     for v in video_srcs:
         ordered_srcs.append(v)
     
     images_dir = OUTPUT_DIR / f"{aid}_{slug}" / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. Скачивание статических файлов (картинки, mp4 по ссылкам)
     images_results = [None] * len(ordered_srcs)
     if ordered_srcs:
         with ThreadPoolExecutor(3) as ex:
@@ -945,7 +899,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                 if res := f.result():
                     images_results[idx] = Path(res).name
 
-    # 2. Обработка YouTube (скачивание + вотермарка)
     youtube_files = []
     for yt_url in youtube_tasks:
         video_hash = hashlib.md5(yt_url.encode()).hexdigest()[:10]
@@ -969,7 +922,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
                 youtube_files.append(final_vid_path.name)
         elif raw_vid_path.exists(): raw_vid_path.unlink()
 
-    # 3. Обработка Facebook видео
     fb_files = []
     for fb_url in fb_video_tasks:
         video_hash = hashlib.md5(fb_url.encode()).hexdigest()[:10]
@@ -1000,9 +952,7 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         logging.warning(f"⚠️ ID={aid}: Нет медиафайлов. Skip.")
         return None
 
-    # --- ШАГ 4: ТЕКСТ И ПЕРЕВОД ---
     if c_div:
-        # Финальная очистка контента от iframe перед извлечением текста
         for iframe in c_div.find_all("iframe"):
             iframe.decompose()
         
@@ -1017,7 +967,6 @@ def parse_and_save(post, lang, stopwords, watermark_img_path: Optional[Path] = N
         final_title, translated_body = smart_process_and_translate(title, raw_body_text, lang)
         final_title = sanitize_text(final_title)
 
-    # Сохранение файлов
     art_dir = OUTPUT_DIR / f"{aid}_{slug}"
     art_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1049,13 +998,11 @@ def main():
     parser.add_argument("-l", "--lang", default="ru")
     parser.add_argument("--posted-state-file", default="articles/posted.json")
     parser.add_argument("--stopwords-file", default="stopwords.txt")
-    # ТУТ ИЗМЕНЕНИЕ: default="watermark.png"
     parser.add_argument("--watermark-image", default="watermark.png", help="Path to watermark PNG for videos")
     args = parser.parse_args()
 
     watermark_path = Path(args.watermark_image) if args.watermark_image else None
     
-    # Логируем, нашел он вотермарку или нет
     if watermark_path and watermark_path.exists():
         logging.info(f"🔧 Режим вотермарки: ВКЛ (файл: {watermark_path})")
     else:
