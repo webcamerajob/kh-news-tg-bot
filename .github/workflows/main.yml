@@ -3,7 +3,9 @@
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # 🚀 Кэширует pip-пакеты между запусками
+          cache: 'pip'
+          # 🚀 Явно указываем маску для всех наших файлов зависимостей, чтобы кэш работал правильно
+          cache-dependency-path: 'requirements-*.txt'
 
       - name: Install FFmpeg (Fast Static Build)
         if: steps.guard.outputs.skip != 'true'
@@ -19,8 +21,9 @@
         if: steps.guard.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip
-          # Убрали --no-cache-dir, чтобы работал кэш actions/setup-python
           pip install curl_cffi requests beautifulsoup4 yt-dlp
-          [ -f requirements-parser.txt ] && pip install -r requirements-parser.txt || true
-          [ -f requirements-poster.txt ] && pip install -r requirements-poster.txt || true
-          [ -f requirements-video.txt ] && pip install -r requirements-video.txt || true
+          
+          # 🛡️ Безопасная проверка файлов без риска «проглотить» реальную ошибку установки pip
+          if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
+          if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
+          if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
