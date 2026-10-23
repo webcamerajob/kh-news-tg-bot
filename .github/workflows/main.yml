@@ -69,6 +69,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: 'requirements-*.txt'
 
       - name: Install FFmpeg
         if: steps.guard.outputs.skip != 'true'
@@ -86,7 +87,6 @@ jobs:
           pip install --no-cache-dir curl_cffi requests beautifulsoup4 yt-dlp
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
-          if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
 
       - name: Install & Connect Cloudflare WARP
         if: steps.guard.outputs.skip != 'true'
@@ -157,7 +157,7 @@ jobs:
         if: ${{ always() && steps.guard.outputs.skip != 'true' }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           [ -f "articles/posted.json" ] && git add articles/posted.json
           if ! git diff --cached --quiet; then
             git commit -m "chore: update posted.json"
