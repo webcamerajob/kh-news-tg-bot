@@ -4,13 +4,11 @@
         with:
           python-version: '3.12'
           cache: 'pip'
-          # 🚀 Явно указываем маску для всех наших файлов зависимостей, чтобы кэш работал правильно
           cache-dependency-path: 'requirements-*.txt'
 
       - name: Install FFmpeg (Fast Static Build)
         if: steps.guard.outputs.skip != 'true'
         run: |
-          # 🚀 Скачивает готовый бинарник за секунды вместо установки 99 тяжелых пакетов через apt
           curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
           tar -xf ffmpeg.tar.xz
           sudo mv ffmpeg-*-static/ffmpeg /usr/local/bin/
@@ -22,8 +20,6 @@
         run: |
           python -m pip install --upgrade pip
           pip install curl_cffi requests beautifulsoup4 yt-dlp
-          
-          # 🛡️ Безопасная проверка файлов без риска «проглотить» реальную ошибку установки pip
           if [ -f requirements-parser.txt ]; then pip install -r requirements-parser.txt; fi
           if [ -f requirements-poster.txt ]; then pip install -r requirements-poster.txt; fi
           if [ -f requirements-video.txt ]; then pip install -r requirements-video.txt; fi
