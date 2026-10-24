@@ -83,11 +83,8 @@ jobs:
       - name: Install FFmpeg
         if: steps.guard.outputs.skip != 'true'
         run: |
-          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
-          tar -xf ffmpeg.tar.xz
-          sudo mv ffmpeg-*-static/ffmpeg /usr/local/bin/
-          sudo mv ffmpeg-*-static/ffprobe /usr/local/bin/
-          rm -rf ffmpeg.tar.xz ffmpeg-*-static
+          sudo apt-get update -o Acquire::Languages=none -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Install requirements
         if: steps.guard.outputs.skip != 'true'
