@@ -424,32 +424,42 @@ def get_video_duration(video_path: Path) -> float:
     except: return 0.0
 
 def download_youtube_via_loader_to(video_url, output_path):
-    """Скачивает видео с YouTube через yt_dlp, используя ваш локальный WARP-прокси."""
-    try:
-        logging.info(f"⬇️ [yt_dlp + WARP] Загрузка видео: {video_url}")
-        
-        ydl_opts = {
-            'format': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
-            'outtmpl': str(output_path),
-            'merge_output_format': 'mp4',
-            'quiet': True,
-            'no_warnings': True,
-            'proxy': 'socks5h://127.0.0.1:40000',  # <--- Заворачиваем трафик в ваш запущенный WARP
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+    """Скачивает видео с YouTube через yt_dlp + WARP с авто-ротацией IP при блоках."""
+    max_attempts = 3  # Количество попыток смены IP
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logging.info(f"⬇️ [yt_dlp + WARP] Попытка {attempt} для: {video_url}")
             
-        if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
-            logging.info("✅ Видео успешно скачано через yt_dlp + WARP.")
-            return True
-        else:
-            logging.warning("⚠️ yt_dlp завершил работу, но файл пустой или не создан.")
-            return False
+            ydl_opts = {
+                'format': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
+                'outtmpl': str(output_path),
+                'merge_output_format': 'mp4',
+                'quiet': True,
+                'no_warnings': True,
+                'proxy': 'socks5h://127.0.0.1:40000',  # Используем WARP-прокси
+            }
             
-    except Exception as e:
-        logging.error(f"❌ Ошибка скачивания через yt_dlp: {e}")
-        return False
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+                
+            if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                logging.info("✅ Видео успешно скачано.")
+                return True
+            else:
+                logging.warning("⚠️ yt_dlp завершил работу, но файл пустой.")
+                
+        except Exception as e:
+            logging.warning(f"⚠️ Ошибка скачивания (попытка {attempt}): {e}")
+
+        # Если не получилось — меняем IP и пробуем снова (если остались попытки)
+        if attempt < max_attempts:
+            logging.info("♻️ YouTube заблокировал IP или произошла ошибка. Запускаем ротацию WARP...")
+            rotate_warp(hard=True)  # Полная перерегистрация WARP для получения нового чистяка
+            time.sleep(3)
+
+    logging.error("❌ Не удалось скачать видео после всех попыток ротации WARP.")
+    return False
     
 def download_via_loader_to(video_url, output_path):
     """
