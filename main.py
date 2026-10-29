@@ -424,109 +424,31 @@ def get_video_duration(video_path: Path) -> float:
     except: return 0.0
 
 def download_youtube_via_loader_to(video_url, output_path):
-    """Скачивает YouTube через AJAX-эндпоинты loader.to (как делает их card-виджет)."""
-    domain = "p.savenow.to"
-    download_api = f"https://{domain}/ajax/download.php"
-    progress_api = f"https://{domain}/api/progress"
-
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    headers = {
-        "User-Agent": ua,
-        "Referer": "https://loader.to/",
-        "Origin": "https://loader.to",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
-    for attempt in range(1, 3):   # 2 попытки вместо 3 (сервис флакает, незачем висеть)
-        try:
-            logging.info(f"⬇️ [loader.to] Попытка {attempt}: {video_url}")
-
-            params = {
-                "button": "1",
-                "start": "1",
-                "end": "1",
-                "iframe_source": "direct-iframe",
-                "format": "360",
-                "url": video_url,
-            }
-            r = requests.get(download_api, params=params, headers=headers, timeout=30)
-
-            if r.status_code != 200:
-                logging.warning(f"⚠️ download.php HTTP {r.status_code}: {r.text[:200]}")
-                time.sleep(5)
-                continue
-
-            try:
-                data = r.json()
-            except Exception:
-                logging.warning(f"⚠️ download.php не JSON: {r.text[:200]}")
-                time.sleep(5)
-                continue
-
-            job_id = data.get("id")
-            if not job_id:
-                logging.warning(f"⚠️ download.php без id: {data}")
-                time.sleep(5)
-                continue
-
-            logging.info(f"📋 Job ID: {job_id}, опрашиваем прогресс...")
-
-            # Опрос (до ~3 минут), но если застряли на 100% без ссылки — рвём через ~30с
-            download_url = None
-            stuck_at_100 = 0
-            for poll in range(120):
-                time.sleep(1.5)
-                try:
-                    pr = requests.get(progress_api, params={"id": job_id}, headers=headers, timeout=20)
-                    if pr.status_code != 200:
-                        continue
-                    pd = pr.json()
-                except Exception:
-                    continue
-
-                progress = pd.get("progress", 0)
-                if poll % 10 == 0:
-                    logging.info(f"⏳ loader.to: {progress/10:.0f}%")
-
-                du = pd.get("download_url")
-                if du:
-                    download_url = du
-                    break
-
-                # 100%, но ссылки всё нет — ждём максимум ~30с и бросаем эту попытку
-                if progress >= 1000:
-                    stuck_at_100 += 1
-                    if stuck_at_100 >= 20:   # 20 * 1.5с = 30с
-                        logging.warning("⚠️ loader.to: 100% без ссылки 30с — рвём попытку")
-                        break
-
-            if not download_url:
-                logging.warning("⚠️ loader.to: таймаут конверсии")
-                continue
-
-            logging.info(f"⬇️ Скачиваем готовый mp4: {download_url[:80]}...")
-            vr = requests.get(download_url, timeout=180, stream=True, headers={"User-Agent": ua})
-            if vr.status_code == 200:
-                with open(output_path, "wb") as f:
-                    for chunk in vr.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            f.write(chunk)
-
-                size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
-                if size > 10000:
-                    logging.info(f"✅ YouTube скачан через loader.to ({size // 1024} KB)")
-                    return True
-                else:
-                    logging.warning(f"⚠️ Файл слишком мал ({size} байт)")
-            else:
-                logging.warning(f"⚠️ Скачивание HTTP {vr.status_code}")
-
-        except Exception as e:
-            logging.error(f"❌ loader.to error [{type(e).__name__}]: {e}")
-            time.sleep(5)
-
-    return False
+    """Скачивает YouTube через yt_dlp (надежная замена устаревшего loader.to API)."""
+    try:
+        logging.info(f"⬇️ [yt_dlp] Загрузка видео: {video_url}")
+        
+        ydl_opts = {
+            'format': 'bestvideo[height<=360]+bestaudio/best[height<=360]/best',
+            'outtmpl': str(output_path),
+            'merge_output_format': 'mp4',
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+            
+        if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+            logging.info("✅ Видео успешно скачано через yt_dlp.")
+            return True
+        else:
+            logging.warning("⚠️ yt_dlp завершил работу, но файл пустой или не создан.")
+            return False
+            
+    except Exception as e:
+        logging.error(f"❌ Ошибка скачивания через yt_dlp: {e}")
+        return False
     
 def download_via_loader_to(video_url, output_path):
     """
