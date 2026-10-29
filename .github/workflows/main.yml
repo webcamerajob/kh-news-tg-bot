@@ -26,7 +26,6 @@ env:
   FB_PAGE_ID:           ${{ secrets.FB_PAGE_ID }}
   FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
   OPENROUTER_API_KEY:   ${{ secrets.OPENROUTER_API_KEY }}
-  VIDEO_API_KEY:        ${{ secrets.VIDEO_API_KEY }}
 
 jobs:
   build-and-publish:
