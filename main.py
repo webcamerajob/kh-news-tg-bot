@@ -40,11 +40,8 @@ AI_MODELS = [
     
     "nvidia/nemotron-3-ultra-550b-a55b:free",
 
-    "openai/gpt-oss-20b:free",                  # рабочая сейчас, стабильная, норм качество
     "openrouter/free",                          # авто-роутер: сам подберёт живую free-модель, не протухает
-    "openai/gpt-oss-120b:free",                 # иногда 403 (модерация ввода), но как запас ок
-    "meta-llama/llama-3.3-70b-instruct:free",   # бывает 429, иногда отвечает
-    "nousresearch/hermes-3-llama-3.1-405b:free",
+
     # --- платные фолбэки (за кредиты) ---
     # "qwen/qwen-2.5-72b-instruct",
     # "google/gemini-2.0-flash-001",
