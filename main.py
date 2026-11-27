@@ -52,6 +52,16 @@ AI_MODELS = [
 # Константа для порта WARP
 WARP_PROXY = "socks5h://127.0.0.1:40000"
 
+# Глобальная сессия для парсинга сайтов
+SCRAPER = cffi_requests.Session(
+    impersonate="chrome119",
+    proxies={
+        "http": WARP_PROXY,
+        "https": WARP_PROXY
+    },
+    http_version=CurlHttpVersion.V1_1
+)
+
 IPHONE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) "
@@ -69,25 +79,8 @@ IPHONE_HEADERS = {
 
 FALLBACK_HEADERS = IPHONE_HEADERS
 
-
-def create_scraper_session(impersonate: str = "safari18_0") -> cffi_requests.Session:
-    """Создаёт сессию curl_cffi с нативным HTTP/2 и согласованными заголовками iPhone."""
-    return cffi_requests.Session(
-        impersonate=impersonate,
-        headers=IPHONE_HEADERS.copy(),
-        proxies={
-            "http": WARP_PROXY,
-            "https": WARP_PROXY,
-        },
-    )
-
-
-# Глобальная сессия для парсинга сайтов
-SCRAPER = create_scraper_session()
-
 # Лок для защиты от параллельного вызова ротации из разных потоков
 WARP_LOCK = threading.Lock()
-
 
 def rotate_warp(hard: bool = False):
     """Переподключает WARP с защитой от зависания (timeout) и гонки потоков (lock)."""
@@ -129,7 +122,6 @@ def rotate_warp(hard: bool = False):
             logging.error("❌ Ошибка: команда warp-cli превысила таймаут (15 сек) и была принудительно завершена.")
         except Exception as e:
             logging.error(f"❌ Ошибка ротации WARP: {e}")
-
 
 # --- БЛОК 1: ПЕРЕВОД И ИИ ---
 
