@@ -1,13 +1,43 @@
 import os
+from urllib.parse import urlparse
 from camoufox.sync_api import Camoufox
 
 URL = os.getenv("TEST_URL", "https://www.khmertimeskh.com/category/national/")
 WAIT_SEC = int(os.getenv("TEST_WAIT_SEC", "12"))
+EGRESS_PROXY = os.getenv("EGRESS_PROXY", "").strip()
+
+
+def build_browser_proxy(raw_proxy: str):
+    if not raw_proxy:
+        return None
+
+    normalized = raw_proxy
+    if normalized.startswith("socks5://"):
+        normalized = "socks5h://" + normalized[len("socks5://"):]
+
+    parsed = urlparse(normalized)
+    if not parsed.hostname or not parsed.port:
+        return {"server": normalized}
+
+    server = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+    proxy_cfg = {"server": server}
+    if parsed.username:
+        proxy_cfg["username"] = parsed.username
+    if parsed.password:
+        proxy_cfg["password"] = parsed.password
+    return proxy_cfg
 
 
 def main():
-    print(f"Opening {URL} (wait up to {WAIT_SEC}s)...")
-    with Camoufox(headless=False) as browser:
+    proxy_cfg = build_browser_proxy(EGRESS_PROXY)
+    proxy_info = proxy_cfg["server"] if proxy_cfg else "NONE (direct)"
+    print(f"Opening {URL} (wait up to {WAIT_SEC}s) | proxy={proxy_info}...")
+
+    camoufox_kwargs = {"headless": False}
+    if proxy_cfg:
+        camoufox_kwargs["proxy"] = proxy_cfg
+
+    with Camoufox(**camoufox_kwargs) as browser:
         page = browser.new_page()
         page.set_default_timeout(30000)
 
