@@ -3,10 +3,10 @@ name: Test Cloudflare Access
 on:
   workflow_dispatch:
     inputs:
-      use_free_proxies: 1
+      use_free_proxies:
         description: "Test free proxies from proxifly (0 or 1)"
         required: false
-        default: "0"
+        default: "1"
 
 env:
   EGRESS_PROXY: ${{ secrets.EGRESS_PROXY }}
