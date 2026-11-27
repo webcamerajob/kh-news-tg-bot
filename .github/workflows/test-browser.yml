@@ -12,6 +12,9 @@ on:
         required: false
         default: "12"
 
+env:
+  EGRESS_PROXY: ${{ secrets.EGRESS_PROXY }}
+
 jobs:
   test-browser:
     runs-on: ubuntu-latest
