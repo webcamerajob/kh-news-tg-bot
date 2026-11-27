@@ -1,0 +1,48 @@
+name: Test Cloudflare Access
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_free_proxies:
+        description: "Test free proxies from proxifly (0 or 1)"
+        required: false
+        default: "0"
+
+env:
+  EGRESS_PROXY: ${{ secrets.EGRESS_PROXY }}
+
+jobs:
+  test-cf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install curl_cffi and requests
+        run: pip install --prefer-binary curl_cffi requests
+
+      - name: Setup WARP (if no EGRESS_PROXY)
+        if: env.EGRESS_PROXY == ''
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-warp.list
+          sudo apt-get update -o Acquire::Languages=none -qq
+          sudo apt-get install -y --no-install-recommends cloudflare-warp
+          sudo systemctl start warp-svc
+          warp-cli --accept-tos registration new || true
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          sleep 4
+          warp-cli --accept-tos status || true
+
+      - name: Run CF test
+        env:
+          USE_FREE_PROXIES: ${{ github.event.inputs.use_free_proxies || '0' }}
+        run: python3 test_cf.py
